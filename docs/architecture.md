@@ -24,46 +24,21 @@ The system follows a typical client-server architecture with distinct components
   
 
 ```mermaid
-
 graph LR
-
-A[User @ Browser] -- HTTP Requests --> B(React Frontend);
-
-B -- REST API Calls --> C(FastAPI Backend);
-
-C -- Uses --> D{LlamaIndex Orchestrator};
-
-D -- Loads/Saves --> E[File System (Markdown Content)];
-
-D -- Indexes/Retrieves --> F[Vector DB (ChromaDB)];
-
-D -- Calls --> G[LLM API (Gemini 1.5 Pro)];
-
-D -- Calls --> H[Embedding API (text-embedding-004)];
-
-G -- Response --> D;
-
-H -- Embeddings --> D;
-
-F -- Context Chunks --> D;
-
-E -- Raw Content --> D;
-
-D -- Processed Data/Responses --> C;
-
-C -- REST API Responses --> B;
-
-B -- Renders UI --> A;
-
-  
-
-style F fill:#f9d,stroke:#333,stroke-width:2px
-
-style G fill:#ccf,stroke:#333,stroke-width:2px
-
-style H fill:#ccf,stroke:#333,stroke-width:2px
-
-style D fill:#dfd,stroke:#333,stroke-width:2px
+    A["User @ Browser"] -- HTTP Requests --> B("React Frontend");
+    B -- REST API Calls --> C("FastAPI Backend");
+    C -- Uses --> D{"LlamaIndex Orchestrator"};
+    D -- Loads/Saves --> E["File System (Markdown Content)"];
+    D -- Indexes/Retrieves --> F["Vector DB (ChromaDB)"];
+    D -- Calls --> G["LLM API (Gemini 1.5 Pro)"];
+    D -- Calls --> H["Embedding API (text-embedding-004)"];
+    G -- Response --> D;
+    H -- Embeddings --> D;
+    F -- Context Chunks --> D;
+    E -- Raw Content --> D;
+    D -- Processed Data/Responses --> C;
+    C -- REST API Responses --> B;
+    B -- Renders UI --> A;
 
 ```
 
