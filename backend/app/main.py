@@ -30,8 +30,11 @@ app = FastAPI(title="Codex AI Backend")
 # and potentially your deployed frontend URL in the future.
 origins = [
     "http://localhost",       # Allow local access if needed
+    "http://127.0.0.1",       # Allow local access via IP
     "http://localhost:3000",  # Default port for create-react-app
+    "http://127.0.0.1:3000",  # Also allow IP variant
     "http://localhost:5173",  # Default port for Vite dev server
+    "http://127.0.0.1:5173",  # Also allow IP variant
     # Add any other origins as needed, e.g., your deployed frontend URL
     # "https://your-codex-ai-frontend.com",
 ]
@@ -42,6 +45,7 @@ app.add_middleware(
     allow_credentials=True,      # Allows cookies to be included in requests (useful for auth later)
     allow_methods=["*"],         # Allows all standard HTTP methods (GET, POST, PUT, DELETE, etc.)
     allow_headers=["*"],         # Allows all headers in requests
+    expose_headers=["*"]         # Expose all headers to the browser
 )
 # --- /CORS Middleware ---
 
@@ -53,8 +57,8 @@ async def read_root():
     """
     Health check endpoint. Returns a welcome message.
     """
-    # You can add logging here later if needed
-    # print("Root endpoint was called!")
+    # Add logging to help debug connection issues
+    print("Root endpoint was called! CORS seems to be working.")
     return {"message": "Welcome to Codex AI Backend!"}
 
 
