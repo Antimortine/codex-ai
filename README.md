@@ -155,3 +155,11 @@ Contributions are welcome! Please feel free to open an issue or submit a pull re
 ## License
 
 This project is licensed under the [Apache License, Version 2.0](LICENSE).
+
+## Author / Contact
+
+Codex AI is developed and maintained by Antimortine.
+
+*   **Email:** antimortine@gmail.com
+*   **Telegram:** https://t.me/antimortine
+*   **GitHub:** https://github.com/Antimortine

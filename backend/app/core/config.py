@@ -12,3 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from pydantic_settings import BaseSettings
+import os
+from dotenv import load_dotenv
+
+load_dotenv() # Loads variables from .env file
+
+class Settings(BaseSettings):
+    PROJECT_NAME: str = "Codex AI"
+    API_V1_STR: str = "/api/v1"
+    GOOGLE_API_KEY: str = os.getenv("GOOGLE_API_KEY")
+
+settings = Settings()
