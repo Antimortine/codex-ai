@@ -12,8 +12,15 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from fastapi import FastAPI
+from fastapi import FastAPI, Request
 from fastapi.middleware.cors import CORSMiddleware
+from fastapi.responses import JSONResponse
+import logging
+import traceback
+
+# Set up logging
+logging.basicConfig(level=logging.DEBUG)
+logger = logging.getLogger(__name__)
 
 # Import the main API router
 from app.api.v1.api import api_router
@@ -24,6 +31,20 @@ from app.api.v1.api import api_router
 # Create the main FastAPI application instance.
 # Metadata like title, description, version can be added here later.
 app = FastAPI(title="Codex AI Backend")
+
+# Global exception handler
+@app.exception_handler(Exception)
+async def global_exception_handler(request: Request, exc: Exception):
+    logger.error(f"Unhandled exception: {exc}")
+    logger.error(traceback.format_exc())
+    return JSONResponse(
+        status_code=500,
+        content={
+            "message": "An unexpected error occurred",
+            "error": str(exc),
+            "trace": traceback.format_exc().split('\n')
+        }
+    )
 
 # --- CORS Middleware ---
 origins = [
@@ -52,22 +73,32 @@ async def read_root():
     """
     Health check endpoint. Returns a welcome message.
     """
-    # Add logging to help debug connection issues
+    logger.debug("Root endpoint was called!")
     print("Root endpoint was called! CORS seems to be working.")
     return {"message": "Welcome to Codex AI Backend!"}
+
+# --- Test Endpoint ---
+@app.get("/test")
+async def test_endpoint():
+    """
+    Simple test endpoint to verify routing.
+    """
+    logger.debug("Test endpoint was called!")
+    print("Test endpoint was called!")
+    return {"status": "test successful"}
 
 # --- Include API Routers ---
 # Mount the version 1 API router under the /api/v1 prefix
 # Using settings.API_V1_STR is cleaner if defined in config.py
 app.include_router(api_router, prefix="/api/v1")
 
-# --- Optional Startup/Shutdown Events ---
-# You can define functions to run on startup (e.g., connect to DBs)
-# or shutdown (e.g., clean up resources) if needed later.
-# @app.on_event("startup")
-# async def startup_event():
-#     print("Starting up...")
-
-# @app.on_event("shutdown")
-# async def shutdown_event():
-#     print("Shutting down...")
+# Startup logging
+@app.on_event("startup")
+async def startup_event():
+    logger.info("Starting up Codex AI Backend...")
+    print("Starting up Codex AI Backend...")
+    
+    # Log all registered routes for debugging
+    logger.info("Registered routes:")
+    for route in app.routes:
+        logger.info(f"Route: {route.path}, Methods: {route.methods}")

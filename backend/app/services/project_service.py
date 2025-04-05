@@ -14,8 +14,9 @@
 
 from fastapi import HTTPException, status
 from app.models.project import ProjectCreate, ProjectUpdate, ProjectRead, ProjectList
-from app.services.file_service import file_service # Import the instance
+from app.services.file_service import file_service, BASE_PROJECT_DIR # Import the instance and constant
 from app.models.common import generate_uuid
+import uuid # Import uuid for validation
 
 class ProjectService:
 
@@ -62,7 +63,7 @@ class ProjectService:
 
     def get_all(self) -> ProjectList:
         """Lists all available projects."""
-        project_ids = file_service.list_subdirectories(file_service.BASE_PROJECT_DIR)
+        project_ids = file_service.list_subdirectories(BASE_PROJECT_DIR)
         projects = []
         for pid in project_ids:
             try:
