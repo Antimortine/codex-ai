@@ -12,3 +12,51 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from fastapi import APIRouter
+
+from app.api.v1.endpoints import projects
+from app.api.v1.endpoints import chapters
+from app.api.v1.endpoints import scenes
+from app.api.v1.endpoints import characters
+from app.api.v1.endpoints import content_blocks
+# Import ai router later in Phase 3
+# from app.api.v1.endpoints import ai
+
+api_router = APIRouter()
+
+# --- Project level routes ---
+api_router.include_router(projects.router, prefix="/projects", tags=["Projects"])
+
+# --- Content Block routes (Plan, Synopsis, World) ---
+# Note: These are nested under projects but handle specific singleton files
+api_router.include_router(
+    content_blocks.router,
+    prefix="/projects/{project_id}",
+    tags=["Content Blocks (Plan, Synopsis, World)"]
+)
+
+# --- Character routes ---
+api_router.include_router(
+    characters.router,
+    prefix="/projects/{project_id}/characters",
+    tags=["Characters"]
+)
+
+# --- Chapter routes ---
+api_router.include_router(
+    chapters.router,
+    prefix="/projects/{project_id}/chapters",
+    tags=["Chapters"]
+)
+
+# --- Scene routes ---
+# Note the double nesting for project and chapter IDs
+api_router.include_router(
+    scenes.router,
+    prefix="/projects/{project_id}/chapters/{chapter_id}/scenes",
+    tags=["Scenes"]
+)
+
+
+# --- AI routes (to be added in Phase 3) ---
+# api_router.include_router(ai.router, prefix="/ai", tags=["AI"])

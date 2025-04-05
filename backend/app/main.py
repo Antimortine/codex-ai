@@ -15,19 +15,17 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+# Import the main API router
+from app.api.v1.api import api_router
+# Assuming config will be needed soon
+# from app.core.config import settings
+
 # --- FastAPI App Initialization ---
 # Create the main FastAPI application instance.
 # Metadata like title, description, version can be added here later.
 app = FastAPI(title="Codex AI Backend")
 
-
-# --- CORS (Cross-Origin Resource Sharing) Middleware ---
-# This is CRITICAL for allowing the React frontend (running on a different port/origin)
-# to communicate with this FastAPI backend. Without it, browsers will block requests.
-
-# List of origins that are allowed to make requests to this backend.
-# Include the standard ports for React dev servers (3000, Vite's 5173)
-# and potentially your deployed frontend URL in the future.
+# --- CORS Middleware ---
 origins = [
     "http://localhost",       # Allow local access if needed
     "http://127.0.0.1",       # Allow local access via IP
@@ -38,7 +36,6 @@ origins = [
     # Add any other origins as needed, e.g., your deployed frontend URL
     # "https://your-codex-ai-frontend.com",
 ]
-
 app.add_middleware(
     CORSMiddleware,
     allow_origins=origins,       # Specifies the allowed origins
@@ -47,8 +44,6 @@ app.add_middleware(
     allow_headers=["*"],         # Allows all headers in requests
     expose_headers=["*"]         # Expose all headers to the browser
 )
-# --- /CORS Middleware ---
-
 
 # --- Root Endpoint / Health Check ---
 # A simple GET endpoint at the root URL ("/") to check if the server is running.
@@ -61,15 +56,10 @@ async def read_root():
     print("Root endpoint was called! CORS seems to be working.")
     return {"message": "Welcome to Codex AI Backend!"}
 
-
-# --- API Routers (Placeholder) ---
-# We will include our versioned API routers here later in Phase 2.
-# This keeps the main application file clean.
-# Example:
-# from app.api.v1.api import api_router
-# from app.core.config import settings # Assuming settings are configured later
-# app.include_router(api_router, prefix=settings.API_V1_STR)
-
+# --- Include API Routers ---
+# Mount the version 1 API router under the /api/v1 prefix
+# Using settings.API_V1_STR is cleaner if defined in config.py
+app.include_router(api_router, prefix="/api/v1")
 
 # --- Optional Startup/Shutdown Events ---
 # You can define functions to run on startup (e.g., connect to DBs)
