@@ -12,39 +12,118 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from fastapi import APIRouter, HTTPException, status, Body, Path
+from fastapi import APIRouter, HTTPException, status, Body, Path, Depends
 from typing import List
 from app.models.chapter import ChapterCreate, ChapterUpdate, ChapterRead, ChapterList
 from app.models.common import Message
+# Import the specific service instance
+from app.services.chapter_service import chapter_service
+# Import the project existence dependency from content_blocks or define it here/in deps.py
+from app.api.v1.endpoints.content_blocks import get_project_dependency
 
 router = APIRouter()
 
-@router.post("/", response_model=ChapterRead, status_code=status.HTTP_201_CREATED)
-async def create_chapter(project_id: str = Path(...), chapter_in: ChapterCreate = Body(...)):
-    """ Create a new chapter within a project. """
-    # TODO: Call chapter_service.create(project_id, chapter_in) -> Check project exists
-    raise NotImplementedError("create_chapter not implemented")
+# --- Endpoint Implementations ---
 
-@router.get("/", response_model=ChapterList)
-async def list_chapters(project_id: str = Path(...)):
-    """ List all chapters within a specific project. """
-    # TODO: Call chapter_service.get_all_for_project(project_id)
-    raise NotImplementedError("list_chapters not implemented")
+@router.post(
+    "/",
+    response_model=ChapterRead,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create Chapter",
+    description="Creates a new chapter within the specified project."
+)
+async def create_chapter(
+    chapter_in: ChapterCreate = Body(...),
+    project_id: str = Depends(get_project_dependency) # Ensures project exists
+):
+    """
+    Creates a new chapter for a given project.
 
-@router.get("/{chapter_id}", response_model=ChapterRead)
-async def get_chapter(project_id: str = Path(...), chapter_id: str = Path(...)):
-    """ Get details of a specific chapter. """
-    # TODO: Call chapter_service.get_by_id(project_id, chapter_id) -> Handle not found
-    raise NotImplementedError("get_chapter not implemented")
+    - **project_id**: The UUID of the parent project (in path).
+    - **chapter_in**: ChapterCreate model containing title and order.
+    """
+    # Service layer handles potential order conflicts or other creation errors
+    return chapter_service.create(project_id=project_id, chapter_in=chapter_in)
 
-@router.patch("/{chapter_id}", response_model=ChapterRead)
-async def update_chapter(project_id: str = Path(...), chapter_id: str = Path(...), chapter_in: ChapterUpdate = Body(...)):
-    """ Update details of an existing chapter. """
-    # TODO: Call chapter_service.update(project_id, chapter_id, chapter_in) -> Handle not found
-    raise NotImplementedError("update_chapter not implemented")
 
-@router.delete("/{chapter_id}", response_model=Message)
-async def delete_chapter(project_id: str = Path(...), chapter_id: str = Path(...)):
-    """ Delete a chapter and all its scenes. """
-    # TODO: Call chapter_service.delete(project_id, chapter_id) -> Handle not found
-    raise NotImplementedError("delete_chapter not implemented")
+@router.get(
+    "/",
+    response_model=ChapterList,
+    summary="List Chapters",
+    description="Retrieves a list of all chapters within the specified project, sorted by order."
+)
+async def list_chapters(project_id: str = Depends(get_project_dependency)):
+    """
+    Lists all chapters for a specific project.
+
+    - **project_id**: The UUID of the parent project (in path).
+    """
+    return chapter_service.get_all_for_project(project_id=project_id)
+
+
+@router.get(
+    "/{chapter_id}",
+    response_model=ChapterRead,
+    summary="Get Chapter",
+    description="Retrieves details of a specific chapter by its ID."
+)
+async def get_chapter(
+    chapter_id: str = Path(...),
+    project_id: str = Depends(get_project_dependency) # Ensures project exists
+):
+    """
+    Gets details of a specific chapter.
+    Raises 404 if the chapter or project is not found.
+
+    - **project_id**: The UUID of the parent project (in path).
+    - **chapter_id**: The UUID of the chapter to retrieve (in path).
+    """
+    # Service layer handles 404 for the chapter
+    return chapter_service.get_by_id(project_id=project_id, chapter_id=chapter_id)
+
+
+@router.patch(
+    "/{chapter_id}",
+    response_model=ChapterRead,
+    summary="Update Chapter",
+    description="Updates the details (title, order) of an existing chapter."
+)
+async def update_chapter(
+    chapter_id: str = Path(...),
+    chapter_in: ChapterUpdate = Body(...),
+    project_id: str = Depends(get_project_dependency) # Ensures project exists
+):
+    """
+    Updates details of an existing chapter.
+    Raises 404 if the chapter or project is not found.
+    Raises 409 if the new order conflicts with another chapter.
+
+    - **project_id**: The UUID of the parent project (in path).
+    - **chapter_id**: The UUID of the chapter to update (in path).
+    - **chapter_in**: ChapterUpdate model containing fields to update.
+    """
+    # Service layer handles 404 and potential order conflicts (409)
+    return chapter_service.update(project_id=project_id, chapter_id=chapter_id, chapter_in=chapter_in)
+
+
+@router.delete(
+    "/{chapter_id}",
+    response_model=Message,
+    status_code=status.HTTP_200_OK,
+    summary="Delete Chapter",
+    description="Deletes a chapter and all its scenes. This action is irreversible."
+)
+async def delete_chapter(
+    chapter_id: str = Path(...),
+    project_id: str = Depends(get_project_dependency) # Ensures project exists
+):
+    """
+    Deletes a specific chapter.
+    Raises 404 if the chapter or project is not found.
+
+    - **project_id**: The UUID of the parent project (in path).
+    - **chapter_id**: The UUID of the chapter to delete (in path).
+    """
+    # Service layer handles 404
+    chapter_service.delete(project_id=project_id, chapter_id=chapter_id)
+    return Message(message=f"Chapter {chapter_id} deleted successfully")

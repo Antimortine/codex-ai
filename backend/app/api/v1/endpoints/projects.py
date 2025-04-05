@@ -12,44 +12,96 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from fastapi import APIRouter, HTTPException, status, Body
+from fastapi import APIRouter, HTTPException, status, Body, Depends
 from typing import List
 from app.models.project import ProjectCreate, ProjectUpdate, ProjectRead, ProjectList
-from app.models.common import Message # For delete response
+from app.models.common import Message
+# Import the specific service instance
+from app.services.project_service import project_service
 
 router = APIRouter()
 
-# Placeholder for actual service logic
-async def get_project_service(): # Replace with actual dependency injection later
-    pass
+# --- Endpoint Implementations ---
 
-@router.post("/", response_model=ProjectRead, status_code=status.HTTP_201_CREATED)
+@router.post(
+    "/",
+    response_model=ProjectRead,
+    status_code=status.HTTP_201_CREATED,
+    summary="Create Project",
+    description="Creates a new writing project directory structure and metadata."
+)
 async def create_project(project_in: ProjectCreate = Body(...)):
-    """ Create a new writing project. """
-    # TODO: Call project_service.create(project_in)
-    raise NotImplementedError("create_project not implemented")
+    """
+    Creates a new writing project.
 
-@router.get("/", response_model=ProjectList)
+    - **name**: The name of the project (required).
+    """
+    # The service layer handles potential ID collisions and file system errors
+    return project_service.create(project_in=project_in)
+
+
+@router.get(
+    "/",
+    response_model=ProjectList,
+    summary="List Projects",
+    description="Retrieves a list of all available writing projects."
+)
 async def list_projects():
-    """ Retrieve a list of all projects. """
-    # TODO: Call project_service.get_all()
-    raise NotImplementedError("list_projects not implemented")
+    """
+    Retrieves a list of all projects, reading their basic metadata.
+    """
+    return project_service.get_all()
 
-@router.get("/{project_id}", response_model=ProjectRead)
+
+@router.get(
+    "/{project_id}",
+    response_model=ProjectRead,
+    summary="Get Project",
+    description="Retrieves details of a specific project by its ID."
+)
 async def get_project(project_id: str):
-    """ Get details of a specific project by its ID. """
-    # TODO: Call project_service.get_by_id(project_id) -> Handle not found
-    raise NotImplementedError("get_project not implemented")
+    """
+    Gets details of a specific project.
+    Raises 404 if the project is not found.
 
-@router.patch("/{project_id}", response_model=ProjectRead)
+    - **project_id**: The UUID of the project to retrieve.
+    """
+    # Service layer handles the 404 HTTPException
+    return project_service.get_by_id(project_id=project_id)
+
+
+@router.patch(
+    "/{project_id}",
+    response_model=ProjectRead,
+    summary="Update Project",
+    description="Updates the details (e.g., name) of an existing project."
+)
 async def update_project(project_id: str, project_in: ProjectUpdate = Body(...)):
-    """ Update details of an existing project. """
-    # TODO: Call project_service.update(project_id, project_in) -> Handle not found
-    raise NotImplementedError("update_project not implemented")
+    """
+    Updates details of an existing project. Currently only supports updating the name.
+    Raises 404 if the project is not found.
 
-@router.delete("/{project_id}", response_model=Message)
+    - **project_id**: The UUID of the project to update.
+    - **project_in**: ProjectUpdate model containing fields to update (only name currently).
+    """
+    # Service layer handles the 404 HTTPException
+    return project_service.update(project_id=project_id, project_in=project_in)
+
+
+@router.delete(
+    "/{project_id}",
+    response_model=Message,
+    status_code=status.HTTP_200_OK, # Or 204 No Content if you prefer not to return a body
+    summary="Delete Project",
+    description="Deletes a project and all its associated data (chapters, scenes, etc.). This action is irreversible."
+)
 async def delete_project(project_id: str):
-    """ Delete a project and all its associated data. """
-    # TODO: Call project_service.delete(project_id) -> Handle not found
-    # Return {"message": f"Project {project_id} deleted successfully"}
-    raise NotImplementedError("delete_project not implemented")
+    """
+    Deletes a specific project.
+    Raises 404 if the project is not found.
+
+    - **project_id**: The UUID of the project to delete.
+    """
+    # Service layer handles the 404 HTTPException
+    project_service.delete(project_id=project_id)
+    return Message(message=f"Project {project_id} deleted successfully")

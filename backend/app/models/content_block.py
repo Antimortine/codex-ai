@@ -13,7 +13,6 @@
 # limitations under the License.
 
 from pydantic import BaseModel, Field
-from typing import Optional
 
 # Base model for reading content
 class ContentBlockRead(BaseModel):
