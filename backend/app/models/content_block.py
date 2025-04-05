@@ -13,19 +13,13 @@
 # limitations under the License.
 
 from pydantic import BaseModel, Field
-import uuid
+from typing import Optional
 
-# We can use UUIDs for project/chapter/scene IDs for global uniqueness
-# Alternatively, simple integer IDs or slugs could be used. Let's start with UUIDs.
+# Base model for reading content
+class ContentBlockRead(BaseModel):
+    project_id: str = Field(..., description="ID of the parent project")
+    content: str = Field(..., description="Markdown content")
 
-def generate_uuid():
-    return str(uuid.uuid4())
-
-class IDModel(BaseModel):
-    id: str = Field(default_factory=generate_uuid)
-
-class Message(BaseModel):
-    """ A simple message response model """
-    message: str
-
-# Add other common fields or base models if needed later
+# Model for updating content
+class ContentBlockUpdate(BaseModel):
+    content: str = Field(..., description="New Markdown content")

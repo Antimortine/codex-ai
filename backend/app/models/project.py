@@ -12,3 +12,24 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
+from pydantic import BaseModel, Field
+from typing import Optional
+from .common import IDModel
+
+# Properties required when creating a project
+class ProjectCreate(BaseModel):
+    name: str = Field(..., min_length=1, description="Name of the writing project")
+
+# Properties required when updating a project (all optional)
+class ProjectUpdate(BaseModel):
+    name: Optional[str] = Field(None, min_length=1, description="New name for the project")
+
+# Properties returned when reading a project (includes ID)
+class ProjectRead(IDModel, ProjectCreate):
+    # Inherits id from IDModel and name from ProjectCreate
+    # Add other fields if needed, e.g., created_at, updated_at
+    pass
+
+# Wrapper for list response
+class ProjectList(BaseModel):
+    projects: list[ProjectRead] = []

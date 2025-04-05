@@ -16,23 +16,23 @@ from pydantic import BaseModel, Field
 from typing import Optional
 from .common import IDModel
 
-# Properties required when creating a chapter
-class ChapterCreate(BaseModel):
-    title: str = Field(..., min_length=1, description="Title of the chapter")
-    order: int = Field(..., ge=0, description="Order of the chapter within the project")
-    # project_id will be a path parameter, not in the request body usually
+# Properties required when creating a character
+class CharacterCreate(BaseModel):
+    name: str = Field(..., min_length=1, description="Name of the character")
+    description: str = Field("", description="Markdown description of the character")
+    # project_id will be a path parameter
 
-# Properties required when updating a chapter
-class ChapterUpdate(BaseModel):
-    title: Optional[str] = Field(None, min_length=1)
-    order: Optional[int] = Field(None, ge=0)
+# Properties required when updating a character
+class CharacterUpdate(BaseModel):
+    name: Optional[str] = Field(None, min_length=1)
+    description: Optional[str] = None
 
-# Properties returned when reading a chapter
-class ChapterRead(IDModel, ChapterCreate):
+# Properties returned when reading a character
+class CharacterRead(IDModel, CharacterCreate):
     project_id: str = Field(..., description="ID of the parent project")
-    # Inherits id, title, order
+    # Inherits id, name, description
     pass
 
 # Wrapper for list response
-class ChapterList(BaseModel):
-    chapters: list[ChapterRead] = []
+class CharacterList(BaseModel):
+    characters: list[CharacterRead] = []
