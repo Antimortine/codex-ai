@@ -30,6 +30,13 @@ class Settings(BaseSettings):
     API_V1_STR: str = "/api/v1"
     GOOGLE_API_KEY: str = os.getenv("GOOGLE_API_KEY")
 
+    # --- RAG Configuration ---
+    # How many chunks to retrieve for standard queries
+    RAG_QUERY_SIMILARITY_TOP_K: int = int(os.getenv("RAG_QUERY_SIMILARITY_TOP_K", 3))
+    # How many chunks to retrieve for generation context
+    RAG_GENERATION_SIMILARITY_TOP_K: int = int(os.getenv("RAG_GENERATION_SIMILARITY_TOP_K", 5))
+
+
 settings = Settings()
 
 # --- Ensure the base directory exists on startup ---

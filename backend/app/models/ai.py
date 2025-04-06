@@ -15,6 +15,8 @@
 from pydantic import BaseModel, Field
 from typing import Optional, List
 
+# --- Query Models ---
+
 class AIQueryRequest(BaseModel):
     query: str = Field(..., description="The user's question or query text.")
 
@@ -27,9 +29,18 @@ class SourceNodeModel(BaseModel):
 
 class AIQueryResponse(BaseModel):
     answer: str = Field(..., description="The AI-generated answer.")
-    # This field will now be populated
     source_nodes: Optional[List[SourceNodeModel]] = Field(None, description="List of source nodes retrieved and used for the answer.")
 
-# Add other models for generation/editing requests/responses later
-# class AISceneGenerationRequest(...)
-# class AISceneGenerationResponse(...)
+
+# --- Scene Generation Models ---
+
+class AISceneGenerationRequest(BaseModel):
+    prompt_summary: Optional[str] = Field(None, description="Optional brief summary or prompt to guide the scene generation.")
+    # Add other potential fields later: target_characters, setting, etc.
+
+class AISceneGenerationResponse(BaseModel):
+    generated_content: str = Field(..., description="The generated Markdown content for the scene draft.")
+
+# Add other models for editing requests/responses later
+# class AIEditRequest(...)
+# class AIEditResponse(...)
