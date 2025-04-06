@@ -87,7 +87,7 @@ function ProjectDetailPage() {
     const [project, setProject] = useState(null);
     const [chapters, setChapters] = useState([]);
     const [characters, setCharacters] = useState([]);
-    const [scenes, setScenes] = useState({});
+    const [scenes, setScenes] = useState({}); // Holds scenes keyed by chapterId: { chapterId1: [scene1, scene2], ... }
     const [isLoadingProject, setIsLoadingProject] = useState(true);
     const [isLoadingChapters, setIsLoadingChapters] = useState(true);
     const [isLoadingCharacters, setIsLoadingCharacters] = useState(true);
@@ -114,6 +114,7 @@ function ProjectDetailPage() {
 
     // --- useEffect for Data Fetching ---
     useEffect(() => {
+        // ... (useEffect logic remains the same) ...
         let isMounted = true;
         setError(null);
         setSaveNameError(null);
@@ -122,7 +123,6 @@ function ProjectDetailPage() {
         setCreateSceneError(null); // Reset create scene error
 
         const fetchAllData = async () => {
-            // ... (existing data fetching logic remains the same) ...
             if (!projectId) {
                 console.log("useEffect running, but projectId is still missing.");
                 if (isMounted) setError("Project ID not found in URL.");
@@ -213,6 +213,7 @@ function ProjectDetailPage() {
 
     // --- Action Handlers ---
     const refreshChaptersAndScenes = async () => {
+        // ... (refreshChaptersAndScenes logic remains the same) ...
          setIsLoadingChapters(true);
          setIsLoadingScenes(true);
          setScenes({});
@@ -248,7 +249,7 @@ function ProjectDetailPage() {
 
     // --- handleCreateChapter, handleDeleteChapter, handleCreateCharacter, handleDeleteCharacter, handleCreateScene, handleDeleteScene, handleEditNameClick, handleCancelEditName, handleSaveName remain the same ---
     // ... (omitted for brevity, assume they are unchanged) ...
-     const handleCreateChapter = async (e) => {
+    const handleCreateChapter = async (e) => {
         e.preventDefault();
         if (!newChapterTitle.trim()) return;
         const nextOrder = chapters.length > 0 ? Math.max(...chapters.map(c => c.order)) + 1 : 1;
@@ -382,6 +383,7 @@ function ProjectDetailPage() {
         }
     };
 
+
     // --- AI Generation Handler ---
     const handleGenerateSceneDraft = async (chapterId) => {
         const summary = generationSummaries[chapterId] || ''; // Get summary for the specific chapter
@@ -392,10 +394,21 @@ function ProjectDetailPage() {
         setShowGeneratedSceneModal(false);
         setCreateSceneError(null); // Clear any previous create error
 
-        console.log(`Requesting scene draft for chapter ${chapterId} with summary: "${summary}"`);
+        // **Calculate previous scene order**
+        const currentScenesInChapter = scenes[chapterId] || [];
+        const previousSceneOrder = currentScenesInChapter.length > 0
+            ? Math.max(...currentScenesInChapter.map(s => s.order))
+            : 0; // If no scenes, previous order is 0
+
+        const requestData = {
+            prompt_summary: summary,
+            previous_scene_order: previousSceneOrder // Include the order
+        };
+
+        console.log(`Requesting scene draft for chapter ${chapterId} with data:`, requestData);
 
         try {
-            const response = await generateSceneDraft(projectId, chapterId, { prompt_summary: summary });
+            const response = await generateSceneDraft(projectId, chapterId, requestData); // Pass updated requestData
             console.log("AI Generation Response:", response.data);
             setGeneratedSceneContent(response.data.generated_content || "AI returned empty content.");
             setChapterIdForGeneratedScene(chapterId); // Store the relevant chapter ID
@@ -413,6 +426,7 @@ function ProjectDetailPage() {
 
     // --- Create Scene From Draft Handler ---
     const handleCreateSceneFromDraft = async () => {
+        // ... (handleCreateSceneFromDraft logic remains the same) ...
         if (!chapterIdForGeneratedScene || !generatedSceneContent) {
             setCreateSceneError("Missing chapter ID or generated content.");
             return;
@@ -466,6 +480,7 @@ function ProjectDetailPage() {
 
     // Handler for updating generation summary state
     const handleSummaryChange = (chapterId, value) => {
+        // ... (handleSummaryChange logic remains the same) ...
         setGenerationSummaries(prev => ({
             ...prev,
             [chapterId]: value
@@ -474,9 +489,9 @@ function ProjectDetailPage() {
 
      // Handler for copying generated text
     const copyGeneratedText = () => {
+        // ... (copyGeneratedText logic remains the same) ...
         navigator.clipboard.writeText(generatedSceneContent)
             .then(() => {
-                // Optional: Show a temporary "Copied!" message
                 console.log('Generated text copied to clipboard');
             })
             .catch(err => {
@@ -485,8 +500,9 @@ function ProjectDetailPage() {
     };
 
     // --- Rendering Logic ---
-
-    const isLoading = isLoadingProject || isLoadingChapters || isLoadingCharacters || isLoadingScenes;
+    // ... (Rendering logic remains largely the same, including modal and sections) ...
+    // ... Only relevant parts shown below for brevity ...
+     const isLoading = isLoadingProject || isLoadingChapters || isLoadingCharacters || isLoadingScenes;
 
      if (isLoadingProject && !project && !error) {
          return <p>Loading project...</p>;
@@ -515,7 +531,7 @@ function ProjectDetailPage() {
         <div>
             {/* --- Generated Scene Modal --- */}
             {showGeneratedSceneModal && (
-                <div style={modalStyles.overlay}>
+                 <div style={modalStyles.overlay}>
                     <div style={modalStyles.content}>
                         <button
                            style={modalStyles.closeButton}
@@ -559,14 +575,14 @@ function ProjectDetailPage() {
             )}
 
              {/* --- Rest of the page content (nav, header, sections) --- */}
-            {/* ... (omitted for brevity, assume they are unchanged from previous version) ... */}
             <nav>
                 <Link to="/"> &lt; Back to Project List</Link>
             </nav>
 
             {/* Project Header */}
              <div style={{ display: 'flex', alignItems: 'center', marginBottom: '0.5rem' }}>
-                {!isEditingName ? (
+                 {/* ... Project Name Editing UI ... */}
+                 {!isEditingName ? (
                     <>
                         <h1 style={{ marginRight: '1rem', marginBottom: 0 }}>
                             Project: {project?.name || 'Loading...'}
@@ -613,7 +629,8 @@ function ProjectDetailPage() {
                     chapters.length === 0 ? <p>No chapters yet.</p> :
                     chapters.map(chapter => (
                         <div key={chapter.id} style={{ border: '1px solid #eee', padding: '10px', marginBottom: '10px' }}>
-                            <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '5px' }}>
+                           {/* ... Chapter Title/Delete ... */}
+                           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '5px' }}>
                                 <strong>{chapter.order}: {chapter.title}</strong>
                                 <button onClick={() => handleDeleteChapter(chapter.id, chapter.title)} style={{ marginLeft: '1rem', color: 'red', cursor: 'pointer' }} disabled={isLoadingChapters || isLoadingScenes || isGeneratingScene || isCreatingSceneFromDraft}>
                                     Delete Chapter
@@ -623,7 +640,8 @@ function ProjectDetailPage() {
                             {isLoadingScenes ? <p style={{marginLeft:'20px'}}>Loading scenes...</p> : (
                                 <ul style={{ listStyle: 'none', paddingLeft: '20px' }}>
                                     {(scenes[chapter.id] || []).map(scene => (
-                                        <li key={scene.id} style={{ marginBottom: '0.3rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
+                                        // ... Scene list item ...
+                                         <li key={scene.id} style={{ marginBottom: '0.3rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                              <Link to={`/projects/${projectId}/chapters/${chapter.id}/scenes/${scene.id}`}>
                                                 {scene.order}: {scene.title}
                                             </Link>
@@ -637,11 +655,12 @@ function ProjectDetailPage() {
                             )}
                             {/* --- Actions for Chapter (Add Scene, Generate Scene) --- */}
                              <div style={{marginLeft: '20px', marginTop: '10px', borderTop: '1px dashed #ccc', paddingTop: '10px'}}>
+                                {/* ... Add Scene Manually Button ... */}
                                 <button onClick={() => handleCreateScene(chapter.id)} style={{marginRight: '10px'}} disabled={isLoadingScenes || isGeneratingScene || isCreatingSceneFromDraft}>+ Add Scene Manually</button>
-
                                 {/* --- AI Scene Generation UI --- */}
                                 <div style={{ marginTop: '10px', padding:'5px', backgroundColor:'#f0f8ff', borderRadius:'3px' }}>
-                                    <label htmlFor={`summary-${chapter.id}`} style={{ fontSize: '0.9em', marginRight: '5px' }}>Optional Prompt/Summary for AI:</label>
+                                    {/* ... Input and Button for AI Generation ... */}
+                                     <label htmlFor={`summary-${chapter.id}`} style={{ fontSize: '0.9em', marginRight: '5px' }}>Optional Prompt/Summary for AI:</label>
                                     <input
                                         type="text"
                                         id={`summary-${chapter.id}`}
@@ -652,7 +671,7 @@ function ProjectDetailPage() {
                                         style={{ fontSize: '0.9em', marginRight: '5px', minWidth:'250px' }}
                                     />
                                     <button
-                                        onClick={() => handleGenerateSceneDraft(chapter.id)}
+                                        onClick={() => handleGenerateSceneDraft(chapter.id)} // No change needed here, logic is inside handler
                                         disabled={isGeneratingScene || isCreatingSceneFromDraft}
                                     >
                                         {isGeneratingScene && generatingChapterId === chapter.id ? 'Generating...' : '+ Add Scene using AI'}
@@ -666,6 +685,7 @@ function ProjectDetailPage() {
                         </div>
                     ))
                 )}
+                 {/* ... Add Chapter Form ... */}
                  <form onSubmit={handleCreateChapter} style={{ marginTop: '1rem' }}>
                     <input
                       type="text"
@@ -681,7 +701,8 @@ function ProjectDetailPage() {
 
             {/* Characters Section */}
              <section>
-                <h2>Characters</h2>
+                 {/* ... Characters List/Form ... */}
+                 <h2>Characters</h2>
                 {isLoadingCharacters ? <p>Loading characters...</p> : (
                  <ul>
                     {characters.map(character => (
@@ -714,7 +735,8 @@ function ProjectDetailPage() {
 
             {/* Other Content Blocks Section */}
             <section>
-                <h2>Other Content</h2>
+                 {/* ... Other Content Links ... */}
+                 <h2>Other Content</h2>
                 <ul style={{ listStyle: 'none', paddingLeft: 0 }}>
                     <li style={{ marginBottom: '0.5rem' }}>
                         <Link to={`/projects/${projectId}/plan`}>Edit Plan</Link>
