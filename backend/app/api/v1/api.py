@@ -19,16 +19,18 @@ from app.api.v1.endpoints import chapters
 from app.api.v1.endpoints import scenes
 from app.api.v1.endpoints import characters
 from app.api.v1.endpoints import content_blocks
-# Import ai router later in Phase 3
-# from app.api.v1.endpoints import ai
+from app.api.v1.endpoints import ai
 
 api_router = APIRouter()
 
 # --- Project level routes ---
-api_router.include_router(projects.router, prefix="/projects", tags=["Projects"])
+api_router.include_router(
+    projects.router,
+    prefix="/projects",
+    tags=["Projects"]
+)
 
 # --- Content Block routes (Plan, Synopsis, World) ---
-# Note: These are nested under projects but handle specific singleton files
 api_router.include_router(
     content_blocks.router,
     prefix="/projects/{project_id}",
@@ -50,13 +52,15 @@ api_router.include_router(
 )
 
 # --- Scene routes ---
-# Note the double nesting for project and chapter IDs
 api_router.include_router(
     scenes.router,
     prefix="/projects/{project_id}/chapters/{chapter_id}/scenes",
     tags=["Scenes"]
 )
 
-
-# --- AI routes (to be added in Phase 3) ---
-# api_router.include_router(ai.router, prefix="/ai", tags=["AI"])
+# --- AI routes ---
+api_router.include_router(
+    ai.router,
+    prefix="/ai",
+    tags=["AI"]
+)
