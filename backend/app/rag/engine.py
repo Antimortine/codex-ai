@@ -14,6 +14,7 @@
 
 import logging
 import asyncio # Needed for async llm call
+import re # For parsing numbered lists
 from llama_index.core.retrievers import VectorIndexRetriever
 from llama_index.core.query_engine import RetrieverQueryEngine
 from llama_index.core.vector_stores import ExactMatchFilter, MetadataFilters
@@ -25,10 +26,9 @@ from app.core.config import settings # Import settings
 
 logger = logging.getLogger(__name__)
 
-# --- Configuration moved to config.py ---
-# SIMILARITY_TOP_K = settings.RAG_QUERY_SIMILARITY_TOP_K
-# GENERATION_SIMILARITY_TOP_K = settings.RAG_GENERATION_SIMILARITY_TOP_K
-# REPHRASE_SIMILARITY_TOP_K = settings.RAG_GENERATION_SIMILARITY_TOP_K # Reuse generation K for now
+# Use settings for configuration
+REPHRASE_SIMILARITY_TOP_K = settings.RAG_GENERATION_SIMILARITY_TOP_K # Reuse generation K for context retrieval during edits for now
+REPHRASE_SUGGESTION_COUNT = settings.RAG_REPHRASE_SUGGESTION_COUNT # Number of suggestions
 
 class RagEngine:
     """
@@ -36,9 +36,8 @@ class RagEngine:
     index and components initialized by IndexManager.
     """
     def __init__(self):
-        """
-        Initializes the RagEngine, ensuring the IndexManager's components are ready.
-        """
+        """Initializes the RagEngine, ensuring the IndexManager's components are ready."""
+        # ... (init remains unchanged) ...
         if not hasattr(index_manager, 'index') or not index_manager.index:
              logger.critical("IndexManager's index is not initialized! RagEngine cannot function.")
              raise RuntimeError("RagEngine cannot initialize without a valid index from IndexManager.")
@@ -79,7 +78,6 @@ class RagEngine:
             query_engine = RetrieverQueryEngine.from_args(
                 retriever=retriever,
                 llm=self.llm,
-                # verbose=True, # Optional: Add verbose logging from LlamaIndex
             )
             logger.debug("Query engine created successfully.")
 
@@ -123,7 +121,6 @@ class RagEngine:
 
         try:
             # 1. Construct Retrieval Query
-            # Combine chapter context and user summary for better retrieval
             retrieval_query = f"Context relevant for writing a new scene in chapter {chapter_id}."
             if prompt_summary:
                 retrieval_query += f" Scene summary: {prompt_summary}"
@@ -175,18 +172,10 @@ class RagEngine:
                 "- Do NOT add explanations or commentary outside the scene's Markdown content."
             )
 
-            # Using a chat-like structure can sometimes yield better results with models like Gemini
-            # messages = [
-            #      {"role": "system", "content": system_prompt},
-            #      {"role": "user", "content": user_message_content}
-            # ]
-
-            # Formatting as a single string for `acomplete`:
             full_prompt = f"{system_prompt}\n\nUser: {user_message_content}\n\nAssistant:"
             logger.info("Calling LLM for scene generation...")
             llm_response = await self.llm.acomplete(full_prompt)
 
-            # Extract the generated text (adjust based on actual response structure)
             generated_text = llm_response.text if llm_response else ""
 
             if not generated_text.strip():
@@ -194,13 +183,13 @@ class RagEngine:
                  return "Error: The AI failed to generate a scene draft. Please try again."
 
             logger.info(f"Scene generation successful for project '{project_id}', chapter '{chapter_id}'.")
-            # Return the raw generated markdown
             return generated_text.strip()
 
         except Exception as e:
             logger.error(f"Error during scene generation for project '{project_id}', chapter '{chapter_id}': {e}", exc_info=True)
             error_message = f"Sorry, an error occurred while generating the scene draft for project '{project_id}'. Please check the backend logs for details."
             return error_message
+
 
     async def rephrase(self, project_id: str, selected_text: str, context_before: Optional[str], context_after: Optional[str]) -> List[str]:
         """
@@ -223,38 +212,81 @@ class RagEngine:
             return ["Error: RAG components are not properly initialized."]
 
         try:
-            # --- Placeholder Implementation ---
-            # TODO: Implement actual RAG logic for rephrasing:
-            # 1. Construct a retrieval query based on selected_text and maybe surrounding context.
-            # 2. Retrieve relevant context using VectorIndexRetriever filtered by project_id.
-            #    (Use RAG_GENERATION_SIMILARITY_TOP_K or a dedicated setting).
-            # 3. Build a detailed prompt for the LLM:
-            #    - Include retrieved project context.
-            #    - Include context_before and context_after if provided.
-            #    - Clearly state the selected_text to be rephrased.
-            #    - Instruct the LLM to provide *multiple* alternative phrasings (e.g., 3 options).
-            #    - Specify the output format (e.g., a numbered list or JSON list).
-            # 4. Call self.llm.acomplete(prompt).
-            # 5. Parse the LLM response to extract the list of suggestions. Handle cases where the LLM doesn't follow format.
+            # 1. Construct Retrieval Query based on the text to be rephrased
+            retrieval_query = f"Context relevant to the following text: {selected_text}"
+            logger.debug(f"Constructed retrieval query for rephrase: '{retrieval_query}'")
 
-            logger.warning("rephrase called, but using placeholder implementation.")
+            # 2. Retrieve Context
+            logger.debug(f"Creating retriever for rephrase with top_k={REPHRASE_SIMILARITY_TOP_K} and filter for project_id='{project_id}'")
+            retriever = VectorIndexRetriever(
+                index=self.index,
+                similarity_top_k=REPHRASE_SIMILARITY_TOP_K,
+                filters=MetadataFilters(
+                    filters=[ExactMatchFilter(key="project_id", value=project_id)]
+                ),
+            )
+            retrieved_nodes: List[NodeWithScore] = await retriever.aretrieve(retrieval_query)
+            logger.info(f"Retrieved {len(retrieved_nodes)} nodes for rephrase context.")
 
-            # Simulate LLM call returning a few options
-            await asyncio.sleep(0.1) # Simulate async work
+            context_str = "\n\n---\n\n".join(
+                 [f"Source: {node.metadata.get('file_path', 'N/A')}\n\n{node.get_content()}" for node in retrieved_nodes]
+            ) if retrieved_nodes else "No specific context was retrieved."
 
-            # Simple placeholder suggestions
-            suggestions = [
-                f"Alternative 1: This is a rephrased version of '{selected_text}'.",
-                f"Alternative 2: Consider saying '{selected_text}' this way instead.",
-                f"Alternative 3: Another option for '{selected_text}'.",
-            ]
+            # 3. Build Rephrase Prompt
+            logger.debug("Building rephrase prompt...")
+            system_prompt = (
+                "You are an expert writing assistant. Your task is to rephrase the user's selected text, providing several alternative phrasings. "
+                "Use the surrounding text and the broader project context provided to ensure the suggestions fit naturally and maintain consistency."
+            )
 
-            logger.info(f"Rephrase placeholder successful for project '{project_id}'.")
+            user_message_content = (
+                f"Please provide {REPHRASE_SUGGESTION_COUNT} alternative ways to phrase the following selected text, considering the context.\n\n"
+                f"**Broader Project Context:**\n```markdown\n{context_str}\n```\n\n"
+                f"**Text to Rephrase:**\n```\n{selected_text}\n```\n\n"
+            )
+            if context_before:
+                user_message_content += f"**Text Immediately Before Selection:**\n```\n{context_before}\n```\n\n"
+            if context_after:
+                user_message_content += f"**Text Immediately After Selection:**\n```\n{context_after}\n```\n\n"
+
+            user_message_content += (
+                f"**Instructions:**\n"
+                f"- Provide exactly {REPHRASE_SUGGESTION_COUNT} distinct suggestions.\n"
+                f"- Present the suggestions as a numbered list, starting with '1.'.\n"
+                f"- Each suggestion should be a plausible replacement for the original selected text.\n"
+                f"- Do NOT add explanations, commentary, or apologies before or after the numbered list.\n"
+                f"- Just output the numbered list of suggestions."
+            )
+
+            full_prompt = f"{system_prompt}\n\nUser: {user_message_content}\n\nAssistant:"
+            logger.info("Calling LLM for rephrase suggestions...")
+            llm_response = await self.llm.acomplete(full_prompt)
+
+            generated_text = llm_response.text.strip() if llm_response else ""
+
+            if not generated_text:
+                 logger.warning("LLM returned an empty response for rephrase.")
+                 return ["Error: The AI failed to generate suggestions. Please try again."]
+
+            # 5. Parse the Numbered List Response
+            logger.debug(f"Raw LLM response for parsing:\n{generated_text}")
+            # Use regex to find lines starting with number, dot, optional space
+            suggestions = re.findall(r"^\s*\d+\.\s*(.*)", generated_text, re.MULTILINE)
+
+            if not suggestions:
+                logger.warning(f"Could not parse numbered list from LLM response. Response was:\n{generated_text}")
+                # Return the raw response as a single suggestion if parsing fails, better than nothing
+                return [f"Error: Could not parse suggestions. Raw response: {generated_text}"]
+
+            # Clean up potential leading/trailing whitespace from parsed suggestions
+            suggestions = [s.strip() for s in suggestions]
+
+            logger.info(f"Successfully parsed {len(suggestions)} rephrase suggestions for project '{project_id}'.")
             return suggestions
 
         except Exception as e:
             logger.error(f"Error during rephrase for project '{project_id}': {e}", exc_info=True)
-            return [f"Error: An error occurred while rephrasing. Please check logs."]
+            return [f"Error: An unexpected error occurred while rephrasing. Please check logs."]
 
 
 # --- Singleton Instance ---

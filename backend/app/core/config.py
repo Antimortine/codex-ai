@@ -20,9 +20,6 @@ from pathlib import Path
 load_dotenv() # Loads variables from .env file
 
 # --- Define BASE_PROJECT_DIR here ---
-# It's defined outside the class as a module-level constant,
-# making it easily importable without needing the settings instance.
-# You could also put it inside Settings and read from an env var if preferred.
 BASE_PROJECT_DIR: Path = Path(os.getenv("BASE_PROJECT_DIR", "user_projects"))
 
 class Settings(BaseSettings):
@@ -35,15 +32,15 @@ class Settings(BaseSettings):
     RAG_QUERY_SIMILARITY_TOP_K: int = int(os.getenv("RAG_QUERY_SIMILARITY_TOP_K", 3))
     # How many chunks to retrieve for generation context
     RAG_GENERATION_SIMILARITY_TOP_K: int = int(os.getenv("RAG_GENERATION_SIMILARITY_TOP_K", 5))
+    # Optional: Number of rephrase suggestions to request
+    RAG_REPHRASE_SUGGESTION_COUNT: int = int(os.getenv("RAG_REPHRASE_SUGGESTION_COUNT", 3))
 
 
 settings = Settings()
 
 # --- Ensure the base directory exists on startup ---
-# Moved the directory creation logic here as it depends on BASE_PROJECT_DIR
 try:
     BASE_PROJECT_DIR.mkdir(parents=True, exist_ok=True)
     print(f"Ensured base project directory exists: {BASE_PROJECT_DIR.resolve()}")
 except OSError as e:
     print(f"ERROR: Could not create base project directory {BASE_PROJECT_DIR}: {e}")
-    # Depending on severity, you might want to raise an error here
