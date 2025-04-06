@@ -22,6 +22,9 @@ from app.rag.index_manager import index_manager
 
 logger = logging.getLogger(__name__)
 
+# --- Configuration for Retrieval/Querying ---
+SIMILARITY_TOP_K = 3 # How many relevant chunks to retrieve
+
 class RagEngine:
     """
     Handles RAG querying and potentially generation logic, using the
@@ -31,23 +34,18 @@ class RagEngine:
         """
         Initializes the RagEngine, ensuring the IndexManager's components are ready.
         """
-        # Access the globally initialized index, LLM, and embed_model from IndexManager
-        # This relies on IndexManager being initialized successfully before RagEngine.
         if not hasattr(index_manager, 'index') or not index_manager.index:
              logger.critical("IndexManager's index is not initialized! RagEngine cannot function.")
              raise RuntimeError("RagEngine cannot initialize without a valid index from IndexManager.")
         if not hasattr(index_manager, 'llm') or not index_manager.llm:
              logger.critical("IndexManager's LLM is not initialized! RagEngine cannot function.")
              raise RuntimeError("RagEngine cannot initialize without a valid LLM from IndexManager.")
-        # Embed model might not be strictly needed for querying if retriever handles it,
-        # but good to have access if needed for query transformations etc.
         if not hasattr(index_manager, 'embed_model') or not index_manager.embed_model:
              logger.warning("IndexManager's embed_model is not initialized! RagEngine might face issues.")
-             # Decide if this is critical - for basic retrieval, maybe not.
 
         self.index = index_manager.index
         self.llm = index_manager.llm
-        self.embed_model = index_manager.embed_model # Store reference if needed
+        self.embed_model = index_manager.embed_model
         logger.info("RagEngine initialized, using components from IndexManager.")
 
     async def query(self, project_id: str, query_text: str) -> str:
@@ -64,55 +62,67 @@ class RagEngine:
         """
         logger.info(f"RagEngine: Received query for project '{project_id}': '{query_text}'")
 
+        if not self.index or not self.llm:
+             logger.error("RagEngine cannot query: Index or LLM is not available.")
+             return "Error: RAG components are not properly initialized."
+
         try:
-            # --- RAG Query Logic (Stage 3 Implementation) ---
+            # --- RAG Query Logic Implementation ---
 
             # 1. Create a retriever with metadata filtering
-            # We specify the metadata key ('project_id') and the value to match
+            logger.debug(f"Creating retriever with top_k={SIMILARITY_TOP_K} and filter for project_id='{project_id}'")
             retriever = VectorIndexRetriever(
                 index=self.index,
-                similarity_top_k=3, # Retrieve top 3 most similar nodes (configurable)
+                similarity_top_k=SIMILARITY_TOP_K,
                 filters=MetadataFilters(
                     filters=[ExactMatchFilter(key="project_id", value=project_id)]
                 ),
-                # embed_model=self.embed_model # Usually not needed here, index has it
             )
-            logger.debug(f"Created retriever for project_id '{project_id}'")
+            logger.debug(f"Retriever created successfully.")
 
             # 2. Create a query engine using the filtered retriever
-            # This combines the retriever (finds context) and the LLM (generates answer)
+            logger.debug("Creating RetrieverQueryEngine...")
             query_engine = RetrieverQueryEngine.from_args(
                 retriever=retriever,
                 llm=self.llm,
-                # node_postprocessors=... # Optional: Add re-ranking etc. later
-                # response_synthesizer=... # Optional: Customize how response is built
+                # verbose=True, # Optional: Add verbose logging from LlamaIndex
             )
-            logger.debug("Created query engine with filtered retriever")
+            logger.debug("Query engine created successfully.")
 
-            # 3. Execute the query
-            logger.info(f"Executing query against engine: '{query_text}'")
+            # 3. Execute the query asynchronously
+            logger.info(f"Executing RAG query: '{query_text}'")
             response = await query_engine.aquery(query_text) # Use async query
-            logger.info("Query execution complete.")
-            logger.debug(f"Raw response object: {response}") # Log the full response object
+            logger.info("RAG query execution complete.")
+
+            # Log retrieved source nodes for debugging (optional)
+            if hasattr(response, 'source_nodes') and response.source_nodes:
+                 logger.debug(f"Retrieved {len(response.source_nodes)} source nodes:")
+                 for i, node in enumerate(response.source_nodes):
+                      logger.debug(f"  Node {i+1}: Score={node.score:.4f}, ID={node.node_id}, Path={node.metadata.get('file_path', 'N/A')}")
+                      # logger.debug(f"    Text: {node.text[:100]}...") # Uncomment to log text snippets
+            else:
+                 logger.debug("No source nodes retrieved or available in response.")
+
 
             # 4. Extract and return the answer string
-            # TODO: Later, return a structured response including source_nodes: response.source_nodes
-            answer = str(response) # Default string representation often contains the answer
-            logger.info(f"Query successful. Answer length: {len(answer)}")
+            # The default __str__ representation of the Response object usually contains the answer.
+            answer = str(response)
+            if not answer:
+                 logger.warning("LLM query returned an empty response string.")
+                 answer = "(No response generated)"
+
+            logger.info(f"Query successful. Returning answer (length: {len(answer)}).")
             return answer
 
         except Exception as e:
             logger.error(f"Error during RAG query for project '{project_id}': {e}", exc_info=True)
-            # Return a user-friendly error message or re-raise a specific exception
-            return f"Error processing query for project '{project_id}'. Please check logs."
+            # Return a user-friendly error message
+            return f"Sorry, an error occurred while processing your query for project '{project_id}'. Please check the backend logs for details."
 
 
 # --- Singleton Instance ---
-# Create a single instance of the RagEngine to be used across the application.
 try:
      rag_engine = RagEngine()
 except Exception as e:
-     # Log critical failure during startup
      logger.critical(f"Failed to create RagEngine instance on startup: {e}", exc_info=True)
-     # Re-raise the exception to potentially halt application startup if the engine is essential
      raise
