@@ -14,46 +14,32 @@
 
 from fastapi import HTTPException, status
 from app.models.chapter import ChapterCreate, ChapterUpdate, ChapterRead, ChapterList
-from app.services.file_service import file_service # Import the instance
-from app.services.project_service import project_service # To check project existence
+from app.services.file_service import file_service
+from app.services.project_service import project_service
 from app.models.common import generate_uuid
-# No need to import index_manager directly here, as file_service handles it
+import logging
+
+logger = logging.getLogger(__name__)
 
 class ChapterService:
 
-    def _read_project_meta(self, project_id: str) -> dict:
-        """Reads project metadata, handling potential errors."""
-        metadata_path = file_service._get_project_metadata_path(project_id)
-        try:
-            return file_service.read_json_file(metadata_path)
-        except HTTPException as e:
-            # If meta file not found but project dir exists, it's an inconsistency
-            if e.status_code == 404:
-                 print(f"Warning: Project metadata file not found for existing project {project_id}")
-                 # Return default structure to allow potential recovery/creation
-                 return {"project_name": f"Project {project_id}", "chapters": {}, "characters": {}}
-            raise e # Re-raise other file read errors
-
-    def _write_project_meta(self, project_id: str, metadata: dict):
-        """Writes project metadata."""
-        metadata_path = file_service._get_project_metadata_path(project_id)
-        file_service.write_json_file(metadata_path, metadata)
+    # --- REMOVED internal _read_project_meta and _write_project_meta ---
 
     def create(self, project_id: str, chapter_in: ChapterCreate) -> ChapterRead:
         """Creates a new chapter within a project."""
         project_service.get_by_id(project_id) # Ensure project exists
 
         chapter_id = generate_uuid()
-        chapter_path = file_service._get_chapter_path(project_id, chapter_id)
+        chapter_path = file_service._get_chapter_path(project_id, chapter_id) # Keep using internal path helper
 
         if file_service.path_exists(chapter_path):
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Chapter ID collision")
 
-        # Create chapter directory and initial metadata file (chapter_meta.json)
+        # Create chapter directory and initial metadata file (using file_service method)
         file_service.setup_chapter_structure(project_id, chapter_id)
 
-        # Update project metadata (project_meta.json)
-        project_metadata = self._read_project_meta(project_id)
+        # Update project metadata (project_meta.json) using file_service
+        project_metadata = file_service.read_project_metadata(project_id)
         if 'chapters' not in project_metadata: project_metadata['chapters'] = {}
 
         # Check for order conflicts
@@ -68,10 +54,7 @@ class ChapterService:
             "title": chapter_in.title,
             "order": chapter_in.order
         }
-        self._write_project_meta(project_id, project_metadata)
-
-        # No content files directly in chapter need indexing at creation time
-        # Scenes will be indexed when they are created within the chapter
+        file_service.write_project_metadata(project_id, project_metadata)
 
         return ChapterRead(
             id=chapter_id,
@@ -82,45 +65,41 @@ class ChapterService:
 
     def get_by_id(self, project_id: str, chapter_id: str) -> ChapterRead:
         """Gets chapter details by ID."""
-        project_service.get_by_id(project_id) # Ensure project exists
+        project_service.get_by_id(project_id)
 
-        project_metadata = self._read_project_meta(project_id)
+        project_metadata = file_service.read_project_metadata(project_id)
         chapter_data = project_metadata.get('chapters', {}).get(chapter_id)
 
         if not chapter_data:
-            # Also check if directory physically exists - inconsistency if meta is gone but dir exists
             chapter_path = file_service._get_chapter_path(project_id, chapter_id)
             if file_service.path_exists(chapter_path):
-                 print(f"Warning: Chapter directory exists for {chapter_id} but missing from project metadata.")
-                 # Could try to recover, but let's treat as not found for now
+                 logger.warning(f"Chapter directory exists for {chapter_id} but missing from project metadata.")
             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Chapter {chapter_id} not found in project {project_id}")
 
-        # Verify directory exists as a sanity check
         chapter_path = file_service._get_chapter_path(project_id, chapter_id)
         if not file_service.path_exists(chapter_path):
-             print(f"Warning: Chapter metadata exists for {chapter_id} but directory is missing.")
-             # Treat as not found
+             logger.warning(f"Chapter metadata exists for {chapter_id} but directory is missing.")
              raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Chapter {chapter_id} data missing for project {project_id}")
 
         return ChapterRead(
             id=chapter_id,
             project_id=project_id,
             title=chapter_data.get("title", f"Chapter {chapter_id}"),
-            order=chapter_data.get("order", -1) # Use -1 or similar for missing order
+            order=chapter_data.get("order", -1)
         )
 
     def get_all_for_project(self, project_id: str) -> ChapterList:
         """Lists all chapters for a specific project."""
         project_service.get_by_id(project_id) # Ensure project exists
 
-        project_metadata = self._read_project_meta(project_id)
+        project_metadata = file_service.read_project_metadata(project_id)
         chapters_meta = project_metadata.get('chapters', {})
 
         chapters = []
         for chapter_id, data in chapters_meta.items():
             # Basic validation: check if dir exists before adding to list
             chapter_path = file_service._get_chapter_path(project_id, chapter_id)
-            if file_service.path_exists(chapter_path): # Check if dir exists
+            if file_service.path_exists(chapter_path):
                  chapters.append(ChapterRead(
                     id=chapter_id,
                     project_id=project_id,
@@ -128,9 +107,8 @@ class ChapterService:
                     order=data.get("order", -1)
                 ))
             else:
-                print(f"Warning: Skipping chapter {chapter_id} in list view: directory missing.")
+                logger.warning(f"Skipping chapter {chapter_id} in list view: directory missing.")
 
-        # Sort chapters by order
         chapters.sort(key=lambda c: c.order)
         return ChapterList(chapters=chapters)
 
@@ -138,10 +116,12 @@ class ChapterService:
         """Updates chapter details (title, order)."""
         existing_chapter = self.get_by_id(project_id, chapter_id) # Ensures chapter exists
 
-        project_metadata = self._read_project_meta(project_id)
+        project_metadata = file_service.read_project_metadata(project_id)
         chapter_data = project_metadata.get('chapters', {}).get(chapter_id)
 
         if not chapter_data:
+             # This should be caught by get_by_id, but defensive check
+             logger.error(f"Chapter metadata inconsistency during update for {chapter_id}")
              raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Chapter metadata inconsistency during update")
 
         updated = False
@@ -163,36 +143,28 @@ class ChapterService:
             updated = True
 
         if updated:
-            self._write_project_meta(project_id, project_metadata)
-
-        # Note: Updating chapter title/order does NOT require re-indexing anything,
-        # as only content files (scenes within the chapter) are indexed.
+            file_service.write_project_metadata(project_id, project_metadata)
 
         return existing_chapter
 
     def delete(self, project_id: str, chapter_id: str):
         """Deletes a chapter directory and its contents, including index cleanup."""
-        # Ensure chapter exists (implicitly checks project too)
-        self.get_by_id(project_id, chapter_id)
+        self.get_by_id(project_id, chapter_id) # Ensures chapter exists
 
         chapter_path = file_service._get_chapter_path(project_id, chapter_id)
 
-        # --- Call the enhanced delete_directory ---
-        # This method in FileService now handles deleting scene docs from the index
-        # *before* removing the chapter directory structure.
-        print(f"Deleting chapter directory and cleaning index for: {chapter_path}")
-        file_service.delete_directory(chapter_path)
-        print(f"Chapter directory {chapter_id} deleted.")
+        logger.info(f"Deleting chapter directory and cleaning index for: {chapter_path}")
+        file_service.delete_directory(chapter_path) # FileService handles index cleanup within
+        logger.info(f"Chapter directory {chapter_id} deleted.")
 
         # Update project metadata (remove chapter entry)
-        project_metadata = self._read_project_meta(project_id)
+        project_metadata = file_service.read_project_metadata(project_id)
         if chapter_id in project_metadata.get('chapters', {}):
             del project_metadata['chapters'][chapter_id]
-            self._write_project_meta(project_id, project_metadata)
-            print(f"Chapter {chapter_id} removed from project metadata.")
+            file_service.write_project_metadata(project_id, project_metadata)
+            logger.info(f"Chapter {chapter_id} removed from project metadata.")
         else:
-            # Log inconsistency if chapter was found by get_by_id but missing in meta now
-            print(f"Warning: Chapter {chapter_id} was deleted but already missing from project metadata.")
+            logger.warning(f"Chapter {chapter_id} was deleted but already missing from project metadata.")
 
 
 # Create a single instance
