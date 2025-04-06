@@ -51,14 +51,13 @@ function ProjectDetailPage() {
     useEffect(() => {
         let isMounted = true;
         setError(null);
-        setSaveNameError(null); // Clear name saving error on load
-        setSaveNameSuccess(''); // Clear name saving success on load
+        setSaveNameError(null);
+        setSaveNameSuccess('');
 
         const fetchAllData = async () => {
             if (!projectId) {
                 console.log("useEffect running, but projectId is still missing.");
                 if (isMounted) setError("Project ID not found in URL.");
-                // Set all loading to false if no projectId
                 setIsLoadingProject(false);
                 setIsLoadingChapters(false);
                 setIsLoadingCharacters(false);
@@ -67,12 +66,12 @@ function ProjectDetailPage() {
             }
             console.log("useEffect running with projectId:", projectId);
 
-            if (isMounted) { // Reset states before fetching
+            if (isMounted) {
                 setIsLoadingProject(true);
                 setIsLoadingChapters(true);
                 setIsLoadingCharacters(true);
                 setIsLoadingScenes(true);
-                setProject(null); // Clear project while loading
+                setProject(null);
                 setChapters([]);
                 setCharacters([]);
                 setScenes({});
@@ -83,7 +82,7 @@ function ProjectDetailPage() {
                 const projectResponse = await getProject(projectId);
                 if (isMounted) {
                     setProject(projectResponse.data);
-                    setEditedProjectName(projectResponse.data.name || ''); // Initialize edited name state
+                    setEditedProjectName(projectResponse.data.name || '');
                 }
                 console.log("Project fetched.");
 
@@ -181,7 +180,8 @@ function ProjectDetailPage() {
     const handleCreateChapter = async (e) => {
         e.preventDefault();
         if (!newChapterTitle.trim()) return;
-        const nextOrder = chapters.length > 0 ? Math.max(...chapters.map(c => c.order)) + 1 : 0;
+        // --- CHANGE: Start order from 1 ---
+        const nextOrder = chapters.length > 0 ? Math.max(...chapters.map(c => c.order)) + 1 : 1;
         setIsLoadingChapters(true);
         try {
             await createChapter(projectId, { title: newChapterTitle, order: nextOrder });
@@ -242,7 +242,9 @@ function ProjectDetailPage() {
     };
 
     const handleCreateScene = async (chapterId) => {
-         const nextOrder = scenes[chapterId] ? (scenes[chapterId].length > 0 ? Math.max(...scenes[chapterId].map(s => s.order)) + 1 : 0) : 0;
+         // --- CHANGE: Start order from 1 ---
+         const currentScenes = scenes[chapterId] || [];
+         const nextOrder = currentScenes.length > 0 ? Math.max(...currentScenes.map(s => s.order)) + 1 : 1;
          setIsLoadingScenes(true);
          try {
              const newSceneData = { title: "New Scene", order: nextOrder, content: "" };
@@ -272,7 +274,7 @@ function ProjectDetailPage() {
 
     // --- Handlers for Editing Project Name ---
     const handleEditNameClick = () => {
-        setEditedProjectName(project?.name || ''); // Ensure it's initialized from current project state
+        setEditedProjectName(project?.name || '');
         setIsEditingName(true);
         setSaveNameError(null);
         setSaveNameSuccess('');
@@ -280,7 +282,6 @@ function ProjectDetailPage() {
 
     const handleCancelEditName = () => {
         setIsEditingName(false);
-        // No need to reset editedProjectName here
     };
 
     const handleSaveName = async () => {
@@ -288,7 +289,6 @@ function ProjectDetailPage() {
             setSaveNameError("Project name cannot be empty.");
             return;
         }
-        // Only save if the name actually changed
         if (editedProjectName === project?.name) {
             setIsEditingName(false);
             return;
@@ -300,7 +300,7 @@ function ProjectDetailPage() {
 
         try {
             const response = await updateProject(projectId, { name: editedProjectName });
-            setProject(response.data); // Update local project state with response from backend
+            setProject(response.data);
             setIsEditingName(false);
             setSaveNameSuccess('Project name updated successfully!');
             setTimeout(() => setSaveNameSuccess(''), 3000);
@@ -353,7 +353,6 @@ function ProjectDetailPage() {
                         <h1 style={{ marginRight: '1rem', marginBottom: 0 }}>
                             Project: {project?.name || 'Loading...'}
                         </h1>
-                        {/* Only show Edit button if project data is loaded */}
                         {project && (
                             <button onClick={handleEditNameClick} disabled={isLoadingProject || isSavingName}>
                                 Edit Name
@@ -368,7 +367,7 @@ function ProjectDetailPage() {
                             onChange={(e) => setEditedProjectName(e.target.value)}
                             disabled={isSavingName}
                             style={{ fontSize: '1.5em', marginRight: '0.5rem' }}
-                            aria-label="Project Name" // Accessibility
+                            aria-label="Project Name"
                         />
                         <button onClick={handleSaveName} disabled={isSavingName || !editedProjectName.trim()}>
                             {isSavingName ? 'Saving...' : 'Save Name'}
@@ -379,7 +378,6 @@ function ProjectDetailPage() {
                     </>
                 )}
             </div>
-            {/* Display Name Save Status */}
             {saveNameError && <p style={{ color: 'red', marginTop: '0.2rem' }}>{saveNameError}</p>}
             {saveNameSuccess && <p style={{ color: 'green', marginTop: '0.2rem' }}>{saveNameSuccess}</p>}
 
@@ -395,6 +393,7 @@ function ProjectDetailPage() {
                     chapters.map(chapter => (
                         <div key={chapter.id} style={{ border: '1px solid #eee', padding: '10px', marginBottom: '10px' }}>
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '5px' }}>
+                                {/* Display 1-based order */}
                                 <strong>{chapter.order}: {chapter.title}</strong>
                                 <button onClick={() => handleDeleteChapter(chapter.id, chapter.title)} style={{ marginLeft: '1rem', color: 'red', cursor: 'pointer' }} disabled={isLoadingChapters || isLoadingScenes}>
                                     Delete Chapter
@@ -405,6 +404,7 @@ function ProjectDetailPage() {
                                     {(scenes[chapter.id] || []).map(scene => (
                                         <li key={scene.id} style={{ marginBottom: '0.3rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                              <Link to={`/projects/${projectId}/chapters/${chapter.id}/scenes/${scene.id}`}>
+                                                {/* Display 1-based order */}
                                                 {scene.order}: {scene.title}
                                             </Link>
                                              <button onClick={() => handleDeleteScene(chapter.id, scene.id, scene.title)} style={{ marginLeft: '1rem', fontSize: '0.8em', color: 'orange', cursor: 'pointer' }} disabled={isLoadingScenes}>

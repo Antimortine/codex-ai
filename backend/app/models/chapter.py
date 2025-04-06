@@ -19,13 +19,13 @@ from .common import IDModel
 # Properties required when creating a chapter
 class ChapterCreate(BaseModel):
     title: str = Field(..., min_length=1, description="Title of the chapter")
-    order: int = Field(..., ge=0, description="Order of the chapter within the project")
+    order: int = Field(..., ge=1, description="1-based order of the chapter within the project")
     # project_id will be a path parameter, not in the request body usually
 
 # Properties required when updating a chapter
 class ChapterUpdate(BaseModel):
     title: Optional[str] = Field(None, min_length=1)
-    order: Optional[int] = Field(None, ge=0)
+    order: Optional[int] = Field(None, ge=1)
 
 # Properties returned when reading a chapter
 class ChapterRead(IDModel, ChapterCreate):

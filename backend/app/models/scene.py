@@ -19,14 +19,14 @@ from .common import IDModel
 # Properties required when creating a scene
 class SceneCreate(BaseModel):
     title: str = Field(..., min_length=1, description="Title or brief description of the scene")
-    order: int = Field(..., ge=0, description="Order of the scene within the chapter")
+    order: int = Field(..., ge=1, description="1-based order of the scene within the chapter")
     content: str = Field("", description="Markdown content of the scene") # Default to empty
     # project_id and chapter_id will be path parameters
 
 # Properties required when updating a scene
 class SceneUpdate(BaseModel):
     title: Optional[str] = Field(None, min_length=1)
-    order: Optional[int] = Field(None, ge=0)
+    order: Optional[int] = Field(None, ge=1)
     content: Optional[str] = None # Allow updating content
 
 # Properties returned when reading a scene
