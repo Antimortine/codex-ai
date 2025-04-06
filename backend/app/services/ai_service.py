@@ -15,7 +15,10 @@
 import logging
 from app.rag.engine import rag_engine
 # Import new request/response models
-from app.models.ai import AISceneGenerationRequest, AIRephraseRequest, AIRephraseResponse
+from app.models.ai import (
+    AISceneGenerationRequest, AISceneGenerationResponse,
+    AIRephraseRequest, AIRephraseResponse
+)
 from llama_index.core.base.response.schema import NodeWithScore
 from typing import List, Tuple
 
@@ -40,13 +43,9 @@ class AIService:
         Handles the business logic for querying a project's context.
         Delegates to RagEngine and returns the result.
         """
+        # ... (query_project remains unchanged) ...
         logger.info(f"AIService: Processing query for project {project_id}")
-        # Delegate the core RAG work to the engine
-        # The engine now returns a tuple (answer_str, source_nodes_list)
         answer, source_nodes = await self.rag_engine.query(project_id, query_text)
-
-        # For now, just return the tuple received from the engine.
-        # The API layer will format the source_nodes.
         return answer, source_nodes
 
     async def generate_scene_draft(self, project_id: str, chapter_id: str, request_data: AISceneGenerationRequest) -> str:
@@ -54,12 +53,13 @@ class AIService:
         Handles the business logic for generating a scene draft.
         Delegates to RagEngine.
         """
-        logger.info(f"AIService: Processing scene generation request for project {project_id}, chapter {chapter_id}")
+        logger.info(f"AIService: Processing scene generation request for project {project_id}, chapter {chapter_id}, previous order: {request_data.previous_scene_order}")
         # Pass necessary info to the RagEngine's generation method
         generated_content = await self.rag_engine.generate_scene(
             project_id=project_id,
-            chapter_id=chapter_id, # Pass chapter_id for potential context filtering/prompting
-            prompt_summary=request_data.prompt_summary # Pass the user's summary/prompt
+            chapter_id=chapter_id,
+            prompt_summary=request_data.prompt_summary,
+            previous_scene_order=request_data.previous_scene_order # Pass the new field
         )
         return generated_content
 
@@ -68,8 +68,8 @@ class AIService:
         Handles the business logic for rephrasing selected text.
         Delegates to RagEngine.
         """
+        # ... (rephrase_text remains unchanged) ...
         logger.info(f"AIService: Processing rephrase request for project {project_id}. Text: '{request_data.selected_text[:50]}...'")
-        # Delegate to RagEngine
         suggestions = await self.rag_engine.rephrase(
             project_id=project_id,
             selected_text=request_data.selected_text,

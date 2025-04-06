@@ -36,6 +36,8 @@ class AIQueryResponse(BaseModel):
 
 class AISceneGenerationRequest(BaseModel):
     prompt_summary: Optional[str] = Field(None, description="Optional brief summary or prompt to guide the scene generation.")
+    # Field to indicate the order number of the preceding scene
+    previous_scene_order: Optional[int] = Field(None, ge=0, description="The order number of the scene immediately preceding the one to be generated (0 if it's the first scene).")
     # Add other potential fields later: target_characters, setting, etc.
 
 class AISceneGenerationResponse(BaseModel):

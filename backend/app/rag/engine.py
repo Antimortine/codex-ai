@@ -15,6 +15,7 @@
 import logging
 import asyncio # Needed for async llm call
 import re # For parsing numbered lists
+from fastapi import HTTPException, status # For file not found errors
 from llama_index.core.retrievers import VectorIndexRetriever
 from llama_index.core.query_engine import RetrieverQueryEngine
 from llama_index.core.vector_stores import ExactMatchFilter, MetadataFilters
@@ -23,6 +24,7 @@ from typing import List, Tuple, Optional
 
 from app.rag.index_manager import index_manager
 from app.core.config import settings # Import settings
+from app.services.file_service import file_service # Import FileService
 
 logger = logging.getLogger(__name__)
 
@@ -110,70 +112,132 @@ class RagEngine:
             return error_message, []
 
 
-    async def generate_scene(self, project_id: str, chapter_id: str, prompt_summary: Optional[str]) -> str:
-        """Generates a scene draft using RAG context for the given project and chapter."""
-        # ... (generate_scene method remains unchanged) ...
-        logger.info(f"RagEngine: Starting scene generation for project '{project_id}', chapter '{chapter_id}'. Summary: '{prompt_summary}'")
+    async def generate_scene(self, project_id: str, chapter_id: str, prompt_summary: Optional[str], previous_scene_order: Optional[int]) -> str:
+        """
+        Generates a scene draft using explicit context (plan, synopsis, previous scene)
+        and RAG context for the given project and chapter.
+
+        Args:
+            project_id: The ID of the project.
+            chapter_id: The ID of the chapter for the new scene.
+            prompt_summary: An optional user-provided summary to guide generation.
+            previous_scene_order: The order number of the preceding scene (if any).
+
+        Returns:
+            The generated scene content as a Markdown string or an error message.
+        """
+        logger.info(f"RagEngine: Starting enhanced scene generation for project '{project_id}', chapter '{chapter_id}'. Previous order: {previous_scene_order}. Summary: '{prompt_summary}'")
 
         if not self.index or not self.llm:
              logger.error("RagEngine cannot generate scene: Index or LLM is not available.")
              return "Error: RAG components are not properly initialized."
 
+        explicit_context = {}
         try:
-            # 1. Construct Retrieval Query
-            retrieval_query = f"Context relevant for writing a new scene in chapter {chapter_id}."
+            # --- 1. Load Explicit Context ---
+            logger.debug("Loading explicit context: Plan, Synopsis, Previous Scene...")
+
+            # Load Plan
+            try:
+                 explicit_context['plan'] = file_service.read_content_block_file(project_id, "plan.md")
+                 logger.debug("Loaded plan.md")
+            except HTTPException as e:
+                 if e.status_code == 404: logger.warning("plan.md not found."); explicit_context['plan'] = "Not Available"
+                 else: raise
+
+            # Load Synopsis
+            try:
+                 explicit_context['synopsis'] = file_service.read_content_block_file(project_id, "synopsis.md")
+                 logger.debug("Loaded synopsis.md")
+            except HTTPException as e:
+                 if e.status_code == 404: logger.warning("synopsis.md not found."); explicit_context['synopsis'] = "Not Available"
+                 else: raise
+
+            # Load Previous Scene Content
+            explicit_context['previous_scene'] = "N/A (This is the first scene)"
+            if previous_scene_order is not None and previous_scene_order > 0:
+                logger.debug(f"Attempting to load previous scene (order {previous_scene_order}) for chapter {chapter_id}")
+                try:
+                    # Find scene ID from metadata based on order
+                    chapter_metadata = file_service.read_chapter_metadata(project_id, chapter_id)
+                    previous_scene_id = None
+                    for scene_id, data in chapter_metadata.get('scenes', {}).items():
+                        if data.get('order') == previous_scene_order:
+                            previous_scene_id = scene_id
+                            break
+
+                    if previous_scene_id:
+                        scene_path = file_service._get_scene_path(project_id, chapter_id, previous_scene_id)
+                        explicit_context['previous_scene'] = file_service.read_text_file(scene_path)
+                        logger.debug(f"Loaded previous scene content (ID: {previous_scene_id})")
+                    else:
+                        logger.warning(f"Could not find scene with order {previous_scene_order} in chapter {chapter_id} metadata.")
+                        explicit_context['previous_scene'] = f"N/A (Scene with order {previous_scene_order} not found in metadata)"
+
+                except HTTPException as e:
+                    if e.status_code == 404:
+                         logger.warning(f"Failed to load previous scene (order {previous_scene_order}): {e.detail}")
+                         explicit_context['previous_scene'] = f"N/A (Error loading previous scene: {e.detail})"
+                    else: raise # Re-raise other file errors
+
+            # --- 2. Retrieve RAG Context ---
+            # Retrieval query can still be guided by the summary
+            retrieval_query = f"Context relevant for writing a new scene after scene order {previous_scene_order} in chapter {chapter_id}."
             if prompt_summary:
-                retrieval_query += f" Scene summary: {prompt_summary}"
+                retrieval_query += f" Scene focus: {prompt_summary}"
             logger.debug(f"Constructed retrieval query: '{retrieval_query}'")
 
-            # 2. Retrieve Context
             logger.debug(f"Creating retriever for generation with top_k={settings.RAG_GENERATION_SIMILARITY_TOP_K} and filter for project_id='{project_id}'")
             retriever = VectorIndexRetriever(
                 index=self.index,
-                similarity_top_k=settings.RAG_GENERATION_SIMILARITY_TOP_K, # Use generation setting
+                similarity_top_k=settings.RAG_GENERATION_SIMILARITY_TOP_K,
                 filters=MetadataFilters(
                     filters=[ExactMatchFilter(key="project_id", value=project_id)]
                 ),
             )
             retrieved_nodes: List[NodeWithScore] = await retriever.aretrieve(retrieval_query)
-            logger.info(f"Retrieved {len(retrieved_nodes)} nodes for generation context.")
+            logger.info(f"Retrieved {len(retrieved_nodes)} nodes for RAG context.")
 
-            # Format context for the prompt
-            context_str = "\n\n---\n\n".join(
+            rag_context_str = "\n\n---\n\n".join(
                  [f"Source: {node.metadata.get('file_path', 'N/A')}\n\n{node.get_content()}" for node in retrieved_nodes]
-            ) if retrieved_nodes else "No specific context was retrieved."
+            ) if retrieved_nodes else "No additional context retrieved via search."
 
-            # 3. Build Generation Prompt
-            logger.debug("Building generation prompt...")
+
+            # --- 3. Build Generation Prompt ---
+            logger.debug("Building enhanced generation prompt...")
             system_prompt = (
-                "You are an expert writing assistant helping a user draft a scene for their creative writing project. "
-                "Your goal is to generate a coherent and engaging scene draft in Markdown format, "
-                "based on the provided project context and user guidance. "
-                "Use the context to maintain consistency with the story's plot, characters, and world."
+                "You are an expert writing assistant helping a user draft the next scene in their creative writing project. "
+                "Generate a coherent and engaging scene draft in Markdown format. "
+                "Pay close attention to the provided Project Plan, Synopsis, and the content of the Immediately Previous Scene to ensure consistency and logical progression. "
+                "Also consider the Additional Context retrieved via search."
             )
 
             user_message_content = (
-                f"Please write a draft for a new scene.\n\n"
-                f"**Project Context:**\n```markdown\n{context_str}\n```\n\n"
-                f"**Scene Details:**\n"
+                f"Please write a draft for the scene that follows the 'Immediately Previous Scene' provided below.\n\n"
+                f"**Project Plan:**\n```markdown\n{explicit_context.get('plan', 'Not Available')}\n```\n\n"
+                f"**Project Synopsis:**\n```markdown\n{explicit_context.get('synopsis', 'Not Available')}\n```\n\n"
+                f"**Immediately Previous Scene (Order: {previous_scene_order}):**\n```markdown\n{explicit_context.get('previous_scene', 'N/A')}\n```\n\n"
+                f"**Additional Retrieved Context:**\n```markdown\n{rag_context_str}\n```\n\n"
+                f"**New Scene Details:**\n"
                 f"- Belongs to: Chapter ID '{chapter_id}'\n"
+                f"- Should logically follow the previous scene.\n"
             )
             if prompt_summary:
-                user_message_content += f"- User Guidance/Summary: {prompt_summary}\n\n"
+                user_message_content += f"- User Guidance/Focus for New Scene: {prompt_summary}\n\n"
             else:
-                user_message_content += "- User Guidance/Summary: (None provided - use the context to generate a plausible next scene for this chapter)\n\n"
+                user_message_content += "- User Guidance/Focus for New Scene: (None provided - focus on natural progression from the previous scene and overall context)\n\n"
 
             user_message_content += (
                 "**Instructions:**\n"
-                "- Generate the scene content in pure Markdown format.\n"
-                "- Start directly with the scene content (e.g., with a heading like '## Scene Title' or directly with narrative).\n"
-                "- Focus on the user's guidance if provided, otherwise infer the scene's direction from the context.\n"
-                "- Ensure the scene flows logically from or fits within the provided context.\n"
-                "- Do NOT add explanations or commentary outside the scene's Markdown content."
+                "- Generate the new scene content in pure Markdown format.\n"
+                "- Start directly with the scene content (e.g., a heading like '## Scene Title' or directly with narrative).\n"
+                "- Ensure the new scene flows logically from the 'Immediately Previous Scene'.\n"
+                "- Maintain consistency with characters, plot points, and world details mentioned in the Plan, Synopsis, and other context.\n"
+                "- Do NOT add explanations or commentary outside the new scene's Markdown content."
             )
 
             full_prompt = f"{system_prompt}\n\nUser: {user_message_content}\n\nAssistant:"
-            logger.info("Calling LLM for scene generation...")
+            logger.info("Calling LLM for enhanced scene generation...")
             llm_response = await self.llm.acomplete(full_prompt)
 
             generated_text = llm_response.text if llm_response else ""
@@ -182,29 +246,21 @@ class RagEngine:
                  logger.warning("LLM returned an empty response for scene generation.")
                  return "Error: The AI failed to generate a scene draft. Please try again."
 
-            logger.info(f"Scene generation successful for project '{project_id}', chapter '{chapter_id}'.")
+            logger.info(f"Enhanced scene generation successful for project '{project_id}', chapter '{chapter_id}'.")
             return generated_text.strip()
 
+        except HTTPException as http_exc:
+            logger.error(f"HTTP Exception during explicit context loading for scene generation: {http_exc.detail}", exc_info=True)
+            return f"Error: Could not load necessary project context ({http_exc.detail})."
         except Exception as e:
             logger.error(f"Error during scene generation for project '{project_id}', chapter '{chapter_id}': {e}", exc_info=True)
-            error_message = f"Sorry, an error occurred while generating the scene draft for project '{project_id}'. Please check the backend logs for details."
+            error_message = f"Sorry, an error occurred while generating the scene draft. Please check logs."
             return error_message
 
 
     async def rephrase(self, project_id: str, selected_text: str, context_before: Optional[str], context_after: Optional[str]) -> List[str]:
-        """
-        Rephrases the selected text using RAG context.
-
-        Args:
-            project_id: The ID of the project for context retrieval.
-            selected_text: The text snippet to rephrase.
-            context_before: Optional text immediately preceding the selection.
-            context_after: Optional text immediately following the selection.
-
-        Returns:
-            A list of rephrased suggestions (strings).
-            Returns ["Error: ..."] on failure.
-        """
+        """Rephrases the selected text using RAG context."""
+        # ... (rephrase method remains unchanged) ...
         logger.info(f"RagEngine: Starting rephrase for project '{project_id}'. Text: '{selected_text[:50]}...'")
 
         if not self.index or not self.llm:
@@ -270,15 +326,12 @@ class RagEngine:
 
             # 5. Parse the Numbered List Response
             logger.debug(f"Raw LLM response for parsing:\n{generated_text}")
-            # Use regex to find lines starting with number, dot, optional space
             suggestions = re.findall(r"^\s*\d+\.\s*(.*)", generated_text, re.MULTILINE)
 
             if not suggestions:
                 logger.warning(f"Could not parse numbered list from LLM response. Response was:\n{generated_text}")
-                # Return the raw response as a single suggestion if parsing fails, better than nothing
                 return [f"Error: Could not parse suggestions. Raw response: {generated_text}"]
 
-            # Clean up potential leading/trailing whitespace from parsed suggestions
             suggestions = [s.strip() for s in suggestions]
 
             logger.info(f"Successfully parsed {len(suggestions)} rephrase suggestions for project '{project_id}'.")
