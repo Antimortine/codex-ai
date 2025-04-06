@@ -1,3 +1,5 @@
+# backend___app___rag___scene_generator.py.txt
+
 # Copyright 2025 Antimortine
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -14,24 +16,23 @@
 
 import logging
 import asyncio
-from fastapi import HTTPException, status
+# Removed unused imports: HTTPException, status, file_service
 from llama_index.core.retrievers import VectorIndexRetriever
 from llama_index.core.vector_stores import ExactMatchFilter, MetadataFilters
 from llama_index.core.base.response.schema import NodeWithScore
 from llama_index.core.indices.vector_store import VectorStoreIndex
 from llama_index.core.llms import LLM
-from typing import List, Tuple, Optional, Dict
+from typing import List, Tuple, Optional, Dict # Keep Dict for type hint clarity
 
 from app.core.config import settings
-# Import FileService directly as it's needed for explicit context loading
-from app.services.file_service import file_service
+# Removed file_service import
 
 logger = logging.getLogger(__name__)
 
-PREVIOUS_SCENE_COUNT = settings.RAG_GENERATION_PREVIOUS_SCENE_COUNT
+# PREVIOUS_SCENE_COUNT is now only used by AIService to decide how many scenes to load
 
 class SceneGenerator:
-    """Handles RAG scene generation logic."""
+    """Handles RAG scene generation logic, given explicit and retrieved context."""
 
     def __init__(self, index: VectorStoreIndex, llm: LLM):
         """
@@ -47,94 +48,38 @@ class SceneGenerator:
              raise ValueError("SceneGenerator requires a valid LLM instance.")
         self.index = index
         self.llm = llm
-        # Note: We directly use the file_service singleton here. If dependency
-        # injection was more rigorous, we might pass it in.
-        self.file_service = file_service
         logger.info("SceneGenerator initialized.")
 
-    async def generate_scene(self, project_id: str, chapter_id: str, prompt_summary: Optional[str], previous_scene_order: Optional[int]) -> str:
+    async def generate_scene(
+        self,
+        project_id: str,
+        chapter_id: str,
+        prompt_summary: Optional[str],
+        previous_scene_order: Optional[int], # Still useful for the retrieval query
+        explicit_plan: str,
+        explicit_synopsis: str,
+        explicit_previous_scenes: List[Tuple[int, str]] # Now receives loaded scenes
+        ) -> str:
         """
-        Generates a scene draft using explicit context (plan, synopsis, previous N scenes)
+        Generates a scene draft using provided explicit context (plan, synopsis, previous N scenes)
         and RAG context for the given project and chapter.
 
         Args:
             project_id: The ID of the project.
             chapter_id: The ID of the chapter for the new scene.
             prompt_summary: An optional user-provided summary to guide generation.
-            previous_scene_order: The order number of the scene immediately preceding
-                                  the one to be generated (0 if first scene).
+            previous_scene_order: The order number of the scene immediately preceding.
+            explicit_plan: The loaded content of the project plan.
+            explicit_synopsis: The loaded content of the project synopsis.
+            explicit_previous_scenes: A list of (order, content) tuples for preceding scenes.
 
         Returns:
             The generated scene content as a Markdown string or an error message.
         """
-        logger.info(f"SceneGenerator: Starting enhanced scene generation for project '{project_id}', chapter '{chapter_id}'. Previous order: {previous_scene_order}. Prev Scene Count: {PREVIOUS_SCENE_COUNT}. Summary: '{prompt_summary}'")
-
-        explicit_context = {}
-        previous_scenes_content: List[Tuple[int, str]] = [] # Store as (order, content) tuples
+        logger.info(f"SceneGenerator: Generating scene for project '{project_id}', chapter '{chapter_id}'. Previous order: {previous_scene_order}. Summary: '{prompt_summary}'")
 
         try:
-            # --- 1. Load Explicit Context ---
-            logger.debug("Loading explicit context: Plan, Synopsis, Previous Scene(s)...")
-
-            # Load Plan
-            try:
-                 explicit_context['plan'] = self.file_service.read_content_block_file(project_id, "plan.md")
-                 logger.debug("Loaded plan.md")
-            except HTTPException as e:
-                 if e.status_code == 404: logger.warning("plan.md not found."); explicit_context['plan'] = "Not Available"
-                 else: raise
-
-            # Load Synopsis
-            try:
-                 explicit_context['synopsis'] = self.file_service.read_content_block_file(project_id, "synopsis.md")
-                 logger.debug("Loaded synopsis.md")
-            except HTTPException as e:
-                 if e.status_code == 404: logger.warning("synopsis.md not found."); explicit_context['synopsis'] = "Not Available"
-                 else: raise
-
-            # Load Previous Scene(s) Content
-            if previous_scene_order is not None and previous_scene_order > 0 and PREVIOUS_SCENE_COUNT > 0:
-                logger.debug(f"Attempting to load up to {PREVIOUS_SCENE_COUNT} previous scene(s) ending at order {previous_scene_order} for chapter {chapter_id}")
-                try:
-                    # Read chapter metadata once to map order to ID
-                    chapter_metadata = self.file_service.read_chapter_metadata(project_id, chapter_id)
-                    scenes_by_order: Dict[int, str] = { # {order: scene_id}
-                         data.get('order'): scene_id
-                         for scene_id, data in chapter_metadata.get('scenes', {}).items() if data.get('order') is not None
-                    }
-
-                    # Loop backwards from previous_scene_order
-                    loaded_count = 0
-                    for target_order in range(previous_scene_order, 0, -1):
-                        if loaded_count >= PREVIOUS_SCENE_COUNT:
-                            break # Stop if we've loaded enough scenes
-
-                        scene_id_to_load = scenes_by_order.get(target_order)
-                        if scene_id_to_load:
-                            try:
-                                scene_path = self.file_service._get_scene_path(project_id, chapter_id, scene_id_to_load)
-                                content = self.file_service.read_text_file(scene_path)
-                                previous_scenes_content.append((target_order, content))
-                                loaded_count += 1
-                                logger.debug(f"Loaded previous scene content (Order: {target_order}, ID: {scene_id_to_load})")
-                            except HTTPException as scene_load_err:
-                                if scene_load_err.status_code == 404:
-                                    logger.warning(f"Scene file not found for order {target_order} (ID: {scene_id_to_load}), skipping.")
-                                else:
-                                    logger.error(f"Error loading scene file for order {target_order} (ID: {scene_id_to_load}): {scene_load_err.detail}")
-                        else:
-                             logger.debug(f"No scene found with order {target_order} in metadata.")
-
-                    previous_scenes_content.reverse()
-
-                except HTTPException as e:
-                    if e.status_code == 404:
-                         logger.warning(f"Chapter metadata not found for {chapter_id} while loading previous scenes: {e.detail}")
-                    else: raise
-                except Exception as general_err:
-                     logger.error(f"Unexpected error loading previous scenes: {general_err}", exc_info=True)
-
-            # --- 2. Retrieve RAG Context ---
+            # --- 1. Retrieve RAG Context --- (Explicit context is now passed in)
             retrieval_query = f"Context relevant for writing a new scene after scene order {previous_scene_order} in chapter {chapter_id}."
             if prompt_summary:
                 retrieval_query += f" Scene focus: {prompt_summary}"
@@ -160,8 +105,8 @@ class SceneGenerator:
             rag_context_str = "\n\n---\n\n".join(rag_context_list) if rag_context_list else "No additional context retrieved via search."
 
 
-            # --- 3. Build Generation Prompt ---
-            logger.debug("Building enhanced generation prompt...")
+            # --- 2. Build Generation Prompt ---
+            logger.debug("Building enhanced generation prompt with provided explicit context...")
             system_prompt = (
                 "You are an expert writing assistant helping a user draft the next scene in their creative writing project. "
                 "Generate a coherent and engaging scene draft in Markdown format. "
@@ -169,9 +114,10 @@ class SceneGenerator:
                 "Also consider the Additional Context retrieved via search."
             )
 
+            # Construct Previous Scenes part of the prompt using the passed data
             previous_scenes_prompt_part = ""
-            if previous_scenes_content:
-                 for order, content in previous_scenes_content:
+            if explicit_previous_scenes:
+                 for order, content in explicit_previous_scenes: # Assumes already sorted chronologically
                       label = f"Immediately Previous Scene (Order: {order})" if order == previous_scene_order else f"Previous Scene (Order: {order})"
                       previous_scenes_prompt_part += f"**{label}:**\n```markdown\n{content}\n```\n\n"
             else:
@@ -180,8 +126,9 @@ class SceneGenerator:
 
             user_message_content = (
                 f"Please write a draft for the scene that follows the previous scene(s) provided below.\n\n"
-                f"**Project Plan:**\n```markdown\n{explicit_context.get('plan', 'Not Available')}\n```\n\n"
-                f"**Project Synopsis:**\n```markdown\n{explicit_context.get('synopsis', 'Not Available')}\n```\n\n"
+                # Use the passed explicit context strings
+                f"**Project Plan:**\n```markdown\n{explicit_plan}\n```\n\n"
+                f"**Project Synopsis:**\n```markdown\n{explicit_synopsis}\n```\n\n"
                 f"{previous_scenes_prompt_part}"
                 f"**Additional Retrieved Context:**\n```markdown\n{rag_context_str}\n```\n\n"
                 f"**New Scene Details:**\n"
@@ -210,15 +157,14 @@ class SceneGenerator:
 
             if not generated_text.strip():
                  logger.warning("LLM returned an empty response for scene generation.")
+                 # Return error string, AIService will handle raising HTTPException if needed
                  return "Error: The AI failed to generate a scene draft. Please try again."
 
             logger.info(f"Enhanced scene generation successful for project '{project_id}', chapter '{chapter_id}'.")
             return generated_text.strip()
 
-        except HTTPException as http_exc:
-            logger.error(f"HTTP Exception during explicit context loading for scene generation: {http_exc.detail}", exc_info=True)
-            return f"Error: Could not load necessary project context ({http_exc.detail})."
+        # Note: Removed the specific HTTPException handling here, as file loading is done in AIService
         except Exception as e:
-            logger.error(f"Error during scene generation for project '{project_id}', chapter '{chapter_id}': {e}", exc_info=True)
-            error_message = f"Sorry, an error occurred while generating the scene draft. Please check logs."
-            return error_message
+            logger.error(f"Error during scene generation processing for project '{project_id}', chapter '{chapter_id}': {e}", exc_info=True)
+            # Return a generic error string
+            return f"Error: An unexpected error occurred during scene generation. Please check logs."
