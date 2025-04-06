@@ -15,8 +15,15 @@
 from pydantic_settings import BaseSettings
 import os
 from dotenv import load_dotenv
+from pathlib import Path
 
 load_dotenv() # Loads variables from .env file
+
+# --- Define BASE_PROJECT_DIR here ---
+# It's defined outside the class as a module-level constant,
+# making it easily importable without needing the settings instance.
+# You could also put it inside Settings and read from an env var if preferred.
+BASE_PROJECT_DIR: Path = Path(os.getenv("BASE_PROJECT_DIR", "user_projects"))
 
 class Settings(BaseSettings):
     PROJECT_NAME: str = "Codex AI"
@@ -24,3 +31,12 @@ class Settings(BaseSettings):
     GOOGLE_API_KEY: str = os.getenv("GOOGLE_API_KEY")
 
 settings = Settings()
+
+# --- Ensure the base directory exists on startup ---
+# Moved the directory creation logic here as it depends on BASE_PROJECT_DIR
+try:
+    BASE_PROJECT_DIR.mkdir(parents=True, exist_ok=True)
+    print(f"Ensured base project directory exists: {BASE_PROJECT_DIR.resolve()}")
+except OSError as e:
+    print(f"ERROR: Could not create base project directory {BASE_PROJECT_DIR}: {e}")
+    # Depending on severity, you might want to raise an error here

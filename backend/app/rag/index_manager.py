@@ -20,7 +20,7 @@ from llama_index.core import (
     VectorStoreIndex,
     SimpleDirectoryReader,
     StorageContext,
-    Settings as LlamaSettings, # Rename to avoid conflict with Pydantic settings
+    Settings as LlamaSettings,
     load_index_from_storage,
 )
 from llama_index.core.node_parser import SentenceSplitter
@@ -28,22 +28,21 @@ from llama_index.vector_stores.chroma import ChromaVectorStore
 from llama_index.embeddings.google import GeminiEmbedding
 from llama_index.llms.gemini import Gemini
 import chromadb
-from app.core.config import settings # To get API keys etc.
+from app.core.config import settings
+from app.core.config import BASE_PROJECT_DIR
 
 logger = logging.getLogger(__name__)
 
 # --- Configuration ---
-# Ensure this path is in your .gitignore
 CHROMA_PERSIST_DIR = "./chroma_db"
-# Use a specific collection name within ChromaDB
 CHROMA_COLLECTION_NAME = "codex_ai_documents"
-# LLM and Embedding Model Names
 LLM_MODEL_NAME = "models/gemini-1.5-pro-latest"
-EMBEDDING_MODEL_NAME = "models/text-embedding-004" # Correct model for GeminiEmbedding
+EMBEDDING_MODEL_NAME = "models/text-embedding-004"
 
 class IndexManager:
     """
     Manages the RAG index for project content using LlamaIndex, ChromaDB, and Google AI.
+    Focuses on index initialization and modification (add/update/delete).
     """
 
     def __init__(self):
@@ -51,7 +50,7 @@ class IndexManager:
         Initializes the IndexManager. Sets up LlamaIndex components (LLM, Embeddings, Vector Store)
         and loads or creates the VectorStoreIndex.
         """
-        logger.info("Initializing IndexManager (Stage 3 - Real Implementation)...")
+        logger.info("Initializing IndexManager...")
 
         if not settings.GOOGLE_API_KEY:
             logger.error("GOOGLE_API_KEY not found in settings. Cannot initialize AI components.")
@@ -61,17 +60,14 @@ class IndexManager:
             # 1. Configure LlamaIndex Settings globally
             logger.debug(f"Configuring LLM: {LLM_MODEL_NAME}")
             LlamaSettings.llm = Gemini(model_name=LLM_MODEL_NAME, api_key=settings.GOOGLE_API_KEY)
+            self.llm = LlamaSettings.llm
 
             logger.debug(f"Configuring Embedding Model: {EMBEDDING_MODEL_NAME}")
-            # Use GeminiEmbedding for text-embedding-004
-            LlamaSettings.embed_model = GeminiEmbedding(model_name=EMBEDDING_MODEL_NAME, api_key=settings.GOOGLE_API_KEY) # CORRECTED CLASS NAME
-
-            # Optional: Configure Node Parser (can use defaults)
-            # LlamaSettings.node_parser = SentenceSplitter(chunk_size=512, chunk_overlap=20)
+            LlamaSettings.embed_model = GeminiEmbedding(model_name=EMBEDDING_MODEL_NAME, api_key=settings.GOOGLE_API_KEY)
+            self.embed_model = LlamaSettings.embed_model
 
             # 2. Initialize ChromaDB Client and Vector Store
             logger.debug(f"Initializing ChromaDB client with persistence directory: {CHROMA_PERSIST_DIR}")
-            # Ensure the directory exists
             os.makedirs(CHROMA_PERSIST_DIR, exist_ok=True)
             db = chromadb.PersistentClient(path=CHROMA_PERSIST_DIR)
 
@@ -90,11 +86,8 @@ class IndexManager:
                 logger.info(f"Attempting to load index from storage: {CHROMA_PERSIST_DIR}")
                 self.index = load_index_from_storage(storage_context)
                 logger.info("Successfully loaded existing index.")
-            except Exception as e: # Broad exception capture as specific error type might vary
+            except Exception as e:
                 logger.warning(f"Failed to load index from storage (might be first run): {e}. Creating new index.")
-                # If loading fails (e.g., directory is empty or index is corrupted/incompatible),
-                # create an empty index attached to the storage context.
-                # We don't need to provide documents here; they will be added via index_file.
                 self.index = VectorStoreIndex.from_documents(
                     [], storage_context=storage_context
                 )
@@ -104,12 +97,40 @@ class IndexManager:
 
         except Exception as e:
             logger.error(f"Fatal error during IndexManager initialization: {e}", exc_info=True)
-            # Depending on the application's needs, you might want to exit or handle this differently.
             raise RuntimeError(f"Failed to initialize IndexManager: {e}") from e
+
+    def _extract_project_id(self, file_path: Path) -> str | None:
+        """
+        Extracts the project_id from the file path relative to BASE_PROJECT_DIR.
+        Returns the project_id string or None if the path is not structured as expected.
+        Uses the imported BASE_PROJECT_DIR.
+        """
+        try:
+            abs_file_path = file_path.resolve()
+            # Use the imported BASE_PROJECT_DIR directly
+            abs_base_dir = BASE_PROJECT_DIR.resolve()
+
+            if abs_base_dir not in abs_file_path.parents:
+                 logger.warning(f"File path {abs_file_path} is not within BASE_PROJECT_DIR {abs_base_dir}. Cannot extract project_id.")
+                 return None
+
+            relative_path = abs_file_path.relative_to(abs_base_dir)
+            if not relative_path.parts:
+                 logger.warning(f"File path {abs_file_path} is the base directory itself. Cannot extract project_id.")
+                 return None
+
+            project_id = relative_path.parts[0]
+            return project_id
+
+        except Exception as e:
+            logger.error(f"Error extracting project_id from path {file_path}: {e}", exc_info=True)
+            return None
+
 
     def index_file(self, file_path: Path):
         """
-        Loads, parses, embeds, and inserts/updates a single file's content into the index.
+        Loads, parses, embeds, adds project_id metadata, and inserts/updates
+        a single file's content into the index.
         If the document already exists (based on file_path), it's deleted first.
         Empty files are skipped.
         """
@@ -123,7 +144,6 @@ class IndexManager:
         try:
             if file_path.stat().st_size == 0:
                 logger.info(f"Skipping indexing for empty file: {file_path}")
-                # --- Ensure any previous index entry for this path (if it existed and wasn't empty before) is removed ---
                 doc_id_for_empty = str(file_path)
                 try:
                     logger.debug(f"Attempting to delete nodes for now-empty file: {doc_id_for_empty}")
@@ -131,17 +151,22 @@ class IndexManager:
                     logger.info(f"Successfully deleted existing nodes for now-empty file: {doc_id_for_empty} (if they existed).")
                 except Exception as delete_error:
                     logger.warning(f"Could not delete nodes for now-empty file {doc_id_for_empty} (may not have existed): {delete_error}")
-                return # Stop processing this file
+                return
         except OSError as e:
              logger.error(f"Could not check file size for {file_path}: {e}")
-             return # Cannot process if we can't check size
+             return
 
         logger.info(f"IndexManager: Received request to index/update file: {file_path}")
-        doc_id = str(file_path) # Use the file path string as the unique document ID
+        doc_id = str(file_path)
+
+        project_id = self._extract_project_id(file_path)
+        if not project_id:
+             logger.error(f"Could not determine project_id for file {file_path}. Skipping indexing.")
+             return
+        logger.info(f"Determined project_id '{project_id}' for file {file_path}")
 
         try:
-            # 1. Attempt to delete existing document nodes first to ensure update
-            # This uses the doc_id which we will explicitly set on the new Document object
+            # 1. Attempt to delete existing document nodes first
             logger.debug(f"Attempting to delete existing nodes for doc_id: {doc_id}")
             try:
                 self.index.delete_ref_doc(ref_doc_id=doc_id, delete_from_docstore=True)
@@ -149,30 +174,33 @@ class IndexManager:
             except Exception as delete_error:
                  logger.warning(f"Could not delete nodes for doc_id {doc_id} (may not have existed): {delete_error}")
 
-
             # 2. Load the new document content
             logger.debug(f"Loading document content from: {file_path}")
             reader = SimpleDirectoryReader(input_files=[file_path])
             documents = reader.load_data()
 
             if not documents:
-                # This case should be less likely now due to the empty file check above, but keep as safeguard
                 logger.warning(f"No documents loaded from file: {file_path}. Skipping insertion.")
                 return
 
+            # 3. Inject Metadata and Set ID
             for doc in documents:
-                doc.id_ = doc_id # Assign the file path string as the document's ID
+                doc.id_ = doc_id
+                doc.metadata = doc.metadata or {}
+                doc.metadata['project_id'] = project_id
+                # Add file_path to metadata as well, might be useful
+                doc.metadata['file_path'] = str(file_path)
+                logger.debug(f"Injecting metadata for doc_id {doc.id_}: {doc.metadata}")
 
-            # 3. Insert the new document(s)
-            logger.debug(f"Inserting new nodes for doc_id: {doc_id}")
+            # 4. Insert the new document(s)
+            logger.debug(f"Inserting new nodes for doc_id: {doc_id} with project_id '{project_id}'")
             for doc in documents:
-                self.index.insert(doc) # Use insert for individual documents
+                self.index.insert(doc)
 
-            logger.info(f"Successfully indexed/updated file: {file_path}")
+            logger.info(f"Successfully indexed/updated file: {file_path} with project_id '{project_id}'")
 
         except Exception as e:
             logger.error(f"Error indexing file {file_path}: {e}", exc_info=True)
-            # raise # Optionally re-raise
 
     def delete_doc(self, file_path: Path):
         """
@@ -183,25 +211,14 @@ class IndexManager:
              return
 
         logger.info(f"IndexManager: Received request to delete document associated with file path: {file_path}")
-        doc_id = str(file_path) # Use the file path string as the document ID
+        doc_id = str(file_path)
 
         try:
             logger.debug(f"Attempting to delete nodes for doc_id: {doc_id}")
-            # This should now work because the inserted documents had their id_ set to doc_id
             self.index.delete_ref_doc(ref_doc_id=doc_id, delete_from_docstore=True)
             logger.info(f"Successfully deleted nodes for file {file_path} from index (if they existed).")
         except Exception as e:
             logger.error(f"Error deleting document for file {file_path} (doc_id: {doc_id}): {e}", exc_info=True)
-            # raise # Optionally re-raise
-
-    # --- Stage 3 Query/Retrieval Methods (Placeholder) ---
-    # def query(self, query_text: str, project_id: str):
-    #     logger.info(f"[STAGE 3 PLACEHOLDER] Received query for project {project_id}: {query_text}")
-    #     # query_engine = self.index.as_query_engine()
-    #     # response = query_engine.query(query_text)
-    #     # return str(response)
-    #     return "Query functionality not implemented yet."
-
 
 # --- Singleton Instance ---
 try:
