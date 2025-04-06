@@ -80,6 +80,18 @@ export const updateWorldInfo = (projectId, data) => apiClient.put(`/projects/${p
 export const queryProjectContext = (projectId, data) => apiClient.post(`/ai/query/${projectId}`, data);
 
 
+/**
+ * Requests the AI to generate a scene draft for a specific chapter.
+ * @param {string} projectId - The ID of the project.
+ * @param {string} chapterId - The ID of the chapter for the new scene.
+ * @param {object} requestData - The request body, containing optional guidance. e.g., { prompt_summary: "Brief description" }
+ * @returns {Promise<AxiosResponse<any>>} - The Axios response promise. Expected data format: { generated_content: "..." }
+ */
+export const generateSceneDraft = (projectId, chapterId, requestData) => {
+  return apiClient.post(`/ai/generate/scene/${projectId}/${chapterId}`, requestData);
+};
+
+
 // Optional: Add interceptors for error handling or adding auth tokens later
 // apiClient.interceptors.response.use(response => response, error => {
 //   console.error("API call error:", error.response || error.message);
