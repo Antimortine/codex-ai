@@ -14,6 +14,7 @@
 
 import logging
 from app.rag.engine import rag_engine
+from app.models.ai import AISceneGenerationRequest # Import the new request model
 from llama_index.core.base.response.schema import NodeWithScore
 from typing import List, Tuple
 
@@ -47,8 +48,21 @@ class AIService:
         # The API layer will format the source_nodes.
         return answer, source_nodes
 
+    async def generate_scene_draft(self, project_id: str, chapter_id: str, request_data: AISceneGenerationRequest) -> str:
+        """
+        Handles the business logic for generating a scene draft.
+        Delegates to RagEngine.
+        """
+        logger.info(f"AIService: Processing scene generation request for project {project_id}, chapter {chapter_id}")
+        # Pass necessary info to the RagEngine's generation method
+        generated_content = await self.rag_engine.generate_scene(
+            project_id=project_id,
+            chapter_id=chapter_id, # Pass chapter_id for potential context filtering/prompting
+            prompt_summary=request_data.prompt_summary # Pass the user's summary/prompt
+        )
+        return generated_content
+
     # --- Add other methods later ---
-    # async def generate_scene_draft(...)
     # async def suggest_edits(...)
 
 # --- Create a singleton instance ---

@@ -13,18 +13,21 @@
 # limitations under the License.
 
 import logging
+import asyncio # Needed for async llm call
 from llama_index.core.retrievers import VectorIndexRetriever
 from llama_index.core.query_engine import RetrieverQueryEngine
 from llama_index.core.vector_stores import ExactMatchFilter, MetadataFilters
 from llama_index.core.base.response.schema import Response, NodeWithScore
-from typing import List, Tuple
+from typing import List, Tuple, Optional
 
 from app.rag.index_manager import index_manager
+from app.core.config import settings # Import settings
 
 logger = logging.getLogger(__name__)
 
-# --- Configuration for Retrieval/Querying ---
-SIMILARITY_TOP_K = 3 # How many relevant chunks to retrieve
+# --- Configuration moved to config.py ---
+# SIMILARITY_TOP_K = settings.RAG_QUERY_SIMILARITY_TOP_K
+# GENERATION_SIMILARITY_TOP_K = settings.RAG_GENERATION_SIMILARITY_TOP_K
 
 class RagEngine:
     """
@@ -49,7 +52,6 @@ class RagEngine:
         self.embed_model = index_manager.embed_model
         logger.info("RagEngine initialized, using components from IndexManager.")
 
-    # --- Update return type annotation ---
     async def query(self, project_id: str, query_text: str) -> Tuple[str, List[NodeWithScore]]:
         """
         Performs a RAG query against the index, filtered by project_id.
@@ -68,15 +70,14 @@ class RagEngine:
 
         if not self.index or not self.llm:
              logger.error("RagEngine cannot query: Index or LLM is not available.")
-             # --- Return tuple on error ---
              return "Error: RAG components are not properly initialized.", []
 
         try:
             # 1. Create a retriever with metadata filtering
-            logger.debug(f"Creating retriever with top_k={SIMILARITY_TOP_K} and filter for project_id='{project_id}'")
+            logger.debug(f"Creating retriever with top_k={settings.RAG_QUERY_SIMILARITY_TOP_K} and filter for project_id='{project_id}'")
             retriever = VectorIndexRetriever(
                 index=self.index,
-                similarity_top_k=SIMILARITY_TOP_K,
+                similarity_top_k=settings.RAG_QUERY_SIMILARITY_TOP_K, # Use setting
                 filters=MetadataFilters(
                     filters=[ExactMatchFilter(key="project_id", value=project_id)]
                 ),
@@ -105,7 +106,6 @@ class RagEngine:
                  logger.warning("LLM query returned an empty response string.")
                  answer = "(No response generated)"
 
-            # Log retrieved source nodes
             if source_nodes:
                  logger.debug(f"Retrieved {len(source_nodes)} source nodes:")
                  for i, node in enumerate(source_nodes):
@@ -114,17 +114,120 @@ class RagEngine:
                  logger.debug("No source nodes retrieved or available in response.")
 
             logger.info(f"Query successful. Returning answer and {len(source_nodes)} source nodes.")
-            # --- Return tuple ---
             return answer, source_nodes
 
         except Exception as e:
             logger.error(f"Error during RAG query for project '{project_id}': {e}", exc_info=True)
-            # --- Return tuple on error ---
             error_message = f"Sorry, an error occurred while processing your query for project '{project_id}'. Please check the backend logs for details."
             return error_message, []
 
+    async def generate_scene(self, project_id: str, chapter_id: str, prompt_summary: Optional[str]) -> str:
+        """
+        Generates a scene draft using RAG context for the given project and chapter.
+
+        Args:
+            project_id: The ID of the project to scope the context to.
+            chapter_id: The ID of the chapter this scene belongs to (for context/prompting).
+            prompt_summary: An optional user-provided summary to guide generation.
+
+        Returns:
+            The generated scene content as a Markdown string.
+            Returns an error message string on failure.
+        """
+        logger.info(f"RagEngine: Starting scene generation for project '{project_id}', chapter '{chapter_id}'. Summary: '{prompt_summary}'")
+
+        if not self.index or not self.llm:
+             logger.error("RagEngine cannot generate scene: Index or LLM is not available.")
+             return "Error: RAG components are not properly initialized."
+
+        try:
+            # 1. Construct Retrieval Query
+            # Combine chapter context and user summary for better retrieval
+            retrieval_query = f"Context relevant for writing a new scene in chapter {chapter_id}."
+            if prompt_summary:
+                retrieval_query += f" Scene summary: {prompt_summary}"
+            logger.debug(f"Constructed retrieval query: '{retrieval_query}'")
+
+            # 2. Retrieve Context
+            logger.debug(f"Creating retriever for generation with top_k={settings.RAG_GENERATION_SIMILARITY_TOP_K} and filter for project_id='{project_id}'")
+            retriever = VectorIndexRetriever(
+                index=self.index,
+                similarity_top_k=settings.RAG_GENERATION_SIMILARITY_TOP_K, # Use generation setting
+                filters=MetadataFilters(
+                    filters=[ExactMatchFilter(key="project_id", value=project_id)]
+                ),
+            )
+            retrieved_nodes: List[NodeWithScore] = await retriever.aretrieve(retrieval_query)
+            logger.info(f"Retrieved {len(retrieved_nodes)} nodes for generation context.")
+
+            # Format context for the prompt
+            context_str = "\n\n---\n\n".join(
+                 [f"Source: {node.metadata.get('file_path', 'N/A')}\n\n{node.get_content()}" for node in retrieved_nodes]
+            ) if retrieved_nodes else "No specific context was retrieved."
+
+            # 3. Build Generation Prompt
+            logger.debug("Building generation prompt...")
+            system_prompt = (
+                "You are an expert writing assistant helping a user draft a scene for their creative writing project. "
+                "Your goal is to generate a coherent and engaging scene draft in Markdown format, "
+                "based on the provided project context and user guidance. "
+                "Use the context to maintain consistency with the story's plot, characters, and world."
+            )
+
+            user_message_content = (
+                f"Please write a draft for a new scene.\n\n"
+                f"**Project Context:**\n```markdown\n{context_str}\n```\n\n"
+                f"**Scene Details:**\n"
+                f"- Belongs to: Chapter ID '{chapter_id}'\n"
+            )
+            if prompt_summary:
+                user_message_content += f"- User Guidance/Summary: {prompt_summary}\n\n"
+            else:
+                user_message_content += "- User Guidance/Summary: (None provided - use the context to generate a plausible next scene for this chapter)\n\n"
+
+            user_message_content += (
+                "**Instructions:**\n"
+                "- Generate the scene content in pure Markdown format.\n"
+                "- Start directly with the scene content (e.g., with a heading like '## Scene Title' or directly with narrative).\n"
+                "- Focus on the user's guidance if provided, otherwise infer the scene's direction from the context.\n"
+                "- Ensure the scene flows logically from or fits within the provided context.\n"
+                "- Do NOT add explanations or commentary outside the scene's Markdown content."
+            )
+
+            # Using a chat-like structure can sometimes yield better results with models like Gemini
+            messages = [
+                 {"role": "system", "content": system_prompt},
+                 {"role": "user", "content": user_message_content}
+            ]
+
+            # 4. Call LLM Asynchronously
+            logger.info("Calling LLM for scene generation...")
+            # Use achat for async chat completion if available and preferred, or acomplete
+            # Assuming self.llm has an async chat method or similar
+            # Adjust based on the specific LlamaIndex Gemini wrapper implementation
+            # For now, let's assume `acomplete` can take a structured prompt or we format it.
+            # Formatting as a single string for `acomplete`:
+            full_prompt = f"{system_prompt}\n\nUser: {user_message_content}\n\nAssistant:"
+            llm_response = await self.llm.acomplete(full_prompt)
+
+            # Extract the generated text (adjust based on actual response structure)
+            generated_text = llm_response.text if llm_response else ""
+
+            if not generated_text.strip():
+                 logger.warning("LLM returned an empty response for scene generation.")
+                 return "Error: The AI failed to generate a scene draft. Please try again."
+
+            logger.info(f"Scene generation successful for project '{project_id}', chapter '{chapter_id}'.")
+            # Return the raw generated markdown
+            return generated_text.strip()
+
+        except Exception as e:
+            logger.error(f"Error during scene generation for project '{project_id}', chapter '{chapter_id}': {e}", exc_info=True)
+            error_message = f"Sorry, an error occurred while generating the scene draft for project '{project_id}'. Please check the backend logs for details."
+            return error_message
 
 # --- Singleton Instance ---
+# No change needed here
 try:
      rag_engine = RagEngine()
 except Exception as e:
