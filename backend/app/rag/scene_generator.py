@@ -1,5 +1,3 @@
-# backend___app___rag___scene_generator.py.txt
-
 # Copyright 2025 Antimortine
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -123,9 +121,17 @@ class SceneGenerator:
             else:
                  previous_scenes_prompt_part = "**Previous Scene(s):** N/A (Generating the first scene)\n\n"
 
+            # --- MODIFIED: Construct main instruction based on prompt_summary ---
+            main_instruction = ""
+            if prompt_summary:
+                main_instruction = f"Please write a draft for the next scene, focusing on the following guidance: '{prompt_summary}'. It should follow the previous scene(s) provided below.\n\n"
+            else:
+                main_instruction = "Please write a draft for the next scene, ensuring it follows the previous scene(s) provided below.\n\n"
+            # --- END MODIFICATION ---
 
             user_message_content = (
-                f"Please write a draft for the scene that follows the previous scene(s) provided below.\n\n"
+                # Use the dynamic main_instruction
+                f"{main_instruction}"
                 # Use the passed explicit context strings
                 f"**Project Plan:**\n```markdown\n{explicit_plan}\n```\n\n"
                 f"**Project Synopsis:**\n```markdown\n{explicit_synopsis}\n```\n\n"
@@ -135,13 +141,15 @@ class SceneGenerator:
                 f"- Belongs to: Chapter ID '{chapter_id}'\n"
                 f"- Should logically follow the provided previous scene(s).\n"
             )
-            if prompt_summary:
-                user_message_content += f"- User Guidance/Focus for New Scene: {prompt_summary}\n\n"
-            else:
-                user_message_content += "- User Guidance/Focus for New Scene: (None provided - focus on natural progression from the previous scene(s) and overall context)\n\n"
+            # --- REMOVED redundant User Guidance/Focus line ---
+            # if prompt_summary:
+            #     user_message_content += f"- User Guidance/Focus for New Scene: {prompt_summary}\n\n"
+            # else:
+            #     user_message_content += "- User Guidance/Focus for New Scene: (None provided - focus on natural progression from the previous scene(s) and overall context)\n\n"
+            # --- END REMOVAL ---
 
             user_message_content += (
-                "**Instructions:**\n"
+                "\n**Instructions:**\n" # Added newline for spacing
                 "- Generate the new scene content in pure Markdown format.\n"
                 "- Start directly with the scene content (e.g., a heading like '## Scene Title' or directly with narrative).\n"
                 "- Ensure the new scene flows logically from the previous scene(s).\n"
@@ -150,6 +158,10 @@ class SceneGenerator:
             )
 
             full_prompt = f"{system_prompt}\n\nUser: {user_message_content}\n\nAssistant:"
+
+            # Log the full prompt for debugging
+            logger.debug(f"SceneGenerator: Full prompt being sent to LLM (length: {len(full_prompt)}):\n--- PROMPT START ---\n{full_prompt}\n--- PROMPT END ---")
+
             logger.info("Calling LLM for enhanced scene generation...")
             llm_response = await self.llm.acomplete(full_prompt)
 
@@ -157,14 +169,11 @@ class SceneGenerator:
 
             if not generated_text.strip():
                  logger.warning("LLM returned an empty response for scene generation.")
-                 # Return error string, AIService will handle raising HTTPException if needed
                  return "Error: The AI failed to generate a scene draft. Please try again."
 
             logger.info(f"Enhanced scene generation successful for project '{project_id}', chapter '{chapter_id}'.")
             return generated_text.strip()
 
-        # Note: Removed the specific HTTPException handling here, as file loading is done in AIService
         except Exception as e:
             logger.error(f"Error during scene generation processing for project '{project_id}', chapter '{chapter_id}': {e}", exc_info=True)
-            # Return a generic error string
             return f"Error: An unexpected error occurred during scene generation. Please check logs."

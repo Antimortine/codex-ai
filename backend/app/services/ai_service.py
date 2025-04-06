@@ -74,14 +74,14 @@ class AIService:
             logger.debug("AIService: Loading explicit context...")
             try:
                  explicit_plan = self.file_service.read_content_block_file(project_id, "plan.md")
-                 logger.debug("AIService: Loaded plan.md")
+                 logger.debug(f"AIService: Loaded plan.md (Length: {len(explicit_plan)})")
             except HTTPException as e:
                  if e.status_code == 404: logger.warning("AIService: plan.md not found.")
                  else: raise # Re-raise other file errors
 
             try:
                  explicit_synopsis = self.file_service.read_content_block_file(project_id, "synopsis.md")
-                 logger.debug("AIService: Loaded synopsis.md")
+                 logger.debug(f"AIService: Loaded synopsis.md (Length: {len(explicit_synopsis)})")
             except HTTPException as e:
                  if e.status_code == 404: logger.warning("AIService: synopsis.md not found.")
                  else: raise
@@ -107,7 +107,7 @@ class AIService:
                                 content = self.file_service.read_text_file(scene_path)
                                 explicit_previous_scenes.append((target_order, content))
                                 loaded_count += 1
-                                logger.debug(f"AIService: Loaded previous scene (Order: {target_order}, ID: {scene_id_to_load})")
+                                logger.debug(f"AIService: Loaded previous scene (Order: {target_order}, ID: {scene_id_to_load}, Length: {len(content)})")
                             except HTTPException as scene_load_err:
                                 if scene_load_err.status_code == 404: logger.warning(f"AIService: Scene file not found for order {target_order} (ID: {scene_id_to_load}), skipping.")
                                 else: logger.error(f"AIService: Error loading scene file order {target_order}: {scene_load_err.detail}")
@@ -121,6 +121,15 @@ class AIService:
                 except Exception as general_err:
                      logger.error(f"AIService: Unexpected error loading previous scenes: {general_err}", exc_info=True)
             # --- End Loading Explicit Context ---
+
+            # --- ADD DEBUG LOGGING BEFORE DELEGATION ---
+            logger.debug("AIService: Context prepared for SceneGenerator:")
+            logger.debug(f"  - Explicit Plan Length: {len(explicit_plan)}")
+            logger.debug(f"  - Explicit Synopsis Length: {len(explicit_synopsis)}")
+            logger.debug(f"  - Explicit Previous Scenes Count: {len(explicit_previous_scenes)}")
+            for order, content in explicit_previous_scenes:
+                 logger.debug(f"    - Scene Order {order} Length: {len(content)}")
+            # -------------------------------------------
 
             # Delegate to RagEngine (which delegates to SceneGenerator)
             generated_content = await self.rag_engine.generate_scene(
@@ -162,10 +171,8 @@ class AIService:
         Handles the business logic for rephrasing selected text.
         Delegates to RagEngine. (Could also load explicit context here if needed for rephrase).
         """
+        # ... (rephrase_text remains unchanged) ...
         logger.info(f"AIService: Processing rephrase request for project {project_id}. Text: '{request_data.selected_text[:50]}...'")
-        # Currently, rephrase only uses RAG context retrieved by the engine.
-        # If explicit context (like plan/synopsis) was deemed necessary for rephrase,
-        # it would be loaded here similar to generate_scene_draft.
         suggestions = await self.rag_engine.rephrase(
             project_id=project_id,
             selected_text=request_data.selected_text,
