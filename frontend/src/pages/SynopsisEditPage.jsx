@@ -1,3 +1,5 @@
+// frontend___src___pages___SynopsisEditPage.jsx.txt
+
 /*
  * Copyright 2025 Antimortine
  *
@@ -16,8 +18,9 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import MDEditor from '@uiw/react-md-editor'; // Import the editor
-import { getSynopsis, updateSynopsis } from '../api/codexApi'; // Import API functions FOR SYNOPSIS
+// import MDEditor from '@uiw/react-md-editor'; // No longer directly used
+import AIEditorWrapper from '../components/AIEditorWrapper'; // Import the wrapper
+import { getSynopsis, updateSynopsis } from '../api/codexApi';
 
 function SynopsisEditPage() {
   const { projectId } = useParams();
@@ -32,7 +35,6 @@ function SynopsisEditPage() {
     setError(null);
     setSaveMessage('');
     try {
-      // Use the correct API function
       const response = await getSynopsis(projectId);
       setContent(response.data.content || '');
     } catch (err) {
@@ -53,7 +55,6 @@ function SynopsisEditPage() {
     setError(null);
     setSaveMessage('');
     try {
-      // Use the correct API function
       await updateSynopsis(projectId, { content: content });
       setSaveMessage('Synopsis saved successfully!');
       setTimeout(() => setSaveMessage(''), 3000);
@@ -65,6 +66,12 @@ function SynopsisEditPage() {
       setIsSaving(false);
     }
   };
+
+  // Callback for the editor wrapper
+  const handleContentChange = useCallback((newValue) => {
+      setContent(newValue);
+  }, []);
+
 
   if (isLoading) {
     return <p>Loading synopsis editor...</p>;
@@ -79,15 +86,16 @@ function SynopsisEditPage() {
       <nav style={{ marginBottom: '1rem' }}>
         <Link to={`/projects/${projectId}`}> &lt; Back to Project Overview</Link>
       </nav>
-      {/* Update Title */}
       <h2>Edit Project Synopsis</h2>
       <p>Project ID: {projectId}</p>
 
       <div data-color-mode="light">
-        <MDEditor
-          value={content}
-          onChange={(value) => setContent(value || '')}
-          height={400}
+         {/* Use AIEditorWrapper */}
+         <AIEditorWrapper
+            value={content}
+            onChange={handleContentChange}
+            height={400}
+            projectId={projectId}
         />
       </div>
 
@@ -99,7 +107,6 @@ function SynopsisEditPage() {
         disabled={isSaving}
         style={{ marginTop: '1rem' }}
       >
-        {/* Update Button Text */}
         {isSaving ? 'Saving...' : 'Save Synopsis'}
       </button>
     </div>

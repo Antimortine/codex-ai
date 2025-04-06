@@ -16,8 +16,9 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import MDEditor from '@uiw/react-md-editor'; // Import the editor
-import { getWorldInfo, updateWorldInfo } from '../api/codexApi'; // Import API functions FOR WORLD INFO
+// import MDEditor from '@uiw/react-md-editor'; // No longer directly used
+import AIEditorWrapper from '../components/AIEditorWrapper'; // Import the wrapper
+import { getWorldInfo, updateWorldInfo } from '../api/codexApi';
 
 function WorldEditPage() {
   const { projectId } = useParams();
@@ -32,7 +33,6 @@ function WorldEditPage() {
     setError(null);
     setSaveMessage('');
     try {
-      // Use the correct API function
       const response = await getWorldInfo(projectId);
       setContent(response.data.content || '');
     } catch (err) {
@@ -53,7 +53,6 @@ function WorldEditPage() {
     setError(null);
     setSaveMessage('');
     try {
-      // Use the correct API function
       await updateWorldInfo(projectId, { content: content });
       setSaveMessage('World info saved successfully!');
       setTimeout(() => setSaveMessage(''), 3000);
@@ -65,6 +64,12 @@ function WorldEditPage() {
       setIsSaving(false);
     }
   };
+
+  // Callback for the editor wrapper
+  const handleContentChange = useCallback((newValue) => {
+      setContent(newValue);
+  }, []);
+
 
   if (isLoading) {
     return <p>Loading world info editor...</p>;
@@ -79,15 +84,16 @@ function WorldEditPage() {
       <nav style={{ marginBottom: '1rem' }}>
         <Link to={`/projects/${projectId}`}> &lt; Back to Project Overview</Link>
       </nav>
-      {/* Update Title */}
       <h2>Edit Worldbuilding Info</h2>
       <p>Project ID: {projectId}</p>
 
       <div data-color-mode="light">
-        <MDEditor
-          value={content}
-          onChange={(value) => setContent(value || '')}
-          height={400}
+         {/* Use AIEditorWrapper */}
+         <AIEditorWrapper
+            value={content}
+            onChange={handleContentChange}
+            height={400}
+            projectId={projectId}
         />
       </div>
 
@@ -99,7 +105,6 @@ function WorldEditPage() {
         disabled={isSaving}
         style={{ marginTop: '1rem' }}
       >
-        {/* Update Button Text */}
         {isSaving ? 'Saving...' : 'Save World Info'}
       </button>
     </div>

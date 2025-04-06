@@ -16,7 +16,8 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
-import MDEditor from '@uiw/react-md-editor';
+// import MDEditor from '@uiw/react-md-editor'; // No longer directly used
+import AIEditorWrapper from '../components/AIEditorWrapper'; // Import the wrapper
 import { getScene, updateScene } from '../api/codexApi'; // Import scene API functions
 
 function SceneEditPage() {
@@ -25,7 +26,7 @@ function SceneEditPage() {
 
   // State for scene data
   const [title, setTitle] = useState('');
-  const [content, setContent] = useState('');
+  const [content, setContent] = useState(''); // This state is now managed by the wrapper's onChange
   const [order, setOrder] = useState(0); // Keep track of order if needed for display/context
   const [originalTitle, setOriginalTitle] = useState('');
 
@@ -67,8 +68,7 @@ function SceneEditPage() {
     setError(null);
     setSaveMessage('');
     try {
-      // Send updated fields (title, content). We don't typically update order here.
-      // Order updates usually happen via drag-and-drop or dedicated buttons on the list view.
+      // Send updated fields (title, content). Content comes from the state updated by AIEditorWrapper's onChange
       await updateScene(projectId, chapterId, sceneId, { title: title, content: content });
       setSaveMessage('Scene saved successfully!');
       setOriginalTitle(title); // Update original title display on success
@@ -81,6 +81,12 @@ function SceneEditPage() {
       setIsSaving(false);
     }
   };
+
+  // Callback for the editor wrapper to update the content state
+  const handleContentChange = useCallback((newValue) => {
+      setContent(newValue);
+  }, []);
+
 
   if (isLoading) {
     return <p>Loading scene editor...</p>;
@@ -123,14 +129,17 @@ function SceneEditPage() {
         />
       </div>
 
-      {/* Content Editor */}
+      {/* Content Editor - Use the Wrapper */}
       <div style={{ marginBottom: '1rem' }}>
         <label>Content (Markdown):</label>
         <div data-color-mode="light" style={{ marginTop: '0.5rem' }}>
-          <MDEditor
+          {/* Replace MDEditor with AIEditorWrapper */}
+          <AIEditorWrapper
             value={content}
-            onChange={(value) => setContent(value || '')}
+            onChange={handleContentChange} // Pass the callback to update state
             height={500} // Make editor taller for scenes
+            projectId={projectId} // Pass projectId for API calls
+            // Pass other MDEditor props if needed (e.g., previewOptions)
           />
         </div>
       </div>

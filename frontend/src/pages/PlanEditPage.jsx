@@ -16,16 +16,17 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, Link } from 'react-router-dom';
-import MDEditor from '@uiw/react-md-editor'; // Import the editor
+// import MDEditor from '@uiw/react-md-editor'; // No longer directly used
+import AIEditorWrapper from '../components/AIEditorWrapper'; // Import the wrapper
 import { getPlan, updatePlan } from '../api/codexApi'; // Import API functions
 
 function PlanEditPage() {
-  const { projectId } = useParams(); // Get projectId from URL
-  const [content, setContent] = useState(''); // State for Markdown content
+  const { projectId } = useParams();
+  const [content, setContent] = useState('');
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState(null);
-  const [saveMessage, setSaveMessage] = useState(''); // Feedback on save
+  const [saveMessage, setSaveMessage] = useState('');
 
   const fetchPlanContent = useCallback(async () => {
     setIsLoading(true);
@@ -33,11 +34,11 @@ function PlanEditPage() {
     setSaveMessage('');
     try {
       const response = await getPlan(projectId);
-      setContent(response.data.content || ''); // Default to empty string if no content
+      setContent(response.data.content || '');
     } catch (err) {
       console.error("Error fetching plan:", err);
       setError(`Failed to load plan for project ${projectId}.`);
-      setContent(''); // Clear content on error
+      setContent('');
     } finally {
       setIsLoading(false);
     }
@@ -45,16 +46,15 @@ function PlanEditPage() {
 
   useEffect(() => {
     fetchPlanContent();
-  }, [fetchPlanContent]); // Fetch content when component mounts or projectId changes
+  }, [fetchPlanContent]);
 
   const handleSave = async () => {
     setIsSaving(true);
     setError(null);
     setSaveMessage('');
     try {
-      await updatePlan(projectId, { content: content });
+      await updatePlan(projectId, { content: content }); // Content state is updated by wrapper's onChange
       setSaveMessage('Plan saved successfully!');
-      // Optionally clear message after a few seconds
       setTimeout(() => setSaveMessage(''), 3000);
     } catch (err) {
       console.error("Error saving plan:", err);
@@ -65,38 +65,38 @@ function PlanEditPage() {
     }
   };
 
+  // Callback for the editor wrapper
+  const handleContentChange = useCallback((newValue) => {
+      setContent(newValue);
+  }, []);
+
   if (isLoading) {
     return <p>Loading plan editor...</p>;
   }
 
-  if (error && !isSaving) { // Don't show fetch error if a save error occurs
+  if (error && !isSaving) {
     return <p style={{ color: 'red' }}>Error: {error}</p>;
   }
 
   return (
     <div>
       <nav style={{ marginBottom: '1rem' }}>
-        {/* Link back to the main project detail page */}
         <Link to={`/projects/${projectId}`}>{"<"} Back to Project Overview</Link>
       </nav>
       <h2>Edit Project Plan</h2>
       <p>Project ID: {projectId}</p>
 
-      {/* Use data-color-mode="light" or "dark" to set theme */}
-      {/* Or control theme dynamically */}
       <div data-color-mode="light">
-        <MDEditor
-          value={content}
-          onChange={(value) => setContent(value || '')} // Update state on change
-          height={400} // Adjust height as needed
-          // Add other MDEditor props if desired (preview, visibileDragbar, etc.)
+        {/* Use AIEditorWrapper */}
+        <AIEditorWrapper
+            value={content}
+            onChange={handleContentChange}
+            height={400}
+            projectId={projectId}
         />
       </div>
 
-      {/* Display save error specifically */}
       {error && isSaving && <p style={{ color: 'red', marginTop: '0.5rem' }}>Error: {error}</p>}
-
-      {/* Display save success message */}
       {saveMessage && <p style={{ color: 'green', marginTop: '0.5rem' }}>{saveMessage}</p>}
 
       <button

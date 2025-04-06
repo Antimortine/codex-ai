@@ -16,19 +16,18 @@
 
 import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
-import MDEditor from '@uiw/react-md-editor';
+// import MDEditor from '@uiw/react-md-editor'; // No longer directly used
+import AIEditorWrapper from '../components/AIEditorWrapper'; // Import the wrapper
 import { getCharacter, updateCharacter } from '../api/codexApi';
 
 function CharacterEditPage() {
-  const { projectId, characterId } = useParams(); // Get both IDs
-  const navigate = useNavigate(); // To navigate back after save/error
+  const { projectId, characterId } = useParams();
+  const navigate = useNavigate();
 
-  // State for character data
   const [name, setName] = useState('');
-  const [description, setDescription] = useState('');
-  const [originalName, setOriginalName] = useState(''); // Keep original name for title
+  const [description, setDescription] = useState(''); // Managed by wrapper's onChange
+  const [originalName, setOriginalName] = useState('');
 
-  // State for loading/saving/errors
   const [isLoading, setIsLoading] = useState(true);
   const [isSaving, setIsSaving] = useState(false);
   const [error, setError] = useState(null);
@@ -41,12 +40,11 @@ function CharacterEditPage() {
     try {
       const response = await getCharacter(projectId, characterId);
       setName(response.data.name || '');
-      setOriginalName(response.data.name || ''); // Set original name
+      setOriginalName(response.data.name || '');
       setDescription(response.data.description || '');
     } catch (err) {
       console.error("Error fetching character:", err);
       setError(`Failed to load character ${characterId}.`);
-      // Optionally navigate back or show persistent error
     } finally {
       setIsLoading(false);
     }
@@ -65,11 +63,10 @@ function CharacterEditPage() {
     setError(null);
     setSaveMessage('');
     try {
-      // Send only updated fields (name, description)
+      // Description comes from state updated by wrapper's onChange
       await updateCharacter(projectId, characterId, { name: name, description: description });
       setSaveMessage('Character saved successfully!');
-      setOriginalName(name); // Update original name display on successful save
-      // Optionally navigate back to project page or clear message
+      setOriginalName(name);
       setTimeout(() => setSaveMessage(''), 3000);
     } catch (err) {
       console.error("Error saving character:", err);
@@ -80,16 +77,21 @@ function CharacterEditPage() {
     }
   };
 
+  // Callback for the editor wrapper
+  const handleDescriptionChange = useCallback((newValue) => {
+      setDescription(newValue);
+  }, []);
+
+
   if (isLoading) {
     return <p>Loading character editor...</p>;
   }
 
-  // Show persistent error if loading failed
   if (error && !isSaving) {
     return (
       <div>
         <p style={{ color: 'red' }}>Error: {error}</p>
-        <Link to={`/projects/${projectId}`}>&lt; Back to Project Overview</Link>
+        <Link to={`/projects/${projectId}`}> &lt; Back to Project Overview</Link>
       </div>
     );
   }
@@ -97,9 +99,8 @@ function CharacterEditPage() {
   return (
     <div>
       <nav style={{ marginBottom: '1rem' }}>
-        <Link to={`/projects/${projectId}`}>&lt; Back to Project Overview</Link>
+        <Link to={`/projects/${projectId}`}> &lt; Back to Project Overview</Link>
       </nav>
-      {/* Use originalName in title in case user clears the input */}
       <h2>Edit Character: {originalName || '...'}</h2>
       <p>Project ID: {projectId}</p>
       <p>Character ID: {characterId}</p>
@@ -117,26 +118,26 @@ function CharacterEditPage() {
         />
       </div>
 
-      {/* Description Editor */}
+      {/* Description Editor - Use the Wrapper */}
       <div style={{ marginBottom: '1rem' }}>
         <label>Description (Markdown):</label>
         <div data-color-mode="light" style={{ marginTop: '0.5rem' }}>
-          <MDEditor
-            value={description}
-            onChange={(value) => setDescription(value || '')}
-            height={300} // Adjust height
-          />
+           {/* Use AIEditorWrapper */}
+           <AIEditorWrapper
+                value={description}
+                onChange={handleDescriptionChange}
+                height={300}
+                projectId={projectId}
+            />
         </div>
       </div>
 
-      {/* Display save error */}
       {error && isSaving && <p style={{ color: 'red', marginTop: '0.5rem' }}>Error: {error}</p>}
-      {/* Display save success message */}
       {saveMessage && <p style={{ color: 'green', marginTop: '0.5rem' }}>{saveMessage}</p>}
 
       <button
         onClick={handleSave}
-        disabled={isSaving || !name.trim()} // Also disable if name is empty
+        disabled={isSaving || !name.trim()}
         style={{ marginTop: '1rem' }}
       >
         {isSaving ? 'Saving...' : 'Save Character'}

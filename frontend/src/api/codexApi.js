@@ -27,7 +27,7 @@ const apiClient = axios.create({
 });
 
 // --- Project Endpoints ---
-
+// ... (listProjects, createProject, etc. - unchanged) ...
 export const listProjects = () => apiClient.get('/projects/');
 export const createProject = (data) => apiClient.post('/projects/', data); // data: { name: "..." }
 export const getProject = (projectId) => apiClient.get(`/projects/${projectId}`);
@@ -35,7 +35,7 @@ export const updateProject = (projectId, data) => apiClient.patch(`/projects/${p
 export const deleteProject = (projectId) => apiClient.delete(`/projects/${projectId}`);
 
 // --- Chapter Endpoints ---
-
+// ... (listChapters, createChapter, etc. - unchanged) ...
 export const listChapters = (projectId) => apiClient.get(`/projects/${projectId}/chapters/`);
 export const createChapter = (projectId, data) => apiClient.post(`/projects/${projectId}/chapters/`, data); // data: { title: "...", order: ... }
 export const getChapter = (projectId, chapterId) => apiClient.get(`/projects/${projectId}/chapters/${chapterId}`);
@@ -43,7 +43,7 @@ export const updateChapter = (projectId, chapterId, data) => apiClient.patch(`/p
 export const deleteChapter = (projectId, chapterId) => apiClient.delete(`/projects/${projectId}/chapters/${chapterId}`);
 
 // --- Scene Endpoints ---
-
+// ... (listScenes, createScene, etc. - unchanged) ...
 export const listScenes = (projectId, chapterId) => apiClient.get(`/projects/${projectId}/chapters/${chapterId}/scenes/`);
 export const createScene = (projectId, chapterId, data) => apiClient.post(`/projects/${projectId}/chapters/${chapterId}/scenes/`, data); // data: { title: "...", order: ..., content: "..." }
 export const getScene = (projectId, chapterId, sceneId) => apiClient.get(`/projects/${projectId}/chapters/${chapterId}/scenes/${sceneId}`);
@@ -51,7 +51,7 @@ export const updateScene = (projectId, chapterId, sceneId, data) => apiClient.pa
 export const deleteScene = (projectId, chapterId, sceneId) => apiClient.delete(`/projects/${projectId}/chapters/${chapterId}/scenes/${sceneId}`);
 
 // --- Character Endpoints ---
-
+// ... (listCharacters, createCharacter, etc. - unchanged) ...
 export const listCharacters = (projectId) => apiClient.get(`/projects/${projectId}/characters/`);
 export const createCharacter = (projectId, data) => apiClient.post(`/projects/${projectId}/characters/`, data); // data: { name: "...", description: "..." }
 export const getCharacter = (projectId, characterId) => apiClient.get(`/projects/${projectId}/characters/${characterId}`);
@@ -59,7 +59,7 @@ export const updateCharacter = (projectId, characterId, data) => apiClient.patch
 export const deleteCharacter = (projectId, characterId) => apiClient.delete(`/projects/${projectId}/characters/${characterId}`);
 
 // --- Content Block Endpoints (Plan, Synopsis, World) ---
-
+// ... (getPlan, updatePlan, etc. - unchanged) ...
 export const getPlan = (projectId) => apiClient.get(`/projects/${projectId}/plan`);
 export const updatePlan = (projectId, data) => apiClient.put(`/projects/${projectId}/plan`, data); // data: { content: "..." }
 
@@ -69,35 +69,33 @@ export const updateSynopsis = (projectId, data) => apiClient.put(`/projects/${pr
 export const getWorldInfo = (projectId) => apiClient.get(`/projects/${projectId}/world`);
 export const updateWorldInfo = (projectId, data) => apiClient.put(`/projects/${projectId}/world`, data); // data: { content: "..." }
 
+
 // --- AI Endpoints ---
 
 /**
  * Sends a query to the AI for a specific project context.
- * @param {string} projectId - The ID of the project.
- * @param {object} data - The request body, containing the query. e.g., { query: "User's question" }
- * @returns {Promise<AxiosResponse<any>>} - The Axios response promise. Expected data format: { answer: "...", source_nodes: [...] }
  */
 export const queryProjectContext = (projectId, data) => apiClient.post(`/ai/query/${projectId}`, data);
 
-
 /**
  * Requests the AI to generate a scene draft for a specific chapter.
- * @param {string} projectId - The ID of the project.
- * @param {string} chapterId - The ID of the chapter for the new scene.
- * @param {object} requestData - The request body, containing optional guidance. e.g., { prompt_summary: "Brief description" }
- * @returns {Promise<AxiosResponse<any>>} - The Axios response promise. Expected data format: { generated_content: "..." }
  */
 export const generateSceneDraft = (projectId, chapterId, requestData) => {
   return apiClient.post(`/ai/generate/scene/${projectId}/${chapterId}`, requestData);
 };
 
+/**
+ * Requests AI suggestions for rephrasing selected text.
+ * @param {string} projectId - The ID of the project context.
+ * @param {object} requestData - The request body. e.g., { selected_text: "...", context_before: "...", context_after: "..." }
+ * @returns {Promise<AxiosResponse<any>>} - The Axios response promise. Expected data format: { suggestions: ["...", "..."] }
+ */
+export const rephraseText = (projectId, requestData) => {
+    return apiClient.post(`/ai/edit/rephrase/${projectId}`, requestData);
+};
+
 
 // Optional: Add interceptors for error handling or adding auth tokens later
-// apiClient.interceptors.response.use(response => response, error => {
-//   console.error("API call error:", error.response || error.message);
-//   // Handle specific errors globally if needed
-//   // if (error.response && error.response.status === 401) { /* Handle unauthorized */ }
-//   return Promise.reject(error);
-// });
+// ... (interceptor unchanged) ...
 
 export default apiClient; // Can also export individual functions
