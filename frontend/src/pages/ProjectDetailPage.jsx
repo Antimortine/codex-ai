@@ -17,10 +17,10 @@
 import React, { useState, useEffect } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import {
-    getProject,
+    getProject, updateProject,
     listChapters, createChapter, deleteChapter,
     listCharacters, createCharacter, deleteCharacter,
-    listScenes, createScene, deleteScene // Added createScene here
+    listScenes, createScene, deleteScene
 } from '../api/codexApi';
 
 function ProjectDetailPage() {
@@ -40,10 +40,19 @@ function ProjectDetailPage() {
     const [newChapterTitle, setNewChapterTitle] = useState('');
     const [newCharacterName, setNewCharacterName] = useState('');
 
+    // --- State for Editing Project Name ---
+    const [isEditingName, setIsEditingName] = useState(false);
+    const [editedProjectName, setEditedProjectName] = useState('');
+    const [isSavingName, setIsSavingName] = useState(false);
+    const [saveNameError, setSaveNameError] = useState(null);
+    const [saveNameSuccess, setSaveNameSuccess] = useState('');
+
     // --- Main useEffect for Data Fetching ---
     useEffect(() => {
         let isMounted = true;
         setError(null);
+        setSaveNameError(null); // Clear name saving error on load
+        setSaveNameSuccess(''); // Clear name saving success on load
 
         const fetchAllData = async () => {
             if (!projectId) {
@@ -72,7 +81,10 @@ function ProjectDetailPage() {
             try {
                 console.log("Fetching project...");
                 const projectResponse = await getProject(projectId);
-                if (isMounted) setProject(projectResponse.data);
+                if (isMounted) {
+                    setProject(projectResponse.data);
+                    setEditedProjectName(projectResponse.data.name || ''); // Initialize edited name state
+                }
                 console.log("Project fetched.");
 
                 console.log("Fetching chapters...");
@@ -88,7 +100,6 @@ function ProjectDetailPage() {
 
                 console.log("Fetching scenes for chapters...");
                 const scenesData = {};
-                // Use Promise.all for potentially faster scene fetching (optional)
                 await Promise.all(sortedChapters.map(async (chapter) => {
                     try {
                         const scenesResponse = await listScenes(projectId, chapter.id);
@@ -131,13 +142,12 @@ function ProjectDetailPage() {
         };
     }, [projectId]);
 
-    // --- Action Handlers (Implementations added/restored) ---
+    // --- Action Handlers ---
 
-    // Function to refresh all chapter and scene data
     const refreshChaptersAndScenes = async () => {
          setIsLoadingChapters(true);
          setIsLoadingScenes(true);
-         setScenes({}); // Clear old scenes
+         setScenes({});
          let chapterFetchError = false;
          try {
              const response = await listChapters(projectId);
@@ -164,7 +174,7 @@ function ProjectDetailPage() {
              chapterFetchError = true;
          } finally {
              setIsLoadingChapters(false);
-             setIsLoadingScenes(false); // Always finish loading scenes state
+             setIsLoadingScenes(false);
          }
      };
 
@@ -176,25 +186,25 @@ function ProjectDetailPage() {
         try {
             await createChapter(projectId, { title: newChapterTitle, order: nextOrder });
             setNewChapterTitle('');
-            refreshChaptersAndScenes(); // Refresh list
+            refreshChaptersAndScenes();
         } catch (err) {
             console.error("Error creating chapter:", err);
             setError("Failed to create chapter.");
-            setIsLoadingChapters(false); // Ensure loading stops on error
+            setIsLoadingChapters(false);
         }
     };
 
     const handleDeleteChapter = async (chapterId, chapterTitle) => {
         if (!window.confirm(`Delete chapter "${chapterTitle}" and ALL ITS SCENES?`)) return;
-        setIsLoadingChapters(true); // Indicate loading for chapters/scenes
+        setIsLoadingChapters(true);
         setIsLoadingScenes(true);
         try {
             await deleteChapter(projectId, chapterId);
-            refreshChaptersAndScenes(); // Refresh list
+            refreshChaptersAndScenes();
         } catch (err) {
              console.error("Error deleting chapter:", err);
              setError("Failed to delete chapter.");
-             setIsLoadingChapters(false); // Ensure loading stops on error
+             setIsLoadingChapters(false);
              setIsLoadingScenes(false);
         }
     };
@@ -206,7 +216,6 @@ function ProjectDetailPage() {
         try {
             await createCharacter(projectId, { name: newCharacterName, description: "" });
             setNewCharacterName('');
-            // Simple refresh for characters
             const response = await listCharacters(projectId);
             setCharacters(response.data.characters || []);
         } catch (err) {
@@ -222,7 +231,6 @@ function ProjectDetailPage() {
         setIsLoadingCharacters(true);
         try {
             await deleteCharacter(projectId, characterId);
-            // Simple refresh
             const response = await listCharacters(projectId);
             setCharacters(response.data.characters || []);
         } catch (err) {
@@ -241,16 +249,12 @@ function ProjectDetailPage() {
              console.log("Attempting to create scene with data:", newSceneData);
              const response = await createScene(projectId, chapterId, newSceneData);
              console.log("Scene created response:", response.data);
-             // Refresh chapters and scenes to ensure order and list are correct
              refreshChaptersAndScenes();
-             // Optionally navigate:
-             // navigate(`/projects/${projectId}/chapters/${chapterId}/scenes/${response.data.id}`);
          } catch(err) {
              console.error("Error creating scene:", err);
              setError("Failed to create scene.");
-             setIsLoadingScenes(false); // Ensure loading stops on error
+             setIsLoadingScenes(false);
          }
-         // Loading state will be reset by refreshChaptersAndScenes
     };
 
     const handleDeleteScene = async (chapterId, sceneId, sceneTitle) => {
@@ -258,18 +262,58 @@ function ProjectDetailPage() {
          setIsLoadingScenes(true);
          try {
              await deleteScene(projectId, chapterId, sceneId);
-             // Refresh chapters and scenes
              refreshChaptersAndScenes();
          } catch(err) {
             console.error("Error deleting scene:", err);
             setError("Failed to delete scene.");
-            setIsLoadingScenes(false); // Ensure loading stops on error
+            setIsLoadingScenes(false);
          }
-          // Loading state will be reset by refreshChaptersAndScenes
+    };
+
+    // --- Handlers for Editing Project Name ---
+    const handleEditNameClick = () => {
+        setEditedProjectName(project?.name || ''); // Ensure it's initialized from current project state
+        setIsEditingName(true);
+        setSaveNameError(null);
+        setSaveNameSuccess('');
+    };
+
+    const handleCancelEditName = () => {
+        setIsEditingName(false);
+        // No need to reset editedProjectName here
+    };
+
+    const handleSaveName = async () => {
+        if (!editedProjectName.trim()) {
+            setSaveNameError("Project name cannot be empty.");
+            return;
+        }
+        // Only save if the name actually changed
+        if (editedProjectName === project?.name) {
+            setIsEditingName(false);
+            return;
+        }
+
+        setIsSavingName(true);
+        setSaveNameError(null);
+        setSaveNameSuccess('');
+
+        try {
+            const response = await updateProject(projectId, { name: editedProjectName });
+            setProject(response.data); // Update local project state with response from backend
+            setIsEditingName(false);
+            setSaveNameSuccess('Project name updated successfully!');
+            setTimeout(() => setSaveNameSuccess(''), 3000);
+        } catch (err) {
+            console.error("Error updating project name:", err);
+            setSaveNameError("Failed to update project name. Please try again.");
+        } finally {
+            setIsSavingName(false);
+        }
     };
 
 
-    // --- Rendering Logic (Cleaned up) ---
+    // --- Rendering Logic ---
 
     const isLoading = isLoadingProject || isLoadingChapters || isLoadingCharacters || isLoadingScenes;
 
@@ -277,7 +321,7 @@ function ProjectDetailPage() {
          return <p>Loading project...</p>;
      }
 
-    if (error) { // Show error prominently if any occurred
+    if (error) {
         return (
              <div>
                 <p style={{ color: 'red' }}>Error: {error}</p>
@@ -286,7 +330,7 @@ function ProjectDetailPage() {
         );
     }
 
-    if (!isLoadingProject && !project) { // Project loaded but not found
+    if (!isLoadingProject && !project) {
         return (
              <div>
                 <p>Project not found.</p>
@@ -301,7 +345,45 @@ function ProjectDetailPage() {
             <nav>
                 <Link to="/"> &lt; Back to Project List</Link>
             </nav>
-            <h1>Project: {project?.name || 'Loading...'}</h1>
+
+            {/* --- Project Header with Editable Name --- */}
+            <div style={{ display: 'flex', alignItems: 'center', marginBottom: '0.5rem' }}>
+                {!isEditingName ? (
+                    <>
+                        <h1 style={{ marginRight: '1rem', marginBottom: 0 }}>
+                            Project: {project?.name || 'Loading...'}
+                        </h1>
+                        {/* Only show Edit button if project data is loaded */}
+                        {project && (
+                            <button onClick={handleEditNameClick} disabled={isLoadingProject || isSavingName}>
+                                Edit Name
+                            </button>
+                        )}
+                    </>
+                ) : (
+                    <>
+                        <input
+                            type="text"
+                            value={editedProjectName}
+                            onChange={(e) => setEditedProjectName(e.target.value)}
+                            disabled={isSavingName}
+                            style={{ fontSize: '1.5em', marginRight: '0.5rem' }}
+                            aria-label="Project Name" // Accessibility
+                        />
+                        <button onClick={handleSaveName} disabled={isSavingName || !editedProjectName.trim()}>
+                            {isSavingName ? 'Saving...' : 'Save Name'}
+                        </button>
+                        <button onClick={handleCancelEditName} disabled={isSavingName} style={{ marginLeft: '0.5rem' }}>
+                            Cancel
+                        </button>
+                    </>
+                )}
+            </div>
+            {/* Display Name Save Status */}
+            {saveNameError && <p style={{ color: 'red', marginTop: '0.2rem' }}>{saveNameError}</p>}
+            {saveNameSuccess && <p style={{ color: 'green', marginTop: '0.2rem' }}>{saveNameSuccess}</p>}
+
+
             <p>ID: {projectId}</p>
             <hr />
 
@@ -318,7 +400,6 @@ function ProjectDetailPage() {
                                     Delete Chapter
                                 </button>
                             </div>
-                            {/* Scene List */}
                             {isLoadingScenes ? <p style={{marginLeft:'20px'}}>Loading scenes...</p> : (
                                 <ul style={{ listStyle: 'none', paddingLeft: '20px' }}>
                                     {(scenes[chapter.id] || []).map(scene => (
@@ -326,7 +407,6 @@ function ProjectDetailPage() {
                                              <Link to={`/projects/${projectId}/chapters/${chapter.id}/scenes/${scene.id}`}>
                                                 {scene.order}: {scene.title}
                                             </Link>
-                                             {/* Added Delete Scene Button */}
                                              <button onClick={() => handleDeleteScene(chapter.id, scene.id, scene.title)} style={{ marginLeft: '1rem', fontSize: '0.8em', color: 'orange', cursor: 'pointer' }} disabled={isLoadingScenes}>
                                                 Del Scene
                                             </button>
@@ -335,12 +415,10 @@ function ProjectDetailPage() {
                                     {(scenes[chapter.id]?.length === 0 || !scenes[chapter.id]) && !isLoadingScenes && <p style={{marginLeft:'20px', fontStyle:'italic'}}>No scenes in this chapter yet.</p>}
                                 </ul>
                             )}
-                             {/* Add Scene Button */}
                              <button onClick={() => handleCreateScene(chapter.id)} style={{marginLeft: '20px', marginTop: '5px'}} disabled={isLoadingScenes}>+ Add Scene</button>
                         </div>
                     ))
                 )}
-                {/* Form to Create New Chapter */}
                  <form onSubmit={handleCreateChapter} style={{ marginTop: '1rem' }}>
                     <input
                       type="text"
@@ -374,7 +452,6 @@ function ProjectDetailPage() {
                     {characters.length === 0 && !isLoadingCharacters && <p>No characters yet.</p>}
                  </ul>
              )}
-                {/* Added Create Character Form */}
                 <form onSubmit={handleCreateCharacter} style={{ marginTop: '0.5rem' }}>
                     <input
                       type="text"
