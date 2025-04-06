@@ -16,14 +16,62 @@
 
 import React, { useState, useEffect } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
+import MDEditor from '@uiw/react-md-editor'; // Import MDEditor for potential display
 import {
     getProject, updateProject,
     listChapters, createChapter, deleteChapter,
     listCharacters, createCharacter, deleteCharacter,
-    listScenes, createScene, deleteScene
+    listScenes, createScene, deleteScene,
+    generateSceneDraft // Import the new AI API function
 } from '../api/codexApi';
 import QueryInterface from '../components/QueryInterface';
 
+// Basic Modal Styling (can be moved to CSS)
+const modalStyles = {
+    overlay: {
+        position: 'fixed',
+        top: 0,
+        left: 0,
+        right: 0,
+        bottom: 0,
+        backgroundColor: 'rgba(0, 0, 0, 0.6)',
+        display: 'flex',
+        alignItems: 'center',
+        justifyContent: 'center',
+        zIndex: 1000,
+    },
+    content: {
+        backgroundColor: '#fff',
+        padding: '20px',
+        borderRadius: '5px',
+        maxWidth: '80%',
+        maxHeight: '80%',
+        overflowY: 'auto',
+        position: 'relative',
+        minWidth: '500px' // Ensure minimum width
+    },
+    closeButton: {
+        position: 'absolute',
+        top: '10px',
+        right: '10px',
+        cursor: 'pointer',
+        border: 'none',
+        background: 'transparent',
+        fontSize: '1.5rem',
+        fontWeight: 'bold',
+    },
+    textarea: {
+        width: '98%',
+        minHeight: '200px',
+        marginTop: '10px',
+        fontFamily: 'monospace',
+        fontSize: '0.9em',
+    },
+    copyButton: {
+         marginTop: '10px',
+         marginRight: '10px',
+    }
+};
 
 function ProjectDetailPage() {
     const { projectId } = useParams();
@@ -47,7 +95,13 @@ function ProjectDetailPage() {
     const [isSavingName, setIsSavingName] = useState(false);
     const [saveNameError, setSaveNameError] = useState(null);
     const [saveNameSuccess, setSaveNameSuccess] = useState('');
-
+    // --- State for AI Scene Generation ---
+    const [generationSummaries, setGenerationSummaries] = useState({}); // { chapterId: 'summary' }
+    const [isGeneratingScene, setIsGeneratingScene] = useState(false); // Track generation loading state
+    const [generatingChapterId, setGeneratingChapterId] = useState(null); // Track which chapter is generating
+    const [generationError, setGenerationError] = useState(null); // Store generation errors
+    const [generatedSceneContent, setGeneratedSceneContent] = useState(''); // Store the generated content
+    const [showGeneratedSceneModal, setShowGeneratedSceneModal] = useState(false); // Control modal visibility
 
     // --- useEffect for Data Fetching ---
     useEffect(() => {
@@ -55,6 +109,7 @@ function ProjectDetailPage() {
         setError(null);
         setSaveNameError(null);
         setSaveNameSuccess('');
+        setGenerationError(null); // Reset generation error on load
 
         const fetchAllData = async () => {
             if (!projectId) {
@@ -77,6 +132,7 @@ function ProjectDetailPage() {
                 setChapters([]);
                 setCharacters([]);
                 setScenes({});
+                setGenerationSummaries({}); // Reset summaries on load
             }
 
             try {
@@ -311,6 +367,52 @@ function ProjectDetailPage() {
         }
     };
 
+    // --- AI Generation Handler ---
+    const handleGenerateSceneDraft = async (chapterId) => {
+        const summary = generationSummaries[chapterId] || ''; // Get summary for the specific chapter
+        setIsGeneratingScene(true);
+        setGeneratingChapterId(chapterId); // Mark which chapter is generating
+        setGenerationError(null);
+        setGeneratedSceneContent('');
+        setShowGeneratedSceneModal(false);
+
+        console.log(`Requesting scene draft for chapter ${chapterId} with summary: "${summary}"`);
+
+        try {
+            const response = await generateSceneDraft(projectId, chapterId, { prompt_summary: summary });
+            console.log("AI Generation Response:", response.data);
+            setGeneratedSceneContent(response.data.generated_content || "AI returned empty content.");
+            setShowGeneratedSceneModal(true); // Show the modal with the content
+        } catch (err) {
+            console.error("Error generating scene draft:", err);
+            const errorMsg = err.response?.data?.detail || err.message || 'Failed to generate scene draft.';
+            setGenerationError(errorMsg);
+            setShowGeneratedSceneModal(false);
+        } finally {
+            setIsGeneratingScene(false);
+            setGeneratingChapterId(null); // Reset generating chapter ID
+        }
+    };
+
+    // Handler for updating generation summary state
+    const handleSummaryChange = (chapterId, value) => {
+        setGenerationSummaries(prev => ({
+            ...prev,
+            [chapterId]: value
+        }));
+    };
+
+     // Handler for copying generated text
+    const copyGeneratedText = () => {
+        navigator.clipboard.writeText(generatedSceneContent)
+            .then(() => {
+                // Optional: Show a temporary "Copied!" message
+                console.log('Generated text copied to clipboard');
+            })
+            .catch(err => {
+                console.error('Failed to copy text: ', err);
+            });
+    };
 
     // --- Rendering Logic ---
 
@@ -341,6 +443,27 @@ function ProjectDetailPage() {
     // Main render
     return (
         <div>
+            {/* --- Generated Scene Modal --- */}
+            {showGeneratedSceneModal && (
+                <div style={modalStyles.overlay}>
+                    <div style={modalStyles.content}>
+                        <button style={modalStyles.closeButton} onClick={() => setShowGeneratedSceneModal(false)}>
+                            × {/* Close button */}
+                        </button>
+                        <h3>Generated Scene Draft</h3>
+                        {/* Display generated content in a textarea or pre block */}
+                        <textarea
+                            style={modalStyles.textarea}
+                            value={generatedSceneContent}
+                            readOnly
+                        />
+                         {/* Maybe use MDEditor preview? <MDEditor.Markdown source={generatedSceneContent} /> */}
+                        <button style={modalStyles.copyButton} onClick={copyGeneratedText}>Copy Text</button>
+                        <button onClick={() => setShowGeneratedSceneModal(false)}>Close</button>
+                    </div>
+                </div>
+            )}
+
             <nav>
                 <Link to="/"> &lt; Back to Project List</Link>
             </nav>
@@ -383,7 +506,6 @@ function ProjectDetailPage() {
             <hr />
 
             {/* --- AI Query Interface --- */}
-            {/* Render the QueryInterface only if projectId is available */}
             {projectId && <QueryInterface projectId={projectId} />}
             <hr /> {/* Add separator */}
 
@@ -397,10 +519,11 @@ function ProjectDetailPage() {
                         <div key={chapter.id} style={{ border: '1px solid #eee', padding: '10px', marginBottom: '10px' }}>
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '5px' }}>
                                 <strong>{chapter.order}: {chapter.title}</strong>
-                                <button onClick={() => handleDeleteChapter(chapter.id, chapter.title)} style={{ marginLeft: '1rem', color: 'red', cursor: 'pointer' }} disabled={isLoadingChapters || isLoadingScenes}>
+                                <button onClick={() => handleDeleteChapter(chapter.id, chapter.title)} style={{ marginLeft: '1rem', color: 'red', cursor: 'pointer' }} disabled={isLoadingChapters || isLoadingScenes || isGeneratingScene}>
                                     Delete Chapter
                                 </button>
                             </div>
+                            {/* --- Scene List --- */}
                             {isLoadingScenes ? <p style={{marginLeft:'20px'}}>Loading scenes...</p> : (
                                 <ul style={{ listStyle: 'none', paddingLeft: '20px' }}>
                                     {(scenes[chapter.id] || []).map(scene => (
@@ -408,7 +531,7 @@ function ProjectDetailPage() {
                                              <Link to={`/projects/${projectId}/chapters/${chapter.id}/scenes/${scene.id}`}>
                                                 {scene.order}: {scene.title}
                                             </Link>
-                                             <button onClick={() => handleDeleteScene(chapter.id, scene.id, scene.title)} style={{ marginLeft: '1rem', fontSize: '0.8em', color: 'orange', cursor: 'pointer' }} disabled={isLoadingScenes}>
+                                             <button onClick={() => handleDeleteScene(chapter.id, scene.id, scene.title)} style={{ marginLeft: '1rem', fontSize: '0.8em', color: 'orange', cursor: 'pointer' }} disabled={isLoadingScenes || isGeneratingScene}>
                                                 Del Scene
                                             </button>
                                         </li>
@@ -416,7 +539,34 @@ function ProjectDetailPage() {
                                     {(scenes[chapter.id]?.length === 0 || !scenes[chapter.id]) && !isLoadingScenes && <p style={{marginLeft:'20px', fontStyle:'italic'}}>No scenes in this chapter yet.</p>}
                                 </ul>
                             )}
-                             <button onClick={() => handleCreateScene(chapter.id)} style={{marginLeft: '20px', marginTop: '5px'}} disabled={isLoadingScenes}>+ Add Scene</button>
+                            {/* --- Actions for Chapter (Add Scene, Generate Scene) --- */}
+                             <div style={{marginLeft: '20px', marginTop: '10px', borderTop: '1px dashed #ccc', paddingTop: '10px'}}>
+                                <button onClick={() => handleCreateScene(chapter.id)} style={{marginRight: '10px'}} disabled={isLoadingScenes || isGeneratingScene}>+ Add Scene Manually</button>
+
+                                {/* --- AI Scene Generation UI --- */}
+                                <div style={{ marginTop: '10px', padding:'5px', backgroundColor:'#f0f8ff', borderRadius:'3px' }}>
+                                    <label htmlFor={`summary-${chapter.id}`} style={{ fontSize: '0.9em', marginRight: '5px' }}>Optional Prompt/Summary for AI:</label>
+                                    <input
+                                        type="text"
+                                        id={`summary-${chapter.id}`}
+                                        value={generationSummaries[chapter.id] || ''}
+                                        onChange={(e) => handleSummaryChange(chapter.id, e.target.value)}
+                                        placeholder="e.g., Character meets the informant"
+                                        disabled={isGeneratingScene}
+                                        style={{ fontSize: '0.9em', marginRight: '5px', minWidth:'250px' }}
+                                    />
+                                    <button
+                                        onClick={() => handleGenerateSceneDraft(chapter.id)}
+                                        disabled={isGeneratingScene}
+                                    >
+                                        {isGeneratingScene && generatingChapterId === chapter.id ? 'Generating...' : '+ Add Scene using AI'}
+                                    </button>
+                                    {/* Show loading/error specific to this chapter */}
+                                    {isGeneratingScene && generatingChapterId === chapter.id && <span style={{ marginLeft:'5px', fontStyle:'italic', fontSize:'0.9em' }}> (AI is working...)</span>}
+                                    {generationError && generatingChapterId === chapter.id && <p style={{ color: 'red', fontSize: '0.9em', marginTop:'5px' }}>Error: {generationError}</p>}
+                                </div>
+                                {/* --- End AI Scene Generation UI --- */}
+                            </div>
                         </div>
                     ))
                 )}
@@ -426,9 +576,9 @@ function ProjectDetailPage() {
                       value={newChapterTitle}
                       onChange={(e) => setNewChapterTitle(e.target.value)}
                       placeholder="New chapter title"
-                      disabled={isLoadingChapters}
+                      disabled={isLoadingChapters || isGeneratingScene}
                     />
-                    <button type="submit" disabled={isLoadingChapters}>Add Chapter</button>
+                    <button type="submit" disabled={isLoadingChapters || isGeneratingScene}>Add Chapter</button>
                  </form>
             </section>
             <hr />
@@ -444,7 +594,7 @@ function ProjectDetailPage() {
                                 {character.name}
                             </Link>
                             <span>
-                                <button onClick={() => handleDeleteCharacter(character.id, character.name)} style={{ marginLeft: '1rem', color: 'red', cursor: 'pointer' }} disabled={isLoadingCharacters}>
+                                <button onClick={() => handleDeleteCharacter(character.id, character.name)} style={{ marginLeft: '1rem', color: 'red', cursor: 'pointer' }} disabled={isLoadingCharacters || isGeneratingScene}>
                                     Delete
                                 </button>
                             </span>
@@ -459,9 +609,9 @@ function ProjectDetailPage() {
                       value={newCharacterName}
                       onChange={(e) => setNewCharacterName(e.target.value)}
                       placeholder="New character name"
-                      disabled={isLoadingCharacters}
+                      disabled={isLoadingCharacters || isGeneratingScene}
                     />
-                    <button type="submit" disabled={isLoadingCharacters}>Add Character</button>
+                    <button type="submit" disabled={isLoadingCharacters || isGeneratingScene}>Add Character</button>
                 </form>
             </section>
             <hr />
