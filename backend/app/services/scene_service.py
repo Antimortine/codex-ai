@@ -1,3 +1,4 @@
+# backend/app/services/scene_service.py
 # Copyright 2025 Antimortine
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -17,6 +18,7 @@ from app.models.scene import SceneCreate, SceneUpdate, SceneRead, SceneList
 from app.services.file_service import file_service
 from app.services.chapter_service import chapter_service # To check chapter existence
 from app.models.common import generate_uuid
+from app.rag.index_manager import index_manager
 
 class SceneService:
 
@@ -50,13 +52,26 @@ class SceneService:
         # Create the scene markdown file with initial content
         file_service.write_text_file(scene_path, scene_in.content)
 
-        # Update chapter metadata
+        # --- Index the new scene ---
+        try:
+            print(f"Indexing new scene: {scene_path}")
+            index_manager.index_file(scene_path)
+        except Exception as e:
+            # Log indexing error but continue, as the file and metadata are created
+            print(f"ERROR: Failed to index new scene {scene_id}: {e}")
+            # Consider how critical indexing is - should we raise an error or just warn?
+            # For now, we warn and continue.
+
+        # Update chapter metadata (AFTER file write and indexing attempt)
         chapter_metadata = self._read_chapter_meta(project_id, chapter_id)
         if 'scenes' not in chapter_metadata: chapter_metadata['scenes'] = {}
 
         # Check for order conflicts
         for existing_id, data in chapter_metadata['scenes'].items():
              if data.get('order') == scene_in.order:
+                 # Rollback file creation and index deletion? Or just raise? Let's just raise for now.
+                 # file_service.delete_file(scene_path) # Optional rollback
+                 # index_manager.delete_doc(scene_path) # Optional rollback
                  raise HTTPException(
                     status_code=status.HTTP_409_CONFLICT,
                     detail=f"Scene order {scene_in.order} already exists for scene '{data.get('title', existing_id)}'"
@@ -144,12 +159,13 @@ class SceneService:
         scene_data = chapter_metadata.get('scenes', {}).get(scene_id)
 
         if not scene_data:
-             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Scene metadata inconsistency")
+             # This case should technically be caught by get_by_id, but check anyway
+             raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Scene metadata inconsistency during update")
 
         meta_updated = False
         if scene_in.title is not None and scene_in.title != scene_data.get("title"):
             scene_data["title"] = scene_in.title
-            existing_scene.title = scene_in.title
+            existing_scene.title = scene_in.title # Update the object we will return
             meta_updated = True
 
         if scene_in.order is not None and scene_in.order != scene_data.get("order"):
@@ -161,43 +177,94 @@ class SceneService:
                         detail=f"Scene order {scene_in.order} already exists for scene '{data.get('title', other_id)}'"
                      )
             scene_data["order"] = scene_in.order
-            existing_scene.order = scene_in.order
+            existing_scene.order = scene_in.order # Update the object we will return
             meta_updated = True
 
         if meta_updated:
             self._write_chapter_meta(project_id, chapter_id, chapter_metadata)
 
-        # Update content if provided
+        # Update content if provided and different
+        content_updated = False
         if scene_in.content is not None and scene_in.content != existing_scene.content:
             scene_path = file_service._get_scene_path(project_id, chapter_id, scene_id)
             file_service.write_text_file(scene_path, scene_in.content)
             existing_scene.content = scene_in.content # Update returned object
+            content_updated = True # Flag that content changed
+
+            # --- Trigger Re-indexing ONLY if content changed ---
+            try:
+                print(f"Content updated for scene {scene_id}, re-indexing...")
+                index_manager.index_file(scene_path) # Index the updated content
+            except Exception as e:
+                print(f"ERROR: Failed to re-index updated scene {scene_id}: {e}")
+                # Decide on error handling - maybe raise a warning?
 
         return existing_scene
 
     def delete(self, project_id: str, chapter_id: str, scene_id: str):
         """Deletes a scene."""
         # Ensure scene exists (checks chapter too)
-        self.get_by_id(project_id, chapter_id, scene_id)
-
-        # Delete the markdown file
+        # We need the path even if get_by_id fails later due to inconsistency
         scene_path = file_service._get_scene_path(project_id, chapter_id, scene_id)
+        scene_exists_in_meta = False
         try:
-             file_service.delete_file(scene_path)
-        except HTTPException as e:
-             # Log if file was already missing, but proceed to remove meta
-             if e.status_code == 404:
-                 print(f"Warning: Scene file {scene_path.name} not found during delete, removing metadata anyway.")
-             else:
-                 raise e # Re-raise other delete errors
+            # Check metadata first
+            chapter_metadata = self._read_chapter_meta(project_id, chapter_id)
+            if scene_id in chapter_metadata.get('scenes', {}):
+                 scene_exists_in_meta = True
+            else:
+                 # If not in meta, maybe file still exists? Check file system.
+                 if not file_service.path_exists(scene_path):
+                      raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Scene not found in metadata or filesystem")
+                 else:
+                      print(f"Warning: Scene {scene_id} found on filesystem but not in metadata.")
+                      # Proceed to delete file and attempt index deletion anyway
 
-        # Update chapter metadata
-        chapter_metadata = self._read_chapter_meta(project_id, chapter_id)
-        if scene_id in chapter_metadata.get('scenes', {}):
-            del chapter_metadata['scenes'][scene_id]
-            self._write_chapter_meta(project_id, chapter_id, chapter_metadata)
+        except HTTPException as e:
+             if e.status_code == 404: # Chapter meta might be missing if chapter was deleted inconsistently
+                  if not file_service.path_exists(scene_path):
+                       raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Scene not found (chapter meta missing)") from e
+                  else: # File exists, proceed with deletion
+                       print(f"Warning: Chapter metadata missing for {chapter_id}, but scene file exists.")
+             else:
+                  raise e # Re-raise other errors
+
+
+        # --- Trigger Deletion from Index FIRST ---
+        # Attempt even if metadata was inconsistent, in case file exists
+        try:
+            print(f"Attempting deletion from index for scene: {scene_path}")
+            index_manager.delete_doc(scene_path)
+        except Exception as e:
+            # Log error but proceed with file/meta deletion
+            print(f"Warning: Error deleting scene {scene_id} from index: {e}")
+
+        # Delete the markdown file if it exists
+        if file_service.path_exists(scene_path):
+            try:
+                 file_service.delete_file(scene_path)
+            except HTTPException as e:
+                 # Log if file deletion fails, but proceed to remove meta
+                 print(f"Warning: Scene file {scene_path.name} found but failed to delete: {e.detail}")
+                 # Re-raise only if it's not a 404 (already deleted?)
+                 if e.status_code != 404:
+                      raise e
         else:
-            print(f"Warning: Scene {scene_id} was deleted but already missing from chapter metadata.")
+             print(f"Info: Scene file {scene_path.name} was already deleted.")
+
+
+        # Update chapter metadata if the scene was listed there
+        if scene_exists_in_meta:
+            # Re-read metadata in case it changed? Unlikely but safer.
+            chapter_metadata = self._read_chapter_meta(project_id, chapter_id)
+            if scene_id in chapter_metadata.get('scenes', {}):
+                del chapter_metadata['scenes'][scene_id]
+                self._write_chapter_meta(project_id, chapter_id, chapter_metadata)
+            else:
+                 # This shouldn't happen if scene_exists_in_meta was true, indicates race condition or bug
+                 print(f"Warning: Scene {scene_id} was in metadata initially but disappeared before final write.")
+        else:
+             print(f"Info: Scene {scene_id} was not in chapter metadata during delete.")
 
 
 # Create a single instance

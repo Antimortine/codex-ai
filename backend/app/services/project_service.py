@@ -14,7 +14,7 @@
 
 from fastapi import HTTPException, status
 from app.models.project import ProjectCreate, ProjectUpdate, ProjectRead, ProjectList
-from app.services.file_service import file_service, BASE_PROJECT_DIR # Import the instance and constant
+from app.services.file_service import file_service, BASE_PROJECT_DIR
 from app.models.common import generate_uuid
 import uuid # Import uuid for validation
 
@@ -29,16 +29,17 @@ class ProjectService:
             # This should be extremely rare with UUIDs, but handle just in case
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Project ID collision")
 
-        # Create directories and initial files
+        # Create directories and initial files (including indexing initial content blocks)
         file_service.setup_project_structure(project_id)
 
         # Store project name in metadata
         metadata_path = file_service._get_project_metadata_path(project_id)
-        project_metadata = file_service.read_json_file(metadata_path) # Should be {} initially
+        # Read metadata (should exist now after setup_project_structure)
+        project_metadata = file_service.read_json_file(metadata_path)
         project_metadata['project_name'] = project_in.name
-        # Add other project-level metadata if needed, e.g., creation date
-        project_metadata['chapters'] = {} # Ensure chapters dict exists
-        project_metadata['characters'] = {} # Ensure characters dict exists
+        # Ensure these keys exist if setup didn't guarantee it
+        if 'chapters' not in project_metadata: project_metadata['chapters'] = {}
+        if 'characters' not in project_metadata: project_metadata['characters'] = {}
         file_service.write_json_file(metadata_path, project_metadata)
 
         return ProjectRead(id=project_id, name=project_in.name)
@@ -56,6 +57,7 @@ class ProjectService:
         except HTTPException as e:
              if e.status_code == 404: # Metadata file missing? Use default name
                  project_name = f"Project {project_id}"
+                 print(f"Warning: Project metadata file missing for {project_id}, using default name.")
              else:
                  raise e # Re-raise other errors
 
@@ -67,7 +69,7 @@ class ProjectService:
         projects = []
         for pid in project_ids:
             try:
-                # Validate it looks like a UUID before trying to read? Optional.
+                # Validate it looks like a UUID before trying to read
                 uuid.UUID(pid) # Raises ValueError if not a valid UUID
                 project_data = self.get_by_id(pid) # Reuse get_by_id logic
                 projects.append(project_data)
@@ -83,25 +85,37 @@ class ProjectService:
 
         if project_in.name is not None and project_in.name != project_data.name:
             metadata_path = file_service._get_project_metadata_path(project_id)
-            project_metadata = file_service.read_json_file(metadata_path) # Read existing
+            # Read existing metadata, handling potential 404 if inconsistent
+            try:
+                project_metadata = file_service.read_json_file(metadata_path)
+            except HTTPException as e:
+                 if e.status_code == 404:
+                      print(f"Warning: Project metadata file missing during update for {project_id}.")
+                      project_metadata = {} # Start fresh if missing
+                 else: raise e
+
             project_metadata['project_name'] = project_in.name
             file_service.write_json_file(metadata_path, project_metadata)
             project_data.name = project_in.name # Update the name in the returned object
 
-            # Renaming the directory is tricky and potentially risky
-            # Let's skip directory renaming for now to keep it simpler.
-            # The ID remains the source of truth for the path.
+            # Note: Project name update does NOT require re-indexing anything,
+            # as only content files (scenes, characters, plan etc.) are indexed.
 
         return project_data # Return the updated project data
 
     def delete(self, project_id: str):
-        """Deletes a project directory and all its contents."""
+        """Deletes a project directory and all its contents, including index cleanup."""
         project_path = file_service._get_project_path(project_id)
         # get_by_id checks existence and raises 404 if not found
         self.get_by_id(project_id)
+
+        # --- Call the enhanced delete_directory ---
+        # This method in FileService now handles deleting docs from the index
+        # *before* removing the directory structure.
+        print(f"Deleting project directory and cleaning index for: {project_path}")
         file_service.delete_directory(project_path)
+        print(f"Project {project_id} deleted successfully.")
         # No need to return anything specific on successful delete in service layer
-        # The endpoint will return the message
 
 
 # Create a single instance

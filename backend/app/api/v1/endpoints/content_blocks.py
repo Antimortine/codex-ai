@@ -21,7 +21,6 @@ from app.services.project_service import project_service
 router = APIRouter()
 
 # --- Helper Dependency ---
-# Using FastAPI's dependency injection is cleaner for checking project existence
 async def get_project_dependency(project_id: str = Path(...)) -> str:
     """
     Dependency that checks if the project exists and returns the project_id.
@@ -36,7 +35,6 @@ async def get_project_dependency(project_id: str = Path(...)) -> str:
                 status_code=status.HTTP_404_NOT_FOUND,
                 detail=f"Project {project_id} not found"
             ) from e
-        # Re-raise other unexpected errors from the service layer
         raise e
 
 
@@ -46,13 +44,12 @@ async def get_plan(project_id: str = Depends(get_project_dependency)):
     """
     Get the project plan content for the specified project.
     """
-    file_path = file_service._get_content_block_path(project_id, "plan.md")
     try:
-        content = file_service.read_text_file(file_path)
+        # --- Use the new dedicated read method ---
+        content = file_service.read_content_block_file(project_id, "plan.md")
     except HTTPException as e:
-        # Handle case where file might not exist even if project dir does (e.g., first access)
         if e.status_code == 404:
-             # Return empty content if the specific file doesn't exist yet
+             # File might not exist on first access after project creation
              content = ""
         else:
              raise e # Re-raise other file read errors
@@ -62,10 +59,16 @@ async def get_plan(project_id: str = Depends(get_project_dependency)):
 async def update_plan(content_in: ContentBlockUpdate = Body(...), project_id: str = Depends(get_project_dependency)):
     """
     Update (or create) the project plan content for the specified project.
+    This will also trigger indexing of the content.
     """
-    file_path = file_service._get_content_block_path(project_id, "plan.md")
-    # write_text_file handles creating parent dirs if necessary
-    file_service.write_text_file(file_path, content_in.content)
+    try:
+        # --- Use the new dedicated write method that handles indexing ---
+        file_service.write_content_block_file(project_id, "plan.md", content_in.content)
+    except HTTPException as e:
+        # Handle potential write errors from file_service or index errors if raised
+        print(f"Error updating plan for project {project_id}: {e.detail}")
+        raise e # Re-raise the exception to return appropriate HTTP status
+
     # Return the updated content along with the project_id
     return ContentBlockRead(project_id=project_id, content=content_in.content)
 
@@ -76,9 +79,9 @@ async def get_synopsis(project_id: str = Depends(get_project_dependency)):
     """
     Get the project synopsis content for the specified project.
     """
-    file_path = file_service._get_content_block_path(project_id, "synopsis.md")
     try:
-        content = file_service.read_text_file(file_path)
+        # --- Use the new dedicated read method ---
+        content = file_service.read_content_block_file(project_id, "synopsis.md")
     except HTTPException as e:
         if e.status_code == 404:
              content = ""
@@ -90,9 +93,15 @@ async def get_synopsis(project_id: str = Depends(get_project_dependency)):
 async def update_synopsis(content_in: ContentBlockUpdate = Body(...), project_id: str = Depends(get_project_dependency)):
     """
     Update (or create) the project synopsis content for the specified project.
+    This will also trigger indexing of the content.
     """
-    file_path = file_service._get_content_block_path(project_id, "synopsis.md")
-    file_service.write_text_file(file_path, content_in.content)
+    try:
+        # --- Use the new dedicated write method that handles indexing ---
+        file_service.write_content_block_file(project_id, "synopsis.md", content_in.content)
+    except HTTPException as e:
+        print(f"Error updating synopsis for project {project_id}: {e.detail}")
+        raise e
+
     return ContentBlockRead(project_id=project_id, content=content_in.content)
 
 
@@ -102,9 +111,9 @@ async def get_world_info(project_id: str = Depends(get_project_dependency)):
     """
     Get the worldbuilding info content for the specified project.
     """
-    file_path = file_service._get_content_block_path(project_id, "world.md")
     try:
-        content = file_service.read_text_file(file_path)
+        # --- Use the new dedicated read method ---
+        content = file_service.read_content_block_file(project_id, "world.md")
     except HTTPException as e:
         if e.status_code == 404:
              content = ""
@@ -116,7 +125,13 @@ async def get_world_info(project_id: str = Depends(get_project_dependency)):
 async def update_world_info(content_in: ContentBlockUpdate = Body(...), project_id: str = Depends(get_project_dependency)):
     """
     Update (or create) the worldbuilding info content for the specified project.
+    This will also trigger indexing of the content.
     """
-    file_path = file_service._get_content_block_path(project_id, "world.md")
-    file_service.write_text_file(file_path, content_in.content)
+    try:
+        # --- Use the new dedicated write method that handles indexing ---
+        file_service.write_content_block_file(project_id, "world.md", content_in.content)
+    except HTTPException as e:
+        print(f"Error updating world info for project {project_id}: {e.detail}")
+        raise e
+
     return ContentBlockRead(project_id=project_id, content=content_in.content)
