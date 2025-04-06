@@ -60,22 +60,31 @@ export const deleteCharacter = (projectId, characterId) => apiClient.delete(`/pr
 
 // --- Content Block Endpoints (Plan, Synopsis, World) ---
 
-// Example for Plan:
 export const getPlan = (projectId) => apiClient.get(`/projects/${projectId}/plan`);
 export const updatePlan = (projectId, data) => apiClient.put(`/projects/${projectId}/plan`, data); // data: { content: "..." }
 
-// Example for Synopsis:
 export const getSynopsis = (projectId) => apiClient.get(`/projects/${projectId}/synopsis`);
 export const updateSynopsis = (projectId, data) => apiClient.put(`/projects/${projectId}/synopsis`, data); // data: { content: "..." }
 
-// Example for World:
 export const getWorldInfo = (projectId) => apiClient.get(`/projects/${projectId}/world`);
 export const updateWorldInfo = (projectId, data) => apiClient.put(`/projects/${projectId}/world`, data); // data: { content: "..." }
+
+// --- AI Endpoints ---
+
+/**
+ * Sends a query to the AI for a specific project context.
+ * @param {string} projectId - The ID of the project.
+ * @param {object} data - The request body, containing the query. e.g., { query: "User's question" }
+ * @returns {Promise<AxiosResponse<any>>} - The Axios response promise. Expected data format: { answer: "...", source_nodes: [...] }
+ */
+export const queryProjectContext = (projectId, data) => apiClient.post(`/ai/query/${projectId}`, data);
 
 
 // Optional: Add interceptors for error handling or adding auth tokens later
 // apiClient.interceptors.response.use(response => response, error => {
 //   console.error("API call error:", error.response || error.message);
+//   // Handle specific errors globally if needed
+//   // if (error.response && error.response.status === 401) { /* Handle unauthorized */ }
 //   return Promise.reject(error);
 // });
 

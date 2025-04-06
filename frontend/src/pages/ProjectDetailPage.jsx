@@ -22,6 +22,8 @@ import {
     listCharacters, createCharacter, deleteCharacter,
     listScenes, createScene, deleteScene
 } from '../api/codexApi';
+import QueryInterface from '../components/QueryInterface';
+
 
 function ProjectDetailPage() {
     const { projectId } = useParams();
@@ -39,7 +41,6 @@ function ProjectDetailPage() {
     const [error, setError] = useState(null);
     const [newChapterTitle, setNewChapterTitle] = useState('');
     const [newCharacterName, setNewCharacterName] = useState('');
-
     // --- State for Editing Project Name ---
     const [isEditingName, setIsEditingName] = useState(false);
     const [editedProjectName, setEditedProjectName] = useState('');
@@ -47,7 +48,8 @@ function ProjectDetailPage() {
     const [saveNameError, setSaveNameError] = useState(null);
     const [saveNameSuccess, setSaveNameSuccess] = useState('');
 
-    // --- Main useEffect for Data Fetching ---
+
+    // --- useEffect for Data Fetching ---
     useEffect(() => {
         let isMounted = true;
         setError(null);
@@ -141,8 +143,8 @@ function ProjectDetailPage() {
         };
     }, [projectId]);
 
-    // --- Action Handlers ---
 
+    // --- Action Handlers ---
     const refreshChaptersAndScenes = async () => {
          setIsLoadingChapters(true);
          setIsLoadingScenes(true);
@@ -180,7 +182,6 @@ function ProjectDetailPage() {
     const handleCreateChapter = async (e) => {
         e.preventDefault();
         if (!newChapterTitle.trim()) return;
-        // --- CHANGE: Start order from 1 ---
         const nextOrder = chapters.length > 0 ? Math.max(...chapters.map(c => c.order)) + 1 : 1;
         setIsLoadingChapters(true);
         try {
@@ -242,7 +243,6 @@ function ProjectDetailPage() {
     };
 
     const handleCreateScene = async (chapterId) => {
-         // --- CHANGE: Start order from 1 ---
          const currentScenes = scenes[chapterId] || [];
          const nextOrder = currentScenes.length > 0 ? Math.max(...currentScenes.map(s => s.order)) + 1 : 1;
          setIsLoadingScenes(true);
@@ -272,7 +272,6 @@ function ProjectDetailPage() {
          }
     };
 
-    // --- Handlers for Editing Project Name ---
     const handleEditNameClick = () => {
         setEditedProjectName(project?.name || '');
         setIsEditingName(true);
@@ -321,7 +320,7 @@ function ProjectDetailPage() {
          return <p>Loading project...</p>;
      }
 
-    if (error) {
+    if (error && !isLoading) { // Only show main error if not loading something else
         return (
              <div>
                 <p style={{ color: 'red' }}>Error: {error}</p>
@@ -346,8 +345,8 @@ function ProjectDetailPage() {
                 <Link to="/"> &lt; Back to Project List</Link>
             </nav>
 
-            {/* --- Project Header with Editable Name --- */}
-            <div style={{ display: 'flex', alignItems: 'center', marginBottom: '0.5rem' }}>
+            {/* Project Header */}
+             <div style={{ display: 'flex', alignItems: 'center', marginBottom: '0.5rem' }}>
                 {!isEditingName ? (
                     <>
                         <h1 style={{ marginRight: '1rem', marginBottom: 0 }}>
@@ -380,10 +379,14 @@ function ProjectDetailPage() {
             </div>
             {saveNameError && <p style={{ color: 'red', marginTop: '0.2rem' }}>{saveNameError}</p>}
             {saveNameSuccess && <p style={{ color: 'green', marginTop: '0.2rem' }}>{saveNameSuccess}</p>}
-
-
             <p>ID: {projectId}</p>
             <hr />
+
+            {/* --- AI Query Interface --- */}
+            {/* Render the QueryInterface only if projectId is available */}
+            {projectId && <QueryInterface projectId={projectId} />}
+            <hr /> {/* Add separator */}
+
 
             {/* Chapters Section */}
             <section>
@@ -393,7 +396,6 @@ function ProjectDetailPage() {
                     chapters.map(chapter => (
                         <div key={chapter.id} style={{ border: '1px solid #eee', padding: '10px', marginBottom: '10px' }}>
                             <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '5px' }}>
-                                {/* Display 1-based order */}
                                 <strong>{chapter.order}: {chapter.title}</strong>
                                 <button onClick={() => handleDeleteChapter(chapter.id, chapter.title)} style={{ marginLeft: '1rem', color: 'red', cursor: 'pointer' }} disabled={isLoadingChapters || isLoadingScenes}>
                                     Delete Chapter
@@ -404,7 +406,6 @@ function ProjectDetailPage() {
                                     {(scenes[chapter.id] || []).map(scene => (
                                         <li key={scene.id} style={{ marginBottom: '0.3rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                              <Link to={`/projects/${projectId}/chapters/${chapter.id}/scenes/${scene.id}`}>
-                                                {/* Display 1-based order */}
                                                 {scene.order}: {scene.title}
                                             </Link>
                                              <button onClick={() => handleDeleteScene(chapter.id, scene.id, scene.title)} style={{ marginLeft: '1rem', fontSize: '0.8em', color: 'orange', cursor: 'pointer' }} disabled={isLoadingScenes}>
@@ -433,7 +434,7 @@ function ProjectDetailPage() {
             <hr />
 
             {/* Characters Section */}
-            <section>
+             <section>
                 <h2>Characters</h2>
                 {isLoadingCharacters ? <p>Loading characters...</p> : (
                  <ul>
