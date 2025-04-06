@@ -1,4 +1,3 @@
-# backend/app/services/scene_service.py
 # Copyright 2025 Antimortine
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -18,7 +17,7 @@ from app.models.scene import SceneCreate, SceneUpdate, SceneRead, SceneList
 from app.services.file_service import file_service
 from app.services.chapter_service import chapter_service
 from app.models.common import generate_uuid
-from app.rag.index_manager import index_manager
+# No direct index_manager import needed here anymore
 import logging
 
 logger = logging.getLogger(__name__)
@@ -37,14 +36,9 @@ class SceneService:
         if file_service.path_exists(scene_path):
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Scene ID collision")
 
-        # Create the scene markdown file (basic write)
-        file_service.write_text_file(scene_path, scene_in.content)
-
-        try:
-            logger.info(f"Indexing new scene: {scene_path}")
-            index_manager.index_file(scene_path)
-        except Exception as e:
-            logger.error(f"ERROR: Failed to index new scene {scene_id}: {e}")
+        # Create the scene markdown file and trigger indexing
+        # Pass trigger_index=True
+        file_service.write_text_file(scene_path, scene_in.content, trigger_index=True)
 
         # Update chapter metadata using file_service
         chapter_metadata = file_service.read_chapter_metadata(project_id, chapter_id)
@@ -52,8 +46,6 @@ class SceneService:
 
         for existing_id, data in chapter_metadata['scenes'].items():
              if data.get('order') == scene_in.order:
-                 # Consider rollback? For now, just raise.
-                 logger.error(f"Scene order conflict: Order {scene_in.order} exists for scene '{data.get('title', existing_id)}'")
                  # Attempt to clean up the created file if order conflicts
                  try:
                       file_service.delete_file(scene_path) # This will also attempt index deletion
@@ -68,7 +60,7 @@ class SceneService:
             "title": scene_in.title,
             "order": scene_in.order
         }
-        file_service.write_chapter_metadata(project_id, chapter_id, chapter_metadata)
+        file_service.write_chapter_metadata(project_id, chapter_id, chapter_metadata) # JSON, no index trigger
 
         return SceneRead(
             id=scene_id,
@@ -118,7 +110,6 @@ class SceneService:
         for scene_id, data in scenes_meta.items():
             try:
                  # Use get_by_id to read content and handle missing file errors
-                 # This implicitly uses the updated get_by_id which uses file_service for meta
                  scene_data = self.get_by_id(project_id, chapter_id, scene_id)
                  scenes.append(scene_data)
             except HTTPException as e:
@@ -160,20 +151,17 @@ class SceneService:
             meta_updated = True
 
         if meta_updated:
-            file_service.write_chapter_metadata(project_id, chapter_id, chapter_metadata)
+            file_service.write_chapter_metadata(project_id, chapter_id, chapter_metadata) # JSON, no index trigger
 
         content_updated = False
         if scene_in.content is not None and scene_in.content != existing_scene.content:
             scene_path = file_service._get_scene_path(project_id, chapter_id, scene_id)
-            file_service.write_text_file(scene_path, scene_in.content) # Basic write
+            # Write MD file and trigger indexing
+            # Pass trigger_index=True
+            file_service.write_text_file(scene_path, scene_in.content, trigger_index=True)
             existing_scene.content = scene_in.content
             content_updated = True
-
-            try:
-                logger.info(f"Content updated for scene {scene_id}, re-indexing...")
-                index_manager.index_file(scene_path)
-            except Exception as e:
-                logger.error(f"ERROR: Failed to re-index updated scene {scene_id}: {e}")
+            # No need for separate index call here anymore
 
         return existing_scene
 
@@ -204,10 +192,11 @@ class SceneService:
         file_service.delete_file(scene_path)
 
         if scene_exists_in_meta:
+            # Re-read metadata to avoid race conditions if possible, though unlikely here
             chapter_metadata = file_service.read_chapter_metadata(project_id, chapter_id)
             if scene_id in chapter_metadata.get('scenes', {}):
                 del chapter_metadata['scenes'][scene_id]
-                file_service.write_chapter_metadata(project_id, chapter_id, chapter_metadata)
+                file_service.write_chapter_metadata(project_id, chapter_id, chapter_metadata) # JSON, no index
                 logger.info(f"Scene {scene_id} removed from chapter metadata.")
             else:
                  logger.warning(f"Scene {scene_id} was in metadata initially but disappeared before final write.")

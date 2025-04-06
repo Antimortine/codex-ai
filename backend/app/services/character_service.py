@@ -17,7 +17,7 @@ from app.models.character import CharacterCreate, CharacterUpdate, CharacterRead
 from app.services.file_service import file_service
 from app.services.project_service import project_service
 from app.models.common import generate_uuid
-from app.rag.index_manager import index_manager
+# No direct index_manager import needed here anymore
 import logging
 
 logger = logging.getLogger(__name__)
@@ -36,14 +36,9 @@ class CharacterService:
         if file_service.path_exists(character_path):
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Character ID collision")
 
-        # Create the character markdown file with description (using basic write)
-        file_service.write_text_file(character_path, character_in.description)
-
-        try:
-            logger.info(f"Indexing new character: {character_path}")
-            index_manager.index_file(character_path)
-        except Exception as e:
-            logger.error(f"ERROR: Failed to index new character {character_id}: {e}")
+        # Create the character markdown file with description and trigger indexing
+        # Pass trigger_index=True
+        file_service.write_text_file(character_path, character_in.description, trigger_index=True)
 
         # Update project metadata using file_service
         project_metadata = file_service.read_project_metadata(project_id)
@@ -52,7 +47,7 @@ class CharacterService:
         project_metadata['characters'][character_id] = {
             "name": character_in.name
         }
-        file_service.write_project_metadata(project_id, project_metadata)
+        file_service.write_project_metadata(project_id, project_metadata) # JSON, no index trigger
 
         return CharacterRead(
             id=character_id,
@@ -97,16 +92,16 @@ class CharacterService:
         characters = []
         for char_id, data in chars_meta.items():
              # Basic check if file exists before adding? Optional, adds overhead. Let's skip for now.
-             # character_path = file_service._get_character_path(project_id, char_id)
-             # if file_service.path_exists(character_path):
-             characters.append(CharacterRead(
-                 id=char_id,
-                 project_id=project_id,
-                 name=data.get("name", f"Character {char_id}"),
-                 description="" # Don't include description in list view
-             ))
-             # else:
-             #    logger.warning(f"Skipping character {char_id} in list view: file missing.")
+             character_path_check = file_service._get_character_path(project_id, char_id)
+             if file_service.path_exists(character_path_check):
+                 characters.append(CharacterRead(
+                     id=char_id,
+                     project_id=project_id,
+                     name=data.get("name", f"Character {char_id}"),
+                     description="" # Don't include description in list view
+                 ))
+             else:
+                 logger.warning(f"Skipping character {char_id} in list view: description file missing.")
 
 
         characters.sort(key=lambda c: c.name)
@@ -114,7 +109,7 @@ class CharacterService:
 
     def update(self, project_id: str, character_id: str, character_in: CharacterUpdate) -> CharacterRead:
         """Updates character name or description."""
-        existing_character = self.get_by_id(project_id, character_id)
+        existing_character = self.get_by_id(project_id, character_id) # checks existence
 
         project_metadata = file_service.read_project_metadata(project_id)
         char_data = project_metadata.get('characters', {}).get(character_id)
@@ -130,19 +125,17 @@ class CharacterService:
             meta_updated = True
 
         if meta_updated:
-            file_service.write_project_metadata(project_id, project_metadata)
+            file_service.write_project_metadata(project_id, project_metadata) # JSON, no index trigger
+
         description_updated = False
         if character_in.description is not None and character_in.description != existing_character.description:
             character_path = file_service._get_character_path(project_id, character_id)
-            file_service.write_text_file(character_path, character_in.description) # Basic write
+            # Write MD file and trigger indexing
+            # Pass trigger_index=True
+            file_service.write_text_file(character_path, character_in.description, trigger_index=True)
             existing_character.description = character_in.description
             description_updated = True
-
-            try:
-                logger.info(f"Description updated for character {character_id}, re-indexing...")
-                index_manager.index_file(character_path)
-            except Exception as e:
-                logger.error(f"ERROR: Failed to re-index updated character {character_id}: {e}")
+            # No need for separate index call here anymore
 
         return existing_character
 
@@ -151,7 +144,6 @@ class CharacterService:
         # Check existence using metadata first for efficiency
         project_metadata = file_service.read_project_metadata(project_id)
         if character_id not in project_metadata.get('characters', {}):
-             # If not in meta, check if file exists just in case of inconsistency
              character_path_check = file_service._get_character_path(project_id, character_id)
              if not file_service.path_exists(character_path_check):
                   raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Character not found")
@@ -167,7 +159,7 @@ class CharacterService:
         project_metadata = file_service.read_project_metadata(project_id)
         if character_id in project_metadata.get('characters', {}):
             del project_metadata['characters'][character_id]
-            file_service.write_project_metadata(project_id, project_metadata)
+            file_service.write_project_metadata(project_id, project_metadata) # JSON, no index
             logger.info(f"Character {character_id} removed from project metadata.")
         else:
             logger.warning(f"Character {character_id} was already missing from project metadata during delete.")

@@ -17,7 +17,8 @@ import json
 from pathlib import Path
 from fastapi import HTTPException, status
 from app.core.config import BASE_PROJECT_DIR
-from app.rag.index_manager import index_manager
+# ---- REMOVE the direct import of index_manager here ----
+# from app.rag.index_manager import index_manager
 import logging
 
 logger = logging.getLogger(__name__)
@@ -25,6 +26,7 @@ logger = logging.getLogger(__name__)
 class FileService:
 
     # --- Path Helper Methods ---
+    # ... (remain unchanged) ...
     def _get_project_path(self, project_id: str) -> Path:
         """Returns the path to the project directory."""
         return BASE_PROJECT_DIR / project_id
@@ -39,6 +41,7 @@ class FileService:
 
     def _get_scenes_dir(self, project_id: str, chapter_id: str) -> Path:
         """Returns the path to the scenes directory within a chapter."""
+        # In our current structure, scenes are directly in the chapter dir
         return self._get_chapter_path(project_id, chapter_id)
 
     def _get_scene_path(self, project_id: str, chapter_id: str, scene_id: str) -> Path:
@@ -68,8 +71,9 @@ class FileService:
          """Path to the chapter's metadata file (contains scene info)."""
          return self._get_chapter_path(project_id, chapter_id) / "chapter_meta.json"
 
-    # --- Core File Operations ---
 
+    # --- Core File Operations ---
+    # ... (path_exists, create_directory, read_text_file unchanged) ...
     def path_exists(self, path: Path) -> bool:
         """Checks if a path exists."""
         return path.exists()
@@ -92,11 +96,30 @@ class FileService:
             logger.error(f"Error reading file {path}: {e}")
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Could not read {path.name}")
 
-    def write_text_file(self, path: Path, content: str):
-        """Writes content to a text file, creating parent dirs if needed. Does NOT index."""
+    def write_text_file(self, path: Path, content: str, trigger_index: bool = False):
+        """
+        Writes content to a text file, creating parent dirs if needed.
+        Optionally triggers indexing if trigger_index is True and it's a markdown file.
+        """
         self.create_directory(path.parent)
         try:
             path.write_text(content, encoding='utf-8')
+            logger.debug(f"Wrote text file: {path}")
+
+            # --- Trigger Indexing Conditionally ---
+            if trigger_index and path.suffix.lower() == '.md' and BASE_PROJECT_DIR.resolve() in path.resolve().parents:
+                 # ---- Local Import ----
+                 from app.rag.index_manager import index_manager
+                 # ---------------------
+                 try:
+                     logger.info(f"Content updated for {path.name}, triggering indexing...")
+                     # Call index_file asynchronously if it becomes async, otherwise call directly
+                     # await index_manager.index_file(path) # If index_file is async
+                     index_manager.index_file(path) # If index_file is sync
+                 except Exception as e:
+                     # Log error but don't necessarily fail the write operation
+                     logger.error(f"ERROR: Failed to trigger indexing for {path.name}: {e}", exc_info=True)
+
         except IOError as e:
             logger.error(f"Error writing file {path}: {e}")
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Could not write to {path.name}")
@@ -112,25 +135,30 @@ class FileService:
             return {}
 
     def write_json_file(self, path: Path, data: dict):
-        """Writes data to a JSON file using the non-indexing write_text_file."""
+        """Writes data to a JSON file. Does NOT trigger indexing."""
         try:
             content = json.dumps(data, indent=4)
-            self.write_text_file(path, content)
+            # Use write_text_file WITHOUT triggering index for JSON
+            self.write_text_file(path, content, trigger_index=False)
+            logger.debug(f"Successfully wrote JSON file: {path}")
         except TypeError as e:
             logger.error(f"Error encoding JSON for {path}: {e}")
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Could not format data for {path.name}")
 
-    # [ ... existing delete_file, delete_directory, list_subdirectories, list_markdown_files ... ]
     def delete_file(self, path: Path):
         """Deletes a file and triggers index deletion if applicable."""
         should_delete_from_index = path.suffix.lower() == '.md' and BASE_PROJECT_DIR.resolve() in path.resolve().parents
 
         if should_delete_from_index:
-            try:
-                logger.info(f"Attempting deletion from index before deleting file: {path}")
-                index_manager.delete_doc(path)
-            except Exception as e:
-                logger.warning(f"Error deleting document {path.name} from index during file delete: {e}")
+             # ---- Local Import ----
+             from app.rag.index_manager import index_manager
+             # ---------------------
+             try:
+                 logger.info(f"Attempting deletion from index before deleting file: {path}")
+                 # await index_manager.delete_doc(path) # If delete_doc is async
+                 index_manager.delete_doc(path) # If delete_doc is sync
+             except Exception as e:
+                 logger.warning(f"Error deleting document {path.name} from index during file delete: {e}")
 
         if not self.path_exists(path):
              if should_delete_from_index:
@@ -152,12 +180,16 @@ class FileService:
         """Deletes a directory and its contents recursively, including index cleanup."""
         if self.path_exists(path) and path.is_dir():
             logger.info(f"Attempting index deletion for all .md files within directory: {path}")
+             # ---- Local Import ----
+            from app.rag.index_manager import index_manager
+             # ---------------------
             markdown_files = list(path.rglob('*.md'))
             for md_file in markdown_files:
                 if BASE_PROJECT_DIR.resolve() in md_file.resolve().parents:
                     try:
                         logger.info(f"Attempting deletion from index for: {md_file}")
-                        index_manager.delete_doc(md_file)
+                         # await index_manager.delete_doc(md_file) # If delete_doc is async
+                        index_manager.delete_doc(md_file) # If delete_doc is sync
                     except Exception as e:
                         logger.warning(f"Error deleting document {md_file.name} from index during directory delete: {e}")
 
@@ -174,6 +206,7 @@ class FileService:
             logger.error(f"Error deleting directory {path}: {e}")
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Could not delete {path.name}")
 
+    # ... (list_subdirectories, list_markdown_files unchanged) ...
     def list_subdirectories(self, path: Path) -> list[str]:
         """Lists names of immediate subdirectories."""
         if not self.path_exists(path) or not path.is_dir(): return []
@@ -186,6 +219,7 @@ class FileService:
         try: return [f.stem for f in path.iterdir() if f.is_file() and f.suffix.lower() == '.md']
         except OSError as e: logger.error(f"Error listing markdown files in {path}: {e}"); return []
 
+
     # --- Specific Structure Creators ---
     def setup_project_structure(self, project_id: str):
         """Creates the basic directory structure for a new project."""
@@ -193,9 +227,11 @@ class FileService:
         self.create_directory(project_path)
         self.create_directory(self._get_chapters_dir(project_id))
         self.create_directory(self._get_characters_dir(project_id))
-        self.write_content_block_file(project_id, "plan.md", "")
-        self.write_content_block_file(project_id, "synopsis.md", "")
-        self.write_content_block_file(project_id, "world.md", "")
+        # Write initial files - use trigger_index=True for content blocks
+        self.write_text_file(self._get_content_block_path(project_id, "plan.md"), "", trigger_index=True)
+        self.write_text_file(self._get_content_block_path(project_id, "synopsis.md"), "", trigger_index=True)
+        self.write_text_file(self._get_content_block_path(project_id, "world.md"), "", trigger_index=True)
+        # Write metadata (JSON files don't get indexed)
         self.write_project_metadata(project_id, {"project_name": "", "chapters": {}, "characters": {}})
 
 
@@ -203,26 +239,23 @@ class FileService:
          """Creates the basic directory structure for a new chapter."""
          chapter_path = self._get_chapter_path(project_id, chapter_id)
          self.create_directory(chapter_path)
-         self.write_chapter_metadata(project_id, chapter_id, {"scenes": {}})
+         self.write_chapter_metadata(project_id, chapter_id, {"scenes": {}}) # JSON, no index trigger
 
     # --- Methods for Content Blocks with Indexing ---
+    # Modified to use the updated write_text_file
     def write_content_block_file(self, project_id: str, block_name: str, content: str):
         """Writes content block file AND triggers indexing."""
         path = self._get_content_block_path(project_id, block_name)
-        self.write_text_file(path, content)
-        try:
-            logger.info(f"Content updated for {path.name}, indexing...")
-            index_manager.index_file(path)
-        except Exception as e:
-            logger.error(f"ERROR: Failed to index content block {path.name}: {e}")
+        # Pass trigger_index=True to the core write method
+        self.write_text_file(path, content, trigger_index=True)
 
     def read_content_block_file(self, project_id: str, block_name: str) -> str:
          """Reads content block file."""
          path = self._get_content_block_path(project_id, block_name)
          return self.read_text_file(path)
 
-    # --- NEW: Centralized Metadata I/O Methods ---
-
+    # --- Centralized Metadata I/O Methods ---
+    # ... (read/write_project/chapter_metadata remain unchanged) ...
     def read_project_metadata(self, project_id: str) -> dict:
         """Reads the project_meta.json file for a given project."""
         metadata_path = self._get_project_metadata_path(project_id)
@@ -271,6 +304,7 @@ class FileService:
         except HTTPException as e:
             logger.error(f"Failed to write chapter metadata for {chapter_id} in {project_id}: {e.detail}")
             raise e
+
 
 # Create a single instance
 file_service = FileService()
