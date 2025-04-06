@@ -62,7 +62,7 @@ class RagEngine:
         logger.debug(f"RagEngine Facade: Delegating query for project '{project_id}' to QueryProcessor.")
         return await self.query_processor.query(project_id, query_text)
 
-    # --- Updated Signature ---
+    # --- MODIFIED: Updated Signature to accept explicit context ---
     async def generate_scene(
         self,
         project_id: str,
@@ -99,4 +99,5 @@ try:
      rag_engine = RagEngine()
 except Exception as e:
      logger.critical(f"Failed to create RagEngine facade instance on startup: {e}", exc_info=True)
-     raise
+     # Propagate the error to prevent the app from starting incorrectly
+     raise RuntimeError(f"Failed to initialize RagEngine: {e}") from e

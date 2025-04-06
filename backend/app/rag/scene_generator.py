@@ -14,7 +14,7 @@
 
 import logging
 import asyncio
-# Removed unused imports: HTTPException, status, file_service
+# Removed file_service import and related unused imports
 from llama_index.core.retrievers import VectorIndexRetriever
 from llama_index.core.vector_stores import ExactMatchFilter, MetadataFilters
 from llama_index.core.base.response.schema import NodeWithScore
@@ -54,6 +54,7 @@ class SceneGenerator:
         chapter_id: str,
         prompt_summary: Optional[str],
         previous_scene_order: Optional[int], # Still useful for the retrieval query
+        # --- MODIFIED: Accept explicit context as arguments ---
         explicit_plan: str,
         explicit_synopsis: str,
         explicit_previous_scenes: List[Tuple[int, str]] # Now receives loaded scenes
@@ -66,7 +67,7 @@ class SceneGenerator:
             project_id: The ID of the project.
             chapter_id: The ID of the chapter for the new scene.
             prompt_summary: An optional user-provided summary to guide generation.
-            previous_scene_order: The order number of the scene immediately preceding.
+            previous_scene_order: The order number of the scene immediately preceding (used for retrieval query).
             explicit_plan: The loaded content of the project plan.
             explicit_synopsis: The loaded content of the project synopsis.
             explicit_previous_scenes: A list of (order, content) tuples for preceding scenes.
@@ -78,6 +79,7 @@ class SceneGenerator:
 
         try:
             # --- 1. Retrieve RAG Context --- (Explicit context is now passed in)
+            # Retrieval query can still benefit from knowing the intended position
             retrieval_query = f"Context relevant for writing a new scene after scene order {previous_scene_order} in chapter {chapter_id}."
             if prompt_summary:
                 retrieval_query += f" Scene focus: {prompt_summary}"
@@ -115,22 +117,23 @@ class SceneGenerator:
             # Construct Previous Scenes part of the prompt using the passed data
             previous_scenes_prompt_part = ""
             if explicit_previous_scenes:
+                 # Find the highest order number among the provided previous scenes
+                 actual_previous_order = max(order for order, _ in explicit_previous_scenes) if explicit_previous_scenes else None
                  for order, content in explicit_previous_scenes: # Assumes already sorted chronologically
-                      label = f"Immediately Previous Scene (Order: {order})" if order == previous_scene_order else f"Previous Scene (Order: {order})"
+                      # Use the actual highest order found in the list for the "Immediately Previous" label
+                      label = f"Immediately Previous Scene (Order: {order})" if order == actual_previous_order else f"Previous Scene (Order: {order})"
                       previous_scenes_prompt_part += f"**{label}:**\n```markdown\n{content}\n```\n\n"
             else:
                  previous_scenes_prompt_part = "**Previous Scene(s):** N/A (Generating the first scene)\n\n"
 
-            # --- MODIFIED: Construct main instruction based on prompt_summary ---
+            # Construct main instruction based on prompt_summary
             main_instruction = ""
             if prompt_summary:
                 main_instruction = f"Please write a draft for the next scene, focusing on the following guidance: '{prompt_summary}'. It should follow the previous scene(s) provided below.\n\n"
             else:
                 main_instruction = "Please write a draft for the next scene, ensuring it follows the previous scene(s) provided below.\n\n"
-            # --- END MODIFICATION ---
 
             user_message_content = (
-                # Use the dynamic main_instruction
                 f"{main_instruction}"
                 # Use the passed explicit context strings
                 f"**Project Plan:**\n```markdown\n{explicit_plan}\n```\n\n"
@@ -141,15 +144,9 @@ class SceneGenerator:
                 f"- Belongs to: Chapter ID '{chapter_id}'\n"
                 f"- Should logically follow the provided previous scene(s).\n"
             )
-            # --- REMOVED redundant User Guidance/Focus line ---
-            # if prompt_summary:
-            #     user_message_content += f"- User Guidance/Focus for New Scene: {prompt_summary}\n\n"
-            # else:
-            #     user_message_content += "- User Guidance/Focus for New Scene: (None provided - focus on natural progression from the previous scene(s) and overall context)\n\n"
-            # --- END REMOVAL ---
 
             user_message_content += (
-                "\n**Instructions:**\n" # Added newline for spacing
+                "\n**Instructions:**\n"
                 "- Generate the new scene content in pure Markdown format.\n"
                 "- Start directly with the scene content (e.g., a heading like '## Scene Title' or directly with narrative).\n"
                 "- Ensure the new scene flows logically from the previous scene(s).\n"
@@ -160,8 +157,7 @@ class SceneGenerator:
             full_prompt = f"{system_prompt}\n\nUser: {user_message_content}\n\nAssistant:"
 
             # Log the full prompt for debugging
-            logger.debug(f"SceneGenerator: Full prompt being sent to LLM (length: {len(full_prompt)}):\n--- PROMPT START ---\n{full_prompt}\n--- PROMPT END ---")
-
+            # logger.debug(f"SceneGenerator: Full prompt being sent to LLM (length: {len(full_prompt)}):\n--- PROMPT START ---\n{full_prompt}\n--- PROMPT END ---")
             logger.info("Calling LLM for enhanced scene generation...")
             llm_response = await self.llm.acomplete(full_prompt)
 
@@ -176,4 +172,5 @@ class SceneGenerator:
 
         except Exception as e:
             logger.error(f"Error during scene generation processing for project '{project_id}', chapter '{chapter_id}': {e}", exc_info=True)
+            # Return a specific error message that can be shown to the user
             return f"Error: An unexpected error occurred during scene generation. Please check logs."

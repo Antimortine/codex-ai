@@ -23,7 +23,7 @@ from app.models.ai import (
 from llama_index.core.base.response.schema import NodeWithScore
 from typing import List, Tuple, Optional, Dict # Import Optional, Dict
 
-# Import FileService to load explicit context
+# --- MODIFIED: Import FileService to load explicit context ---
 from app.services.file_service import file_service
 from app.core.config import settings # Import settings for PREVIOUS_SCENE_COUNT
 
@@ -43,7 +43,7 @@ class AIService:
              logger.critical("RagEngine instance is None! AIService cannot function.")
              raise RuntimeError("Failed to initialize AIService due to missing RagEngine.")
         self.rag_engine = rag_engine
-        # Store reference to file service
+        # --- MODIFIED: Store reference to file service ---
         self.file_service = file_service
         logger.info("AIService initialized.")
 
@@ -65,25 +65,30 @@ class AIService:
         """
         logger.info(f"AIService: Processing scene generation request for project {project_id}, chapter {chapter_id}, previous order: {request_data.previous_scene_order}")
 
+        # --- MODIFIED: Initialize variables for explicit context ---
         explicit_plan = "Not Available"
         explicit_synopsis = "Not Available"
         explicit_previous_scenes: List[Tuple[int, str]] = []
 
         try:
-            # --- Load Explicit Context using FileService ---
+            # --- MODIFIED: Load Explicit Context using FileService ---
             logger.debug("AIService: Loading explicit context...")
             try:
                  explicit_plan = self.file_service.read_content_block_file(project_id, "plan.md")
                  logger.debug(f"AIService: Loaded plan.md (Length: {len(explicit_plan)})")
             except HTTPException as e:
-                 if e.status_code == 404: logger.warning("AIService: plan.md not found.")
+                 if e.status_code == 404:
+                      logger.warning("AIService: plan.md not found.")
+                      explicit_plan = "" # Use empty string if not found
                  else: raise # Re-raise other file errors
 
             try:
                  explicit_synopsis = self.file_service.read_content_block_file(project_id, "synopsis.md")
                  logger.debug(f"AIService: Loaded synopsis.md (Length: {len(explicit_synopsis)})")
             except HTTPException as e:
-                 if e.status_code == 404: logger.warning("AIService: synopsis.md not found.")
+                 if e.status_code == 404:
+                      logger.warning("AIService: synopsis.md not found.")
+                      explicit_synopsis = "" # Use empty string if not found
                  else: raise
 
             # Load Previous Scene(s)
@@ -91,34 +96,48 @@ class AIService:
             if previous_scene_order is not None and previous_scene_order > 0 and PREVIOUS_SCENE_COUNT > 0:
                 logger.debug(f"AIService: Attempting to load up to {PREVIOUS_SCENE_COUNT} previous scene(s) ending at order {previous_scene_order}")
                 try:
+                    # Read chapter metadata to find scene IDs by order
                     chapter_metadata = self.file_service.read_chapter_metadata(project_id, chapter_id)
                     scenes_by_order: Dict[int, str] = {
                          data.get('order'): scene_id
-                         for scene_id, data in chapter_metadata.get('scenes', {}).items() if data.get('order') is not None
+                         for scene_id, data in chapter_metadata.get('scenes', {}).items()
+                         if data.get('order') is not None and isinstance(data.get('order'), int) # Ensure order is valid int
                     }
 
                     loaded_count = 0
+                    # Iterate downwards from the previous scene's order
                     for target_order in range(previous_scene_order, 0, -1):
-                        if loaded_count >= PREVIOUS_SCENE_COUNT: break
+                        if loaded_count >= PREVIOUS_SCENE_COUNT:
+                            break # Stop if we've loaded enough scenes
+
                         scene_id_to_load = scenes_by_order.get(target_order)
                         if scene_id_to_load:
                             try:
+                                # Construct path and read scene content
                                 scene_path = self.file_service._get_scene_path(project_id, chapter_id, scene_id_to_load)
                                 content = self.file_service.read_text_file(scene_path)
                                 explicit_previous_scenes.append((target_order, content))
                                 loaded_count += 1
                                 logger.debug(f"AIService: Loaded previous scene (Order: {target_order}, ID: {scene_id_to_load}, Length: {len(content)})")
                             except HTTPException as scene_load_err:
-                                if scene_load_err.status_code == 404: logger.warning(f"AIService: Scene file not found for order {target_order} (ID: {scene_id_to_load}), skipping.")
-                                else: logger.error(f"AIService: Error loading scene file order {target_order}: {scene_load_err.detail}")
-                        else: logger.debug(f"AIService: No scene found with order {target_order} in metadata.")
+                                # Log errors if a specific scene file is missing, but continue
+                                if scene_load_err.status_code == 404:
+                                    logger.warning(f"AIService: Scene file not found for order {target_order} (ID: {scene_id_to_load}), skipping.")
+                                else:
+                                    logger.error(f"AIService: Error loading scene file order {target_order}: {scene_load_err.detail}")
+                        else:
+                            logger.debug(f"AIService: No scene found with order {target_order} in metadata.")
 
-                    explicit_previous_scenes.reverse() # Ensure chronological order
+                    # Ensure the scenes are in chronological order (lowest order first) for the prompt
+                    explicit_previous_scenes.reverse()
 
                 except HTTPException as e:
-                    if e.status_code == 404: logger.warning(f"AIService: Chapter metadata not found for {chapter_id} while loading previous scenes: {e.detail}")
-                    else: raise
+                    # Handle errors reading chapter metadata (e.g., chapter not found)
+                    if e.status_code == 404:
+                        logger.warning(f"AIService: Chapter metadata not found for {chapter_id} while loading previous scenes: {e.detail}")
+                    else: raise # Re-raise other errors
                 except Exception as general_err:
+                     # Catch unexpected errors during scene loading loop
                      logger.error(f"AIService: Unexpected error loading previous scenes: {general_err}", exc_info=True)
             # --- End Loading Explicit Context ---
 
@@ -131,7 +150,7 @@ class AIService:
                  logger.debug(f"    - Scene Order {order} Length: {len(content)}")
             # -------------------------------------------
 
-            # Delegate to RagEngine (which delegates to SceneGenerator)
+            # --- MODIFIED: Delegate to RagEngine, passing the loaded explicit context ---
             generated_content = await self.rag_engine.generate_scene(
                 project_id=project_id,
                 chapter_id=chapter_id,
@@ -169,10 +188,10 @@ class AIService:
     async def rephrase_text(self, project_id: str, request_data: AIRephraseRequest) -> List[str]:
         """
         Handles the business logic for rephrasing selected text.
-        Delegates to RagEngine. (Could also load explicit context here if needed for rephrase).
+        Delegates to RagEngine.
         """
-        # ... (rephrase_text remains unchanged) ...
         logger.info(f"AIService: Processing rephrase request for project {project_id}. Text: '{request_data.selected_text[:50]}...'")
+        # No changes needed here for this refactoring
         suggestions = await self.rag_engine.rephrase(
             project_id=project_id,
             selected_text=request_data.selected_text,
@@ -201,4 +220,5 @@ try:
     ai_service = AIService()
 except Exception as e:
      logger.critical(f"Failed to create AIService instance on startup: {e}", exc_info=True)
-     raise
+     # Propagate the error to prevent the app from starting incorrectly
+     raise RuntimeError(f"Failed to initialize AIService: {e}") from e
