@@ -24,7 +24,7 @@ ALLOWED_EXTENSIONS = {
     '.json', '.yaml', '.yml', '.toml',                 # Config/Data
     '.sh', '.bash', '.zsh',                            # Shell scripts
     'dockerfile', '.dockerignore',                     # Docker (Dockerfiles often have no extension)
-    '.gitignore', '.env', '.env.example',             # Other common text files
+    '.gitignore', '.env.example',                      # Other common text files (Removed .env)
     '.sql', '.csv',                                    # Data related
     '.xml',                                             # Markup
 }
@@ -35,6 +35,7 @@ EXCLUDED_DIRS = {
 }
 EXCLUDED_FILES = {
     'package-lock.json', 'yarn.lock',
+    '.env', # --- ADDED: Explicitly exclude the .env file ---
 }
 PATH_SEPARATOR_REPLACEMENT = '___'
 
@@ -59,14 +60,17 @@ def should_process_path(path: Path, source_dir: Path) -> bool:
     # Using lowercase for case-insensitive comparison
     parts_lower = {part.lower() for part in relative_path.parts}
     if any(part in EXCLUDED_DIRS for part in parts_lower):
+        # print(f"Debug: Skipping '{path}' due to excluded directory part.") # Optional debug
         return False
 
     # Check against excluded filenames (case-insensitive)
     if path.is_file() and path.name.lower() in EXCLUDED_FILES:
+        # print(f"Debug: Skipping '{path}' due to excluded filename.") # Optional debug
         return False
 
     # Check if it's a file and likely text-based
     if path.is_file() and not is_likely_text_file(path):
+        # print(f"Debug: Skipping '{path}' due to non-text extension/name.") # Optional debug
         return False
 
     # If it passed all checks, process it
@@ -127,12 +131,13 @@ def create_flat_copy(source_dir_str: str, target_dir_str: str):
 
         # Check if the original path should be processed (respects exclusions based on path name)
         if not should_process_path(item, source_dir):
+             # Only count as skipped file if it's actually a file or a symlink pointing to a non-directory
              if item.is_file() or (item.is_symlink() and not item.is_dir()):
                  skipped_files_count +=1
              continue
         # Also check the resolved path (in case symlink points to excluded type/name)
         # Note: resolved_item might be outside source_dir, should_process_path handles this
-        if not should_process_path(resolved_item, source_dir):
+        if resolved_item != item and not should_process_path(resolved_item, source_dir):
              if resolved_item.is_file(): # Only count as skipped file if resolved is file
                   skipped_files_count += 1
              continue
@@ -162,7 +167,7 @@ def create_flat_copy(source_dir_str: str, target_dir_str: str):
                 skipped_files_count += 1
         elif item.is_dir():
              pass # Already handled by rglob implicitly
-        else: # Other types
+        else: # Other types like broken symlinks not caught earlier
              skipped_files_count += 1
 
     print("\n--- Processing Complete ---")
@@ -178,7 +183,7 @@ if __name__ == "__main__":
         description="Flatten a project directory structure into a single directory, "
                     "copying only specified text files and renaming them to include "
                     "their original relative path (and original extension) "
-                    "followed by the .txt extension."
+                    "followed by the .txt extension. Excludes specific directories and files like .env."
     )
     parser.add_argument(
         "source_dir",
