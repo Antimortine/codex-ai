@@ -1,5 +1,3 @@
-# backend___app___rag___rephraser.py.txt
-
 # Copyright 2025 Antimortine
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -29,7 +27,8 @@ from app.core.config import settings
 logger = logging.getLogger(__name__)
 
 # Use settings for configuration
-REPHRASE_SIMILARITY_TOP_K = settings.RAG_GENERATION_SIMILARITY_TOP_K # Reuse generation K for context retrieval
+# Using generation K for context retrieval during edits for now, could be a separate setting
+REPHRASE_SIMILARITY_TOP_K = settings.RAG_GENERATION_SIMILARITY_TOP_K
 REPHRASE_SUGGESTION_COUNT = settings.RAG_REPHRASE_SUGGESTION_COUNT # Number of suggestions
 
 class Rephraser:
@@ -67,9 +66,15 @@ class Rephraser:
         """
         logger.info(f"Rephraser: Starting rephrase for project '{project_id}'. Text: '{selected_text[:50]}...'")
 
+        if not selected_text.strip():
+             logger.warning("Rephraser: Received empty selected_text. Returning empty suggestions.")
+             return [] # Return empty list if input is empty/whitespace
+
         try:
             # 1. Construct Retrieval Query based on the text to be rephrased
-            retrieval_query = f"Context relevant to the following text: {selected_text}"
+            # Include surrounding context if available for better retrieval relevance
+            retrieval_context = f"{context_before or ''} {selected_text} {context_after or ''}".strip()
+            retrieval_query = f"Context relevant to the following passage: {retrieval_context}"
             logger.debug(f"Constructed retrieval query for rephrase: '{retrieval_query}'")
 
             # 2. Retrieve Context
@@ -91,35 +96,47 @@ class Rephraser:
                       char_name = node.metadata.get('character_name')
                       char_info = f" [Character: {char_name}]" if char_name else ""
                       rag_context_list.append(f"Source: {node.metadata.get('file_path', 'N/A')}{char_info}\n\n{node.get_content()}")
-            rag_context_str = "\n\n---\n\n".join(rag_context_list) if rag_context_list else "No additional context retrieved via search."
+            rag_context_str = "\n\n---\n\n".join(rag_context_list) if rag_context_list else "No specific context was retrieved via search."
 
             # 3. Build Rephrase Prompt
             logger.debug("Building rephrase prompt...")
             system_prompt = (
                 "You are an expert writing assistant. Your task is to rephrase the user's selected text, providing several alternative phrasings. "
-                "Use the surrounding text and the broader project context provided to ensure the suggestions fit naturally and maintain consistency."
+                "Use the surrounding text and the broader project context provided to ensure the suggestions fit naturally and maintain consistency with the overall narrative style and tone."
             )
 
             user_message_content = (
-                f"Please provide {REPHRASE_SUGGESTION_COUNT} alternative ways to phrase the following selected text, considering the context.\n\n"
+                f"Please provide {REPHRASE_SUGGESTION_COUNT} alternative ways to phrase the 'Text to Rephrase' below, considering the context.\n\n"
                 f"**Broader Project Context:**\n```markdown\n{rag_context_str}\n```\n\n"
-                f"**Text to Rephrase:**\n```\n{selected_text}\n```\n\n"
             )
-            if context_before:
-                user_message_content += f"**Text Immediately Before Selection:**\n```\n{context_before}\n```\n\n"
-            if context_after:
-                user_message_content += f"**Text Immediately After Selection:**\n```\n{context_after}\n```\n\n"
+            # Add surrounding context if provided
+            if context_before or context_after:
+                 user_message_content += "**Surrounding Text:**\n```\n"
+                 if context_before:
+                      user_message_content += f"{context_before}\n"
+                 user_message_content += f"[[[--- TEXT TO REPHRASE ---]]]\n{selected_text}\n[[[--- END TEXT TO REPHRASE ---]]]\n"
+                 if context_after:
+                      user_message_content += f"{context_after}\n"
+                 user_message_content += "```\n\n"
+            else:
+                 # If no surrounding context, just show the text to rephrase
+                 user_message_content += f"**Text to Rephrase:**\n```\n{selected_text}\n```\n\n"
+
 
             user_message_content += (
                 f"**Instructions:**\n"
                 f"- Provide exactly {REPHRASE_SUGGESTION_COUNT} distinct suggestions.\n"
+                f"- Each suggestion should be a plausible replacement for the original 'Text to Rephrase'.\n"
+                f"- Maintain the original meaning and intent as closely as possible.\n"
+                f"- Ensure the suggestions fit grammatically and stylistically within the surrounding text (if provided) and the broader context.\n"
                 f"- Present the suggestions as a numbered list, starting with '1.'.\n"
-                f"- Each suggestion should be a plausible replacement for the original selected text.\n"
-                f"- Do NOT add explanations, commentary, or apologies before or after the numbered list.\n"
+                f"- Do NOT add explanations, commentary, apologies, or introductory/concluding phrases before or after the numbered list.\n"
                 f"- Just output the numbered list of suggestions."
             )
 
             full_prompt = f"{system_prompt}\n\nUser: {user_message_content}\n\nAssistant:"
+            # Optional: Log the full prompt for debugging
+            # logger.debug(f"Rephraser: Full prompt being sent to LLM (length: {len(full_prompt)}):\n--- PROMPT START ---\n{full_prompt}\n--- PROMPT END ---")
             logger.info("Calling LLM for rephrase suggestions...")
             llm_response = await self.llm.acomplete(full_prompt)
 
@@ -131,13 +148,23 @@ class Rephraser:
 
             # 5. Parse the Numbered List Response
             logger.debug(f"Raw LLM response for parsing:\n{generated_text}")
+            # Regex to find lines starting with number, dot, optional space, capturing the rest
             suggestions = re.findall(r"^\s*\d+\.\s*(.*)", generated_text, re.MULTILINE)
 
             if not suggestions:
                 logger.warning(f"Could not parse numbered list from LLM response. Response was:\n{generated_text}")
-                return [f"Error: Could not parse suggestions. Raw response: {generated_text}"]
+                # Attempt fallback: split by newline if no numbered list found
+                suggestions = [line.strip() for line in generated_text.splitlines() if line.strip()]
+                if not suggestions:
+                     return [f"Error: Could not parse suggestions. Raw response: {generated_text}"]
+                logger.warning(f"Fallback parsing used (split by newline), got {len(suggestions)} potential suggestions.")
 
-            suggestions = [s.strip() for s in suggestions]
+
+            # Clean up potential leading/trailing whitespace from parsed suggestions
+            suggestions = [s.strip() for s in suggestions if s.strip()] # Ensure no empty strings
+
+            # Limit to the requested number of suggestions in case the LLM provided more
+            suggestions = suggestions[:REPHRASE_SUGGESTION_COUNT]
 
             logger.info(f"Successfully parsed {len(suggestions)} rephrase suggestions for project '{project_id}'.")
             return suggestions
