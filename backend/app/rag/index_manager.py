@@ -111,6 +111,7 @@ class IndexManager:
         """
         Loads, parses, embeds, and inserts/updates a single file's content into the index.
         If the document already exists (based on file_path), it's deleted first.
+        Empty files are skipped.
         """
         if not isinstance(file_path, Path):
              logger.error(f"IndexManager.index_file called with invalid type for file_path: {type(file_path)}")
@@ -119,55 +120,59 @@ class IndexManager:
             logger.warning(f"IndexManager.index_file called with non-existent file: {file_path}")
             return
 
+        try:
+            if file_path.stat().st_size == 0:
+                logger.info(f"Skipping indexing for empty file: {file_path}")
+                # --- Ensure any previous index entry for this path (if it existed and wasn't empty before) is removed ---
+                doc_id_for_empty = str(file_path)
+                try:
+                    logger.debug(f"Attempting to delete nodes for now-empty file: {doc_id_for_empty}")
+                    self.index.delete_ref_doc(ref_doc_id=doc_id_for_empty, delete_from_docstore=True)
+                    logger.info(f"Successfully deleted existing nodes for now-empty file: {doc_id_for_empty} (if they existed).")
+                except Exception as delete_error:
+                    logger.warning(f"Could not delete nodes for now-empty file {doc_id_for_empty} (may not have existed): {delete_error}")
+                return # Stop processing this file
+        except OSError as e:
+             logger.error(f"Could not check file size for {file_path}: {e}")
+             return # Cannot process if we can't check size
+
         logger.info(f"IndexManager: Received request to index/update file: {file_path}")
         doc_id = str(file_path) # Use the file path string as the unique document ID
 
         try:
             # 1. Attempt to delete existing document nodes first to ensure update
+            # This uses the doc_id which we will explicitly set on the new Document object
             logger.debug(f"Attempting to delete existing nodes for doc_id: {doc_id}")
             try:
-                # delete_from_docstore=True ensures associated text is removed if stored separately
                 self.index.delete_ref_doc(ref_doc_id=doc_id, delete_from_docstore=True)
                 logger.info(f"Successfully deleted existing nodes for doc_id: {doc_id} (if they existed).")
             except Exception as delete_error:
-                 # This might happen if the doc didn't exist, which is fine for an update/insert flow.
-                 # Log as warning or debug. Specific error types could be caught if needed.
                  logger.warning(f"Could not delete nodes for doc_id {doc_id} (may not have existed): {delete_error}")
 
 
             # 2. Load the new document content
             logger.debug(f"Loading document content from: {file_path}")
-            # SimpleDirectoryReader automatically adds 'file_path' metadata
             reader = SimpleDirectoryReader(input_files=[file_path])
             documents = reader.load_data()
 
             if not documents:
+                # This case should be less likely now due to the empty file check above, but keep as safeguard
                 logger.warning(f"No documents loaded from file: {file_path}. Skipping insertion.")
                 return
 
-            # Ensure the ref_doc_id is set correctly if needed (usually automatic)
-            # for doc in documents:
-            #     doc.id_ = doc_id # Explicitly set if SimpleDirectoryReader doesn't
+            for doc in documents:
+                doc.id_ = doc_id # Assign the file path string as the document's ID
 
-            # 3. Insert the new document nodes
+            # 3. Insert the new document(s)
             logger.debug(f"Inserting new nodes for doc_id: {doc_id}")
-            # insert_nodes handles parsing, embedding, and storage via the index's components
-            # LlamaIndex v0.10+ uses index.insert() for Document objects
-            # If documents is a list of Document objects:
             for doc in documents:
                 self.index.insert(doc) # Use insert for individual documents
-            # If using older LlamaIndex or if insert_nodes is preferred for Node objects:
-            # nodes = LlamaSettings.node_parser.get_nodes_from_documents(documents)
-            # self.index.insert_nodes(nodes)
-
-            # Note: ChromaDB persistence is handled automatically by the VectorStore setup
 
             logger.info(f"Successfully indexed/updated file: {file_path}")
 
         except Exception as e:
             logger.error(f"Error indexing file {file_path}: {e}", exc_info=True)
-            # Depending on requirements, you might want to raise this error
-            # raise
+            # raise # Optionally re-raise
 
     def delete_doc(self, file_path: Path):
         """
@@ -182,15 +187,12 @@ class IndexManager:
 
         try:
             logger.debug(f"Attempting to delete nodes for doc_id: {doc_id}")
-            # delete_from_docstore=True ensures associated text is removed if stored separately
+            # This should now work because the inserted documents had their id_ set to doc_id
             self.index.delete_ref_doc(ref_doc_id=doc_id, delete_from_docstore=True)
-            # Note: ChromaDB persistence is handled automatically
-
             logger.info(f"Successfully deleted nodes for file {file_path} from index (if they existed).")
         except Exception as e:
-            # Log error, but don't necessarily crash if deletion fails (e.g., doc already gone)
             logger.error(f"Error deleting document for file {file_path} (doc_id: {doc_id}): {e}", exc_info=True)
-            # raise # Optionally re-raise if deletion failure is critical
+            # raise # Optionally re-raise
 
     # --- Stage 3 Query/Retrieval Methods (Placeholder) ---
     # def query(self, query_text: str, project_id: str):
@@ -202,12 +204,8 @@ class IndexManager:
 
 
 # --- Singleton Instance ---
-# Create a single instance of the IndexManager to be used throughout the application.
-# This will trigger the __init__ process on application startup.
 try:
     index_manager = IndexManager()
 except Exception as e:
     logger.critical(f"Failed to create IndexManager instance on startup: {e}", exc_info=True)
-    # Handle critical failure: maybe exit, or provide a dummy manager
-    # For now, let it raise to prevent the app starting in a broken state
     raise
