@@ -28,6 +28,7 @@ logger = logging.getLogger(__name__)
 # --- Configuration moved to config.py ---
 # SIMILARITY_TOP_K = settings.RAG_QUERY_SIMILARITY_TOP_K
 # GENERATION_SIMILARITY_TOP_K = settings.RAG_GENERATION_SIMILARITY_TOP_K
+# REPHRASE_SIMILARITY_TOP_K = settings.RAG_GENERATION_SIMILARITY_TOP_K # Reuse generation K for now
 
 class RagEngine:
     """
@@ -53,19 +54,8 @@ class RagEngine:
         logger.info("RagEngine initialized, using components from IndexManager.")
 
     async def query(self, project_id: str, query_text: str) -> Tuple[str, List[NodeWithScore]]:
-        """
-        Performs a RAG query against the index, filtered by project_id.
-
-        Args:
-            project_id: The ID of the project to scope the query to.
-            query_text: The user's query.
-
-        Returns:
-            A tuple containing:
-            - The response string from the LLM.
-            - A list of LlamaIndex NodeWithScore objects representing the retrieved source nodes.
-            Returns ("Error message", []) on failure.
-        """
+        """Performs a RAG query against the index, filtered by project_id."""
+        # ... (query method remains unchanged) ...
         logger.info(f"RagEngine: Received query for project '{project_id}': '{query_text}'")
 
         if not self.index or not self.llm:
@@ -121,19 +111,10 @@ class RagEngine:
             error_message = f"Sorry, an error occurred while processing your query for project '{project_id}'. Please check the backend logs for details."
             return error_message, []
 
+
     async def generate_scene(self, project_id: str, chapter_id: str, prompt_summary: Optional[str]) -> str:
-        """
-        Generates a scene draft using RAG context for the given project and chapter.
-
-        Args:
-            project_id: The ID of the project to scope the context to.
-            chapter_id: The ID of the chapter this scene belongs to (for context/prompting).
-            prompt_summary: An optional user-provided summary to guide generation.
-
-        Returns:
-            The generated scene content as a Markdown string.
-            Returns an error message string on failure.
-        """
+        """Generates a scene draft using RAG context for the given project and chapter."""
+        # ... (generate_scene method remains unchanged) ...
         logger.info(f"RagEngine: Starting scene generation for project '{project_id}', chapter '{chapter_id}'. Summary: '{prompt_summary}'")
 
         if not self.index or not self.llm:
@@ -195,19 +176,14 @@ class RagEngine:
             )
 
             # Using a chat-like structure can sometimes yield better results with models like Gemini
-            messages = [
-                 {"role": "system", "content": system_prompt},
-                 {"role": "user", "content": user_message_content}
-            ]
+            # messages = [
+            #      {"role": "system", "content": system_prompt},
+            #      {"role": "user", "content": user_message_content}
+            # ]
 
-            # 4. Call LLM Asynchronously
-            logger.info("Calling LLM for scene generation...")
-            # Use achat for async chat completion if available and preferred, or acomplete
-            # Assuming self.llm has an async chat method or similar
-            # Adjust based on the specific LlamaIndex Gemini wrapper implementation
-            # For now, let's assume `acomplete` can take a structured prompt or we format it.
             # Formatting as a single string for `acomplete`:
             full_prompt = f"{system_prompt}\n\nUser: {user_message_content}\n\nAssistant:"
+            logger.info("Calling LLM for scene generation...")
             llm_response = await self.llm.acomplete(full_prompt)
 
             # Extract the generated text (adjust based on actual response structure)
@@ -225,6 +201,61 @@ class RagEngine:
             logger.error(f"Error during scene generation for project '{project_id}', chapter '{chapter_id}': {e}", exc_info=True)
             error_message = f"Sorry, an error occurred while generating the scene draft for project '{project_id}'. Please check the backend logs for details."
             return error_message
+
+    async def rephrase(self, project_id: str, selected_text: str, context_before: Optional[str], context_after: Optional[str]) -> List[str]:
+        """
+        Rephrases the selected text using RAG context.
+
+        Args:
+            project_id: The ID of the project for context retrieval.
+            selected_text: The text snippet to rephrase.
+            context_before: Optional text immediately preceding the selection.
+            context_after: Optional text immediately following the selection.
+
+        Returns:
+            A list of rephrased suggestions (strings).
+            Returns ["Error: ..."] on failure.
+        """
+        logger.info(f"RagEngine: Starting rephrase for project '{project_id}'. Text: '{selected_text[:50]}...'")
+
+        if not self.index or not self.llm:
+            logger.error("RagEngine cannot rephrase: Index or LLM is not available.")
+            return ["Error: RAG components are not properly initialized."]
+
+        try:
+            # --- Placeholder Implementation ---
+            # TODO: Implement actual RAG logic for rephrasing:
+            # 1. Construct a retrieval query based on selected_text and maybe surrounding context.
+            # 2. Retrieve relevant context using VectorIndexRetriever filtered by project_id.
+            #    (Use RAG_GENERATION_SIMILARITY_TOP_K or a dedicated setting).
+            # 3. Build a detailed prompt for the LLM:
+            #    - Include retrieved project context.
+            #    - Include context_before and context_after if provided.
+            #    - Clearly state the selected_text to be rephrased.
+            #    - Instruct the LLM to provide *multiple* alternative phrasings (e.g., 3 options).
+            #    - Specify the output format (e.g., a numbered list or JSON list).
+            # 4. Call self.llm.acomplete(prompt).
+            # 5. Parse the LLM response to extract the list of suggestions. Handle cases where the LLM doesn't follow format.
+
+            logger.warning("rephrase called, but using placeholder implementation.")
+
+            # Simulate LLM call returning a few options
+            await asyncio.sleep(0.1) # Simulate async work
+
+            # Simple placeholder suggestions
+            suggestions = [
+                f"Alternative 1: This is a rephrased version of '{selected_text}'.",
+                f"Alternative 2: Consider saying '{selected_text}' this way instead.",
+                f"Alternative 3: Another option for '{selected_text}'.",
+            ]
+
+            logger.info(f"Rephrase placeholder successful for project '{project_id}'.")
+            return suggestions
+
+        except Exception as e:
+            logger.error(f"Error during rephrase for project '{project_id}': {e}", exc_info=True)
+            return [f"Error: An error occurred while rephrasing. Please check logs."]
+
 
 # --- Singleton Instance ---
 # No change needed here

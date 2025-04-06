@@ -41,6 +41,21 @@ class AISceneGenerationRequest(BaseModel):
 class AISceneGenerationResponse(BaseModel):
     generated_content: str = Field(..., description="The generated Markdown content for the scene draft.")
 
-# Add other models for editing requests/responses later
-# class AIEditRequest(...)
-# class AIEditResponse(...)
+
+# --- Text Editing Models ---
+
+class AIRephraseRequest(BaseModel):
+    selected_text: str = Field(..., description="The text selected by the user for rephrasing.")
+    context_before: Optional[str] = Field(None, description="Optional text immediately preceding the selection for better context.")
+    context_after: Optional[str] = Field(None, description="Optional text immediately following the selection for better context.")
+    # Add other potential fields: desired_tone, target_audience, etc.
+
+class AIRephraseResponse(BaseModel):
+    suggestions: List[str] = Field(..., description="A list of alternative phrasings for the selected text.")
+
+
+# Add other models for editing requests/responses later (Summarize, Expand, etc.)
+# class AISummarizeRequest(...)
+# class AISummarizeResponse(...)
+# class AIExpandRequest(...)
+# class AIExpandResponse(...)

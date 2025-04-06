@@ -23,7 +23,9 @@ from app.models.ai import (
     AIQueryResponse,
     SourceNodeModel,
     AISceneGenerationRequest,
-    AISceneGenerationResponse
+    AISceneGenerationResponse,
+    AIRephraseRequest,     # Import new request model
+    AIRephraseResponse     # Import new response model
 )
 # Import dependencies for checking project/chapter existence
 from app.api.v1.endpoints.content_blocks import get_project_dependency # Checks project exists
@@ -51,6 +53,7 @@ async def query_project_context(
     - **project_id**: The UUID of the project to query within.
     - **query_request**: Contains the user's query text.
     """
+    # ... (query_project_context remains unchanged) ...
     logger.info(f"Received AI query request for project {project_id}: '{query_request.query}'")
     try:
         # Call the AIService method - it now returns a tuple
@@ -104,6 +107,7 @@ async def generate_scene_draft(
     - **chapter_id**: The UUID of the parent chapter (in path).
     - **request_data**: Contains optional guidance for generation (e.g., prompt_summary).
     """
+    # ... (generate_scene_draft remains unchanged) ...
     project_id, chapter_id = ids
     logger.info(f"Received AI scene generation request for project {project_id}, chapter {chapter_id}. Summary: '{request_data.prompt_summary}'")
 
@@ -115,7 +119,7 @@ async def generate_scene_draft(
         )
 
         # Check if the service returned an error message (simple check for now)
-        if generated_content.startswith("Error:"):
+        if isinstance(generated_content, str) and generated_content.startswith("Error:"):
              logger.error(f"Scene generation failed for project {project_id}, chapter {chapter_id}: {generated_content}")
              raise HTTPException(
                  status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
@@ -136,6 +140,53 @@ async def generate_scene_draft(
         )
 
 
-# --- Add other AI endpoints later ---
-# @router.post("/edit/text/{project_id}", ...)
-# async def edit_text(...)
+@router.post(
+    "/edit/rephrase/{project_id}",
+    response_model=AIRephraseResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Rephrase Selected Text (RAG)",
+    description="Provides alternative phrasings for the selected text, using project context."
+)
+async def rephrase_text_endpoint(
+    request_data: AIRephraseRequest = Body(...),
+    project_id: str = Depends(get_project_dependency) # Ensures project exists
+):
+    """
+    Rephrases the provided text using AI based on project context.
+
+    - **project_id**: The UUID of the project context to use (in path).
+    - **request_data**: Contains the text to rephrase (`selected_text`) and optional surrounding context (`context_before`, `context_after`).
+    """
+    logger.info(f"Received AI rephrase request for project {project_id}. Text: '{request_data.selected_text[:50]}...'")
+
+    try:
+        suggestions = await ai_service.rephrase_text(
+            project_id=project_id,
+            request_data=request_data
+        )
+
+        # Check if the service returned an error message (simple check for now)
+        if suggestions and isinstance(suggestions[0], str) and suggestions[0].startswith("Error:"):
+             logger.error(f"Rephrasing failed for project {project_id}: {suggestions[0]}")
+             raise HTTPException(
+                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                 detail=f"Failed to rephrase text: {suggestions[0]}"
+             )
+
+        logger.info(f"Successfully generated {len(suggestions)} rephrase suggestions for project {project_id}.")
+        return AIRephraseResponse(suggestions=suggestions)
+
+    except HTTPException as http_exc:
+         # Re-raise HTTPException (e.g., 404 from dependency)
+         raise http_exc
+    except Exception as e:
+        logger.error(f"Error processing AI rephrase request for project {project_id}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to process AI rephrase request for project {project_id}."
+        )
+
+
+# --- Add other AI editing endpoints later ---
+# @router.post("/edit/summarize/{project_id}", ...)
+# async def summarize_text_endpoint(...)

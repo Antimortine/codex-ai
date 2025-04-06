@@ -14,7 +14,8 @@
 
 import logging
 from app.rag.engine import rag_engine
-from app.models.ai import AISceneGenerationRequest # Import the new request model
+# Import new request/response models
+from app.models.ai import AISceneGenerationRequest, AIRephraseRequest, AIRephraseResponse
 from llama_index.core.base.response.schema import NodeWithScore
 from typing import List, Tuple
 
@@ -62,7 +63,25 @@ class AIService:
         )
         return generated_content
 
+    async def rephrase_text(self, project_id: str, request_data: AIRephraseRequest) -> List[str]:
+        """
+        Handles the business logic for rephrasing selected text.
+        Delegates to RagEngine.
+        """
+        logger.info(f"AIService: Processing rephrase request for project {project_id}. Text: '{request_data.selected_text[:50]}...'")
+        # Delegate to RagEngine
+        suggestions = await self.rag_engine.rephrase(
+            project_id=project_id,
+            selected_text=request_data.selected_text,
+            context_before=request_data.context_before,
+            context_after=request_data.context_after
+        )
+        return suggestions
+
+
     # --- Add other methods later ---
+    # async def summarize_text(...)
+    # async def expand_text(...)
     # async def suggest_edits(...)
 
 # --- Create a singleton instance ---
