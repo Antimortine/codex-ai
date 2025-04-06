@@ -1,56 +1,77 @@
-
-Based on the structure and choices we've made so far for Codex AI, here are the key software design principles and patterns we are implicitly or explicitly incorporating:
+Based on the structure and implementation choices made for Codex AI up to the completion of the backend RAG query functionality, here are the key software design principles and patterns being utilized:
 
 1.  **Separation of Concerns (SoC):**
     
-    -   **Frontend/Backend Split:** The most obvious separation. The React frontend handles the user interface and user experience, while the FastAPI backend handles business logic, data persistence, and AI interactions. They communicate via a well-defined API.
+    -   **Frontend/Backend Split:** Clear division between UI (React) and logic/data/AI (FastAPI).
         
-    -   **Layered Architecture (within Backend):** We are structuring the backend into distinct layers:
+    -   **Layered Backend Architecture:**
         
-        -   **API Layer (app/api/):** Handles HTTP requests/responses, routing, data validation (via Pydantic/FastAPI). It knows what the user wants.
+        -   **API Layer (app/api/):** Handles HTTP, routing, request/response validation (FastAPI/Pydantic).
             
-        -   **Service Layer (app/services/):** Contains the core business logic. It knows how to fulfill the request (e.g., orchestrate file operations, call RAG logic). This layer is called by the API layer.
+        -   **Service Layer (app/services/):** Contains business logic orchestration (e.g., AIService calling RagEngine, CRUD services calling FileService).
             
-        -   **Data Access/Utility Layer (Implicit - FileService, RAG module):** Handles the low-level details of interacting with external systems like the file system, vector database (via LlamaIndex), and external AI APIs (via LlamaIndex).
+        -   **RAG Subsystem (app/rag/):** Isolates AI-specific logic. Further divided into:
             
-    -   **Modular Routers (FastAPI):** Breaking down API endpoints into separate files (projects.py, chapters.py, etc.) and using APIRouter improves organization within the API layer.
+            -   IndexManager: Index lifecycle, setup, CUD operations.
+                
+            -   RagEngine: Querying, retrieval logic, LLM interaction for queries.
+                
+        -   **Utility/Data Access Layer (FileService):** Centralizes file system interactions (Markdown content, JSON metadata) and triggers indexing.
+            
+    -   **Modular Routers (FastAPI):** API endpoints organized by feature (projects, chapters, ai, etc.).
         
 2.  **API-First Design:**
     
-    -   We started by defining the data contracts (Pydantic models) and API endpoint signatures before implementing the full logic. This ensures a clear interface between the frontend and backend. FastAPI's automatic documentation generation reinforces this.
+    -   Defined data contracts (Pydantic models) and API signatures early, facilitating clear communication between frontend and backend. FastAPI's auto-docs reinforce this.
         
 3.  **Dependency Injection (via FastAPI):**
     
-    -   Although we haven't fully implemented it yet (e.g., the get_project_service placeholder), FastAPI is built around dependency injection. This allows us to easily provide dependencies (like service instances or database connections) to our endpoint functions, making the code more testable and decoupled.
+    -   FastAPI manages dependencies (like get_project_dependency), promoting testability and decoupling, although manual singleton management is used for services/engines currently.
         
 4.  **Modularity and Extensibility (via LlamaIndex Abstractions):**
     
-    -   By using LlamaIndex's LLM, VectorStore, and BaseEmbedding interfaces, we are designing the RAG component to be pluggable. We can swap out Gemini for OpenAI, or ChromaDB for Weaviate, by changing the configuration or implementing a different adapter, without rewriting the core service logic that uses these components. This is a form of the **Strategy Pattern** or **Adapter Pattern**.
+    -   Using LlamaIndex's LLM, VectorStore, BaseEmbedding interfaces allows swapping core AI components (Gemini, ChromaDB, Google Embeddings) by changing configuration/adapters in IndexManager with minimal impact on RagEngine or AIService. This embodies the **Strategy Pattern** or **Adapter Pattern**.
         
-5.  **Single Responsibility Principle (SRP) (Applied to Modules/Files):**
+5.  **Single Responsibility Principle (SRP) (Applied to Modules/Classes):**
     
-    -   We aim for each module or file to have a single, well-defined responsibility. For example, projects.py handles project endpoints, project_service.py handles project business logic, FileService handles file operations. This makes the code easier to understand, modify, and test.
+    -   Each module/class aims for a focused responsibility (e.g., projects.py for project API, project_service.py for project logic, FileService for file ops, IndexManager for index CUD, RagEngine for RAG queries).
         
-6.  **Don't Repeat Yourself (DRY) (Goal):**
+6.  **Don't Repeat Yourself (DRY):**
     
-    -   By creating reusable services (like FileService) and potentially utility functions (app/utils/), we aim to avoid duplicating common logic (like constructing file paths or reading/writing files) across different parts of the application. Pydantic models also help avoid redefining data structures.
+    -   Centralizing file system access and metadata I/O (project_meta.json, chapter_meta.json) within FileService reduces duplication across CRUD services.
         
-7.  **Configuration Management:**
-    
-    -   Using .env files and a config.py with Pydantic's BaseSettings provides a structured way to manage application settings and secrets, separating configuration from code.
+    -   Path construction logic is centralized in FileService.
         
-8.  **Clear Data Contracts (Pydantic):**
+    -   Pydantic models prevent redefining data structures.
+        
+7.  **Explicit Context Management (for RAG):**
     
-    -   Pydantic models (ProjectCreate, ProjectRead, etc.) define the expected structure and types of data for API requests and responses, providing automatic validation and clear documentation.
+    -   A core principle is ensuring AI operations are scoped to the correct project. This is explicitly handled by:
+        
+        -   Injecting project_id into document metadata during indexing (IndexManager).
+            
+        -   Applying MetadataFilters during retrieval (RagEngine).
+            
+8.  **Configuration Management:**
+    
+    -   .env files and app/core/config.py (using Pydantic BaseSettings) manage settings and secrets, separating configuration from code. BASE_PROJECT_DIR is now defined here.
+        
+9.  **Clear Data Contracts (Pydantic):**
+    
+    -   Models define API request/response structures, providing validation and documentation. Includes models for AI requests/responses (AIQueryRequest, AIQueryResponse, SourceNodeModel).
         
 
 **Principles We Should Keep in Mind Going Forward:**
 
--   **Keep It Simple, Stupid (KISS):** Especially as a solo developer, avoid over-engineering solutions initially. Start simple and refactor/add complexity only when necessary.
+-   **Keep It Simple, Stupid (KISS):** Avoid over-engineering. Add complexity only when needed.
     
--   **Error Handling:** We haven't explicitly designed this yet, but proper error handling (using FastAPI's HTTPException, defining custom exceptions) will be crucial for a robust application.
+-   **Error Handling:** Continue refining error handling for robustness and user feedback.
     
--   **Testability:** While full TDD might be overkill for a solo project initially, designing with testability in mind (e.g., using dependency injection, keeping functions focused) will make adding tests later much easier.
+-   **Testability:** Design with testability in mind; plan for adding unit/integration tests.
+    
+-   **Prompt Engineering:** Recognize that prompt design will be crucial for RAG quality and requires dedicated effort.
+    
+-   **Scalability:** Consider potential bottlenecks (e.g., LLM API calls, vector DB performance) as the application grows. FastAPI's async nature helps.
     
 
-Overall, we're building on standard practices for modern web application development, emphasizing separation, clear interfaces, and leveraging the features of our chosen frameworks (FastAPI, React, LlamaIndex) to promote maintainability and future growth.
+Overall, the project follows standard practices for modern web applications, emphasizing separation, clear interfaces, and leveraging framework features. The recent refactoring (metadata I/O, RagEngine separation) has further strengthened the adherence to SoC and DRY principles, setting a good foundation for implementing more complex AI features.

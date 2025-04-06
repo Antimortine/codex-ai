@@ -1,304 +1,240 @@
-
-# Codex AI - Architecture Overview
-
-  
-
-## 1. Introduction
-
-  
-
-This document outlines the system architecture for Codex AI, an AI-powered writing assistant designed to help users create and manage long-form narrative content. The core goal is to leverage Large Language Models (LLMs) and Retrieval-Augmented Generation (RAG) to provide context-aware assistance throughout the writing process, from planning to drafting and editing.
-
-  
-
-The architecture emphasizes modularity and extensibility, allowing for future integration of different LLMs, vector databases, and embedding models.
-
-  
-
-## 2. High-Level Diagram
-
-  
-
 The system follows a typical client-server architecture with distinct components for the user interface, backend logic, AI orchestration, and data storage.
-
-  
-
+mermaid
 ```mermaid
 graph LR
     A["User @ Browser"] -- HTTP Requests --> B("React Frontend");
     B -- REST API Calls --> C("FastAPI Backend");
-    C -- Uses --> D{"LlamaIndex Orchestrator"};
-    D -- Loads/Saves --> E["File System (Markdown Content)"];
-    D -- Indexes/Retrieves --> F["Vector DB (ChromaDB)"];
-    D -- Calls --> G["LLM API (Gemini 1.5 Pro)"];
-    D -- Calls --> H["Embedding API (text-embedding-004)"];
-    G -- Response --> D;
-    H -- Embeddings --> D;
-    F -- Context Chunks --> D;
-    E -- Raw Content --> D;
-    D -- Processed Data/Responses --> C;
-    C -- REST API Responses --> B;
+    C -- Uses --> S("Services (Project, Chapter, AI, etc.)");
+    S -- Uses --> FS("FileService (MD Files, Metadata)");
+    S -- Uses --> RAG("RAG Subsystem");
+    RAG -- Contains --> IM("IndexManager (Setup, CUD)");
+    RAG -- Contains --> RE("RagEngine (Query/Retrieve)");
+    IM -- Loads/Saves --> VDB["Vector DB (ChromaDB)"];
+    RE -- Retrieves From --> VDB;
+    RE -- Uses --> LLM["LLM API (Gemini 1.5 Pro)"];
+    IM -- Uses --> EMB["Embedding API (text-embedding-004)"];
+    FS -- Reads/Writes --> STORE["File System (user_projects/)"];
+    VDB -- Stores Embeddings & Metadata --> STORE;
+
+    %% Data Flow for Query
+    C -- Query Request --> S;
+    S -- Calls query --> RE;
+    RE -- Generates Embedding --> EMB;
+    RE -- Queries (Vector + Filter) --> VDB;
+    VDB -- Returns Nodes --> RE;
+    RE -- Constructs Prompt --> LLM;
+    LLM -- Generates Response --> RE;
+    RE -- Returns Answer + Sources --> S;
+    S -- Formats Response --> C;
+    C -- API Response --> B;
     B -- Renders UI --> A;
 
+    %% Data Flow for Indexing
+    C -- Save Request --> S;
+    S -- Calls --> FS;
+    FS -- Writes --> STORE;
+    FS -- Triggers Index --> IM;
+    IM -- Loads --> STORE;
+    IM -- Generates Embeddings --> EMB;
+    IM -- Adds Metadata (project_id) --> VDB;
 ```
-
-  
-  
+    
 
 **Flow Description:**
 
-  
-
-1. The **User** interacts with the **React Frontend** in their browser.
-
-2. The **Frontend** communicates with the **FastAPI Backend** via a REST API.
-
-3. The **Backend** handles business logic and orchestrates AI tasks using **LlamaIndex**.
-
-4.  **LlamaIndex** interacts with:
-
-- The **File System** to read/write the user's Markdown project files (plan, scenes, characters, etc.).
-
-- The **Embedding API** (Google text-embedding-004) to generate vector representations of text chunks.
-
-- The **Vector DB** (ChromaDB) to store and retrieve relevant text chunks based on vector similarity.
-
-- The **LLM API** (Google Gemini 1.5 Pro) to generate text, answer questions, or perform editing tasks based on the provided context.
-
-5. Responses flow back through the layers to the user.
-
-  
+1.  The **User** interacts with the **React Frontend**.
+    
+2.  The **Frontend** sends REST API calls to the **FastAPI Backend**.
+    
+3.  The **Backend API** routes requests to the appropriate **Service** (e.g., ProjectService, AIService).
+    
+4.  **Services** orchestrate business logic:
+    
+    -   For CRUD operations, they use FileService to interact with Markdown files and metadata (project_meta.json, etc.) on the **File System**.
+        
+    -   FileService triggers the IndexManager (part of the **RAG Subsystem**) upon saving relevant content (.md files).
+        
+    -   For AI queries, AIService uses the RagEngine (also part of the **RAG Subsystem**).
+        
+5.  **RAG Subsystem:**
+    
+    -   IndexManager: Handles LlamaIndex setup, loads/updates/deletes documents in the **Vector DB (ChromaDB)**, generates embeddings via the **Embedding API**, and injects project_id metadata.
+        
+    -   RagEngine: Handles queries by creating a retriever filtered by project_id, querying the **Vector DB**, constructing prompts with retrieved context, calling the **LLM API**, and returning the answer and source nodes.
+        
+6.  Responses flow back through the layers to the user.
+    
 
 ## 3. Component Breakdown
 
-  
-
 ### 3.1. Frontend (React)
 
-  
-
--  **Technology:** React, JavaScript/TypeScript, CSS.
-
--  **UI Components:** Standard React components, @uiw/react-md-editor for Markdown editing.
-
--  **Responsibilities:**
-
-- Rendering the user interface (project navigation, editors, chat interfaces).
-
-- Handling user input and interactions.
-
-- Managing client-side state.
-
-- Communicating with the Backend via REST API calls.
-
-  
+-   **Technology:** React, JavaScript/JSX, CSS, Axios.
+    
+-   **UI Components:** Standard React components, @uiw/react-md-editor.
+    
+-   **Responsibilities:** UI rendering, user input, client-state management, API communication. (AI query UI pending).
+    
 
 ### 3.2. Backend (FastAPI)
 
-  
+-   **Technology:** Python, FastAPI, Pydantic.
+    
+-   **Responsibilities:** REST API, routing, data validation, service orchestration, error handling.
+    
+-   **Structure:** Layered (API -> Services -> Utilities/RAG). Includes AIService for AI logic orchestration.
+    
 
--  **Technology:** Python, FastAPI.
+### 3.3. RAG Subsystem (app/rag/)
 
--  **Responsibilities:**
+-   **Technology:** LlamaIndex library (Python).
+    
+-   **Components:**
+    
+    -   **IndexManager:**
+        
+        -   Initializes LlamaIndex components (LLM, Embeddings, VectorStore, StorageContext).
+            
+        -   Handles index modification: loading documents, parsing, embedding (via **Embedding API**), injecting project_id metadata, and inserting/updating/deleting nodes in the **Vector DB**.
+            
+    -   **RagEngine:**
+        
+        -   Uses components initialized by IndexManager.
+            
+        -   Performs RAG queries: Creates VectorIndexRetriever with MetadataFilters (for project_id), uses RetrieverQueryEngine to combine retrieval and **LLM API** calls, processes the response to extract the answer and source nodes.
+            
+-   **Abstraction:** Leverages LlamaIndex interfaces (LLM, VectorStore, BaseEmbedding) for potential future component swapping.
+    
 
-- Providing a RESTful API for the Frontend.
+### 3.4. Services (app/services/)
 
-- Handling user authentication and authorization (if implemented later).
+-   **Technology:** Python.
+    
+-   **Responsibilities:** Encapsulate business logic for each domain (Projects, Chapters, Scenes, Characters, AI).
+    
+    -   CRUD services use FileService for persistence and metadata.
+        
+    -   AIService uses RagEngine for AI tasks.
+        
+    -   FileService: Centralizes all direct file system interactions (reading/writing text/JSON, creating/deleting files/dirs) and triggers IndexManager for relevant file changes. Also handles metadata I/O.
+        
 
-- Managing project data (reading/writing Markdown files).
+### 3.5. LLM Service (Google Gemini 1.5 Pro)
 
-- Orchestrating RAG workflows via LlamaIndex.
+-   **Technology:** External API (Google Generative AI).
+    
+-   **Responsibilities:** Natural language understanding, text generation based on context provided by RagEngine.
+    
 
-- Handling business logic (e.g., assembling chapters/projects for export).
+### 3.6. Embedding Service (Google text-embedding-004)
 
-- Validating incoming data using Pydantic models.
+-   **Technology:** External API (Google Generative AI).
+    
+-   **Responsibilities:** Convert text chunks into vector embeddings for semantic search. Used by IndexManager.
+    
 
-  
+### 3.7. Vector Database (ChromaDB)
 
-### 3.3. RAG Orchestration (LlamaIndex)
+-   **Technology:** ChromaDB (Python library, local persistence).
+    
+-   **Responsibilities:** Store text chunks (nodes) with their embeddings and metadata (including project_id, file_path). Perform efficient vector similarity searches with metadata filtering. Accessed via LlamaIndex ChromaVectorStore adapter.
+    
 
-  
+### 3.8. Data Storage (File System)
 
--  **Technology:** LlamaIndex library (Python).
-
--  **Responsibilities:**
-
--  **Data Loading:** Loading Markdown documents from the file system.
-
--  **Chunking/Parsing:** Splitting documents into manageable, meaningful chunks (NodeParser).
-
--  **Embedding:** Calling the Embedding API (text-embedding-004) to get vectors for chunks.
-
--  **Indexing:** Storing text chunks and their vectors in the Vector DB (VectorStoreIndex using ChromaDB adapter).
-
--  **Retrieval:** Querying the Vector DB to find relevant context chunks based on user queries or generation tasks (Retriever).
-
--  **Prompt Engineering:** Constructing appropriate prompts for the LLM, incorporating retrieved context (PromptTemplate).
-
--  **LLM Interaction:** Calling the configured LLM (Gemini 1.5 Pro) with the constructed prompt (LLM interface).
-
--  **Abstraction:** Provides interfaces (LLM, VectorStore, BaseEmbedding) allowing replacement of core components (Gemini, ChromaDB, Google Embeddings) with minimal code changes in the core application logic.
-
-  
-
-### 3.4. LLM Service (Google Gemini 1.5 Pro)
-
-  
-
--  **Technology:** External API (Google Generative AI).
-
--  **Responsibilities:**
-
-- Understanding natural language prompts.
-
-- Generating coherent and contextually relevant text (scenes, answers, edits).
-
-- Processing potentially large amounts of context provided via RAG.
-
-  
-
-### 3.5. Embedding Service (Google text-embedding-004)
-
-  
-
--  **Technology:** External API (Google Generative AI).
-
--  **Responsibilities:**
-
-- Converting text chunks into dense vector representations (embeddings) suitable for semantic similarity search.
-
-  
-
-### 3.6. Vector Database (ChromaDB)
-
-  
-
--  **Technology:** ChromaDB (Python library/server).
-
--  **Responsibilities:**
-
-- Storing text chunks (or references) and their corresponding vector embeddings.
-
-- Performing efficient Approximate Nearest Neighbor (ANN) searches to find chunks semantically similar to a query vector.
-
-- (Potentially) Storing metadata alongside vectors for filtering.
-
-- Accessed via LlamaIndex's VectorStore abstraction.
-
-  
-
-### 3.7. Data Storage (File System)
-
-  
-
--  **Technology:** Server's local file system (or potentially cloud storage like S3 in a future deployment).
-
--  **Responsibilities:**
-
-- Persisting the user's project data in its native Markdown format (scenes, plan, characters, worldbuilding notes).
-
-- Organizing project data in a hierarchical structure (e.g., user_projects/<project_id>/chapters/<chapter_id>/scene_N.md).
-
-- Note: Vector DB data (ChromaDB persistence) might also reside on the file system but is managed separately.
-
-  
+-   **Technology:** Server's local file system (user_projects/ directory).
+    
+-   **Responsibilities:** Persist user project content (Markdown files) and project/chapter metadata (project_meta.json, chapter_meta.json). This is the primary source of truth for user content.
+    
+-   **Note:** ChromaDB also persists its data to the file system (chroma_db/ directory), managed separately.
+    
 
 ## 4. Key Workflows
 
-  
-
 ### 4.1. Content Indexing (RAG - Ingestion)
 
-  
+1.  User saves/updates a Markdown file via Frontend -> Backend API -> Service.
+    
+2.  Service calls FileService to write the .md file to the File System.
+    
+3.  FileService triggers IndexManager.index_file(path).
+    
+4.  IndexManager:
+    
+    -   Loads the document.
+        
+    -   Extracts project_id from the path.
+        
+    -   Parses document into Nodes.
+        
+    -   Injects project_id and file_path into each Node's metadata.
+        
+    -   Generates embeddings for Nodes via **Embedding API**.
+        
+    -   Deletes existing nodes for this doc_id (file path) from **Vector DB**.
+        
+    -   Inserts new Nodes with embeddings and metadata into **Vector DB**.
+        
 
-1. User saves/updates a Markdown file (Scene, Plan, etc.) via the Frontend.
+### 4.2. AI Query (RAG - Retrieval & Synthesis)
 
-2. Frontend sends the update to the Backend API.
-
-3. Backend saves the Markdown file to the File System.
-
-4. Backend triggers LlamaIndex ingestion pipeline:
-
-- Load the updated/new Markdown document.
-
-- Parse the document into text chunks (Nodes).
-
-- Generate embeddings for each chunk using the Embedding API.
-
-- Insert/update the chunks and their embeddings in ChromaDB.
-
-  
-
-### 4.2. AI Query/Generation (RAG - Retrieval & Synthesis)
-
-  
-
-1. User submits a request (Q&A query, scene generation prompt) via the Frontend.
-
-2. Frontend sends the request to the Backend API.
-
-3. Backend determines the core query/task.
-
-4. Backend uses LlamaIndex retrieval pipeline:
-
-- Generate an embedding for the user's query/task description.
-
-- Query ChromaDB using the Retriever to find the top-K most relevant context chunks from the project's indexed data.
-
-- (Optional) Retrieve other structured context like current plan section, character profiles directly from files.
-
-5. Backend uses LlamaIndex synthesis pipeline:
-
-- Construct a detailed prompt for the LLM (Gemini 1.5 Pro) including the original request and the retrieved context chunks.
-
-- Call the LLM API via the LlamaIndex LLM interface.
-
-6. LLM processes the prompt and generates the response (answer, scene text, etc.).
-
-7. Backend receives the LLM response.
-
-8. If it's new content (e.g., generated scene), save it to the File System and potentially trigger indexing (see 4.1).
-
-9. Backend sends the final response back to the Frontend.
-
-10. Frontend displays the response to the User.
-
-  
+1.  User submits query via Frontend -> Backend API (/ai/query/{project_id}) -> AIService.
+    
+2.  AIService.query_project calls RagEngine.query(project_id, query_text).
+    
+3.  RagEngine:
+    
+    -   Creates VectorIndexRetriever with MetadataFilters for the given project_id.
+        
+    -   Creates RetrieverQueryEngine using the filtered retriever and the configured LLM.
+        
+    -   Executes await query_engine.aquery(query_text).
+        
+        -   (Internal LlamaIndex flow: query embedding -> filtered vector search in ChromaDB -> retrieve top-K nodes -> construct prompt -> call LLM API -> get response)
+            
+    -   Extracts the answer string and source_nodes list from the LLM response object.
+        
+    -   Returns (answer, source_nodes) tuple to AIService.
+        
+4.  AIService returns the tuple to the API endpoint.
+    
+5.  API endpoint formats the source_nodes into SourceNodeModel list.
+    
+6.  API endpoint returns AIQueryResponse (containing answer and source_nodes) to the Frontend.
+    
+7.  Frontend displays the response to the User. (UI pending)
+    
 
 ## 5. Design Decisions & Principles
 
-  
-
--  **API-First:** Decoupled Frontend and Backend via a REST API promotes separation of concerns.
-
--  **Async Backend:** FastAPI enables efficient handling of I/O-bound operations (API calls to LLM/Embeddings, DB queries, file access).
-
--  **Modularity & Extensibility:** Heavy reliance on LlamaIndex abstractions allows swapping core AI components (LLM, Vector DB, Embeddings) with minimal disruption.
-
--  **Markdown as Source of Truth:** User content remains in a human-readable, portable format.
-
--  **RAG for Context:** Retrieval-Augmented Generation is central to providing the AI with relevant, up-to-date context from the user's project, improving coherence and reducing hallucinations.
-
--  **Developer Experience:** FastAPI (auto-docs), React (component model), and LlamaIndex (high-level RAG abstractions) aim for a productive development workflow.
-
-  
+-   **API-First:** Decoupled Frontend/Backend.
+    
+-   **Layered Architecture:** Clear separation (API -> Service -> RAG/Utilities).
+    
+-   **Separation of Concerns (RAG):**  IndexManager handles index lifecycle/setup, RagEngine handles querying/retrieval.
+    
+-   **Explicit Context Management:** Project isolation achieved via mandatory project_id metadata injection and filtering during retrieval.
+    
+-   **Async Backend:** FastAPI for efficient I/O.
+    
+-   **Modularity & Extensibility:** LlamaIndex abstractions.
+    
+-   **Markdown as Source of Truth:** User content remains portable.
+    
+-   **Centralized File I/O:**  FileService manages all disk access and triggers indexing.
+    
+-   **DRY:** Metadata I/O centralized in FileService.
+    
 
 ## 6. Data Storage Summary
 
-  
-
--  **User Content (Source):** Markdown files on the server's file system. Structure: user_projects/<project_id>/.... **Must be excluded from Git.**
-
--  **Vector Embeddings & Index:** Managed by ChromaDB. Persistence likely on the file system (in a configured directory) or potentially a separate DB server. **Must be excluded from Git.**
-
--  **Application Configuration:** Environment variables (.env file, excluded from Git) or config files.
-
--  **(Optional) Metadata:** Potentially a small relational DB (like SQLite) for managing project/chapter/scene order or relationships, if file-based management becomes too complex.
-
-  
+-   **User Content & Core Metadata:** Markdown files and project_meta.json/chapter_meta.json in user_projects/. **Excluded from Git.**
+    
+-   **Vector Embeddings & Index:** Managed by ChromaDB, persisted in chroma_db/. **Excluded from Git.**
+    
+-   **Application Configuration:**  .env file (excluded from Git).
+    
 
 ## 7. Deployment (Future Consideration)
 
-  
-
-A likely deployment strategy would involve containerizing the Backend (FastAPI + LlamaIndex + ChromaDB logic) and Frontend (React app served via e.g., Nginx) using Docker and orchestrating them with Docker Compose for local development and potentially for simple deployments. Cloud-native deployments (e.g., Kubernetes, Serverless functions, managed DBs) are possible future extensions.
+(Remains the same - Docker likely strategy)
