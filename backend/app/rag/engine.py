@@ -15,9 +15,10 @@
 import logging
 from llama_index.core.retrievers import VectorIndexRetriever
 from llama_index.core.query_engine import RetrieverQueryEngine
-from llama_index.core.vector_stores import ExactMatchFilter, MetadataFilters # For filtering
+from llama_index.core.vector_stores import ExactMatchFilter, MetadataFilters
+from llama_index.core.base.response.schema import Response, NodeWithScore
+from typing import List, Tuple
 
-# Import the singleton index_manager instance to access the initialized index, llm, etc.
 from app.rag.index_manager import index_manager
 
 logger = logging.getLogger(__name__)
@@ -48,7 +49,8 @@ class RagEngine:
         self.embed_model = index_manager.embed_model
         logger.info("RagEngine initialized, using components from IndexManager.")
 
-    async def query(self, project_id: str, query_text: str) -> str:
+    # --- Update return type annotation ---
+    async def query(self, project_id: str, query_text: str) -> Tuple[str, List[NodeWithScore]]:
         """
         Performs a RAG query against the index, filtered by project_id.
 
@@ -57,18 +59,19 @@ class RagEngine:
             query_text: The user's query.
 
         Returns:
-            The response string from the LLM.
-            (Will later return a structured response, potentially including source nodes).
+            A tuple containing:
+            - The response string from the LLM.
+            - A list of LlamaIndex NodeWithScore objects representing the retrieved source nodes.
+            Returns ("Error message", []) on failure.
         """
         logger.info(f"RagEngine: Received query for project '{project_id}': '{query_text}'")
 
         if not self.index or not self.llm:
              logger.error("RagEngine cannot query: Index or LLM is not available.")
-             return "Error: RAG components are not properly initialized."
+             # --- Return tuple on error ---
+             return "Error: RAG components are not properly initialized.", []
 
         try:
-            # --- RAG Query Logic Implementation ---
-
             # 1. Create a retriever with metadata filtering
             logger.debug(f"Creating retriever with top_k={SIMILARITY_TOP_K} and filter for project_id='{project_id}'")
             retriever = VectorIndexRetriever(
@@ -91,33 +94,34 @@ class RagEngine:
 
             # 3. Execute the query asynchronously
             logger.info(f"Executing RAG query: '{query_text}'")
-            response = await query_engine.aquery(query_text) # Use async query
+            response: Response = await query_engine.aquery(query_text)
             logger.info("RAG query execution complete.")
 
-            # Log retrieved source nodes for debugging (optional)
-            if hasattr(response, 'source_nodes') and response.source_nodes:
-                 logger.debug(f"Retrieved {len(response.source_nodes)} source nodes:")
-                 for i, node in enumerate(response.source_nodes):
-                      logger.debug(f"  Node {i+1}: Score={node.score:.4f}, ID={node.node_id}, Path={node.metadata.get('file_path', 'N/A')}")
-                      # logger.debug(f"    Text: {node.text[:100]}...") # Uncomment to log text snippets
-            else:
-                 logger.debug("No source nodes retrieved or available in response.")
+            # 4. Extract answer and source nodes
+            answer = str(response) if response else "(No response generated)"
+            source_nodes = response.source_nodes if hasattr(response, 'source_nodes') else []
 
-
-            # 4. Extract and return the answer string
-            # The default __str__ representation of the Response object usually contains the answer.
-            answer = str(response)
             if not answer:
                  logger.warning("LLM query returned an empty response string.")
                  answer = "(No response generated)"
 
-            logger.info(f"Query successful. Returning answer (length: {len(answer)}).")
-            return answer
+            # Log retrieved source nodes
+            if source_nodes:
+                 logger.debug(f"Retrieved {len(source_nodes)} source nodes:")
+                 for i, node in enumerate(source_nodes):
+                      logger.debug(f"  Node {i+1}: Score={node.score:.4f}, ID={node.node_id}, Path={node.metadata.get('file_path', 'N/A')}")
+            else:
+                 logger.debug("No source nodes retrieved or available in response.")
+
+            logger.info(f"Query successful. Returning answer and {len(source_nodes)} source nodes.")
+            # --- Return tuple ---
+            return answer, source_nodes
 
         except Exception as e:
             logger.error(f"Error during RAG query for project '{project_id}': {e}", exc_info=True)
-            # Return a user-friendly error message
-            return f"Sorry, an error occurred while processing your query for project '{project_id}'. Please check the backend logs for details."
+            # --- Return tuple on error ---
+            error_message = f"Sorry, an error occurred while processing your query for project '{project_id}'. Please check the backend logs for details."
+            return error_message, []
 
 
 # --- Singleton Instance ---

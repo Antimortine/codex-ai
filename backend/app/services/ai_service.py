@@ -13,12 +13,9 @@
 # limitations under the License.
 
 import logging
-# --- Import the engine instance ---
-# This import statement will trigger the execution of engine.py,
-# including the creation of the rag_engine singleton.
 from app.rag.engine import rag_engine
-# Import AI models later when needed
-# from app.models.ai import AIQueryRequest, AIQueryResponse
+from llama_index.core.base.response.schema import NodeWithScore
+from typing import List, Tuple
 
 logger = logging.getLogger(__name__)
 
@@ -34,28 +31,29 @@ class AIService:
              logger.critical("RagEngine instance is None! AIService cannot function.")
              raise RuntimeError("Failed to initialize AIService due to missing RagEngine.")
         self.rag_engine = rag_engine
-        logger.info("AIService initialized.") # Log AIService initialization
+        logger.info("AIService initialized.")
 
-    async def query_project(self, project_id: str, query_text: str) -> str: # -> AIQueryResponse later
+    async def query_project(self, project_id: str, query_text: str) -> Tuple[str, List[NodeWithScore]]:
         """
         Handles the business logic for querying a project's context.
+        Delegates to RagEngine and returns the result.
         """
         logger.info(f"AIService: Processing query for project {project_id}")
         # Delegate the core RAG work to the engine
-        response = await self.rag_engine.query(project_id, query_text)
-        # Process/format the response if needed
-        # For now, just return the string
-        return response # Return AIQueryResponse(...) later
+        # The engine now returns a tuple (answer_str, source_nodes_list)
+        answer, source_nodes = await self.rag_engine.query(project_id, query_text)
 
-    # --- Add other methods later for generation, editing etc. ---
+        # For now, just return the tuple received from the engine.
+        # The API layer will format the source_nodes.
+        return answer, source_nodes
+
+    # --- Add other methods later ---
     # async def generate_scene_draft(...)
     # async def suggest_edits(...)
 
-# --- Create a singleton instance of AIService ---
-# This instantiation also ensures the module is loaded and the import happens.
+# --- Create a singleton instance ---
 try:
     ai_service = AIService()
 except Exception as e:
      logger.critical(f"Failed to create AIService instance on startup: {e}", exc_info=True)
-     # Decide how to handle this - maybe the app shouldn't start?
-     raise # Re-raise to prevent app startup if service fails
+     raise

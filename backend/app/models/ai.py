@@ -18,16 +18,16 @@ from typing import Optional, List
 class AIQueryRequest(BaseModel):
     query: str = Field(..., description="The user's question or query text.")
 
-class SourceNodeModel(BaseModel): # For returning sources later
-     id: str
-     text: str
-     score: Optional[float] = None
-     metadata: Optional[dict] = None
+class SourceNodeModel(BaseModel):
+     id: str = Field(..., description="The unique ID of the source node/chunk.")
+     text: str = Field(..., description="The text content of the source node/chunk.")
+     score: Optional[float] = Field(None, description="The similarity score of the node (if applicable).")
+     metadata: Optional[dict] = Field(None, description="Metadata associated with the node (e.g., file_path, project_id).")
      # Add other relevant fields from LlamaIndex NodeWithScore if needed
 
-class AIQueryResponse(BaseModel):# pylint: disable=too-few-public-methods
+class AIQueryResponse(BaseModel):
     answer: str = Field(..., description="The AI-generated answer.")
-    # Optionally include source nodes used for the answer
+    # This field will now be populated
     source_nodes: Optional[List[SourceNodeModel]] = Field(None, description="List of source nodes retrieved and used for the answer.")
 
 # Add other models for generation/editing requests/responses later
