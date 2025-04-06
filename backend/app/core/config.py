@@ -28,12 +28,11 @@ class Settings(BaseSettings):
     GOOGLE_API_KEY: str = os.getenv("GOOGLE_API_KEY")
 
     # --- RAG Configuration ---
-    # How many chunks to retrieve for standard queries
     RAG_QUERY_SIMILARITY_TOP_K: int = int(os.getenv("RAG_QUERY_SIMILARITY_TOP_K", 3))
-    # How many chunks to retrieve for generation context
     RAG_GENERATION_SIMILARITY_TOP_K: int = int(os.getenv("RAG_GENERATION_SIMILARITY_TOP_K", 5))
-    # Optional: Number of rephrase suggestions to request
     RAG_REPHRASE_SUGGESTION_COUNT: int = int(os.getenv("RAG_REPHRASE_SUGGESTION_COUNT", 3))
+    # New: Number of preceding scenes to load for generation context
+    RAG_GENERATION_PREVIOUS_SCENE_COUNT: int = int(os.getenv("RAG_GENERATION_PREVIOUS_SCENE_COUNT", 1))
 
 
 settings = Settings()

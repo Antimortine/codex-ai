@@ -1,3 +1,4 @@
+
 # Copyright 2025 Antimortine
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -28,8 +29,8 @@ from llama_index.vector_stores.chroma import ChromaVectorStore
 from llama_index.embeddings.google import GeminiEmbedding
 from llama_index.llms.gemini import Gemini
 import chromadb
-from app.core.config import settings
-from app.core.config import BASE_PROJECT_DIR
+from app.core.config import settings, BASE_PROJECT_DIR # Import BASE_PROJECT_DIR too
+from app.services.file_service import file_service # Import FileService
 
 logger = logging.getLogger(__name__)
 
@@ -50,6 +51,7 @@ class IndexManager:
         Initializes the IndexManager. Sets up LlamaIndex components (LLM, Embeddings, Vector Store)
         and loads or creates the VectorStoreIndex.
         """
+        # ... (init method remains unchanged) ...
         logger.info("Initializing IndexManager...")
 
         if not settings.GOOGLE_API_KEY:
@@ -99,15 +101,16 @@ class IndexManager:
             logger.error(f"Fatal error during IndexManager initialization: {e}", exc_info=True)
             raise RuntimeError(f"Failed to initialize IndexManager: {e}") from e
 
+
     def _extract_project_id(self, file_path: Path) -> str | None:
         """
         Extracts the project_id from the file path relative to BASE_PROJECT_DIR.
         Returns the project_id string or None if the path is not structured as expected.
         Uses the imported BASE_PROJECT_DIR.
         """
+        # ... (_extract_project_id method remains unchanged) ...
         try:
             abs_file_path = file_path.resolve()
-            # Use the imported BASE_PROJECT_DIR directly
             abs_base_dir = BASE_PROJECT_DIR.resolve()
 
             if abs_base_dir not in abs_file_path.parents:
@@ -129,8 +132,8 @@ class IndexManager:
 
     def index_file(self, file_path: Path):
         """
-        Loads, parses, embeds, adds project_id metadata, and inserts/updates
-        a single file's content into the index.
+        Loads, parses, embeds, adds metadata (project_id, file_path, character_name),
+        and inserts/updates a single file's content into the index.
         If the document already exists (based on file_path), it's deleted first.
         Empty files are skipped.
         """
@@ -142,6 +145,7 @@ class IndexManager:
             return
 
         try:
+             # Check for empty file and potentially delete existing nodes
             if file_path.stat().st_size == 0:
                 logger.info(f"Skipping indexing for empty file: {file_path}")
                 doc_id_for_empty = str(file_path)
@@ -164,6 +168,24 @@ class IndexManager:
              logger.error(f"Could not determine project_id for file {file_path}. Skipping indexing.")
              return
         logger.info(f"Determined project_id '{project_id}' for file {file_path}")
+
+        # --- Inject Character Name Metadata ---
+        character_name_to_inject = None
+        try:
+            # Check if the parent directory is the project's 'characters' directory
+            if file_path.parent == file_service._get_characters_dir(project_id):
+                 character_id = file_path.stem # Character ID is the filename without extension
+                 logger.debug(f"Detected character file for ID: {character_id}. Attempting to read metadata.")
+                 project_metadata = file_service.read_project_metadata(project_id)
+                 character_data = project_metadata.get('characters', {}).get(character_id)
+                 if character_data and 'name' in character_data:
+                     character_name_to_inject = character_data['name']
+                     logger.info(f"Found character name '{character_name_to_inject}' for ID {character_id}. Will inject into metadata.")
+                 else:
+                     logger.warning(f"Character name not found in metadata for ID {character_id} in project {project_id}.")
+        except Exception as meta_error:
+            logger.error(f"Error reading project metadata or finding character name for {file_path}: {meta_error}", exc_info=True)
+        # --- End Inject Character Name Metadata ---
 
         try:
             # 1. Attempt to delete existing document nodes first
@@ -188,14 +210,17 @@ class IndexManager:
                 doc.id_ = doc_id
                 doc.metadata = doc.metadata or {}
                 doc.metadata['project_id'] = project_id
-                # Add file_path to metadata as well, might be useful
                 doc.metadata['file_path'] = str(file_path)
+                # Inject character name if found
+                if character_name_to_inject:
+                    doc.metadata['character_name'] = character_name_to_inject
                 logger.debug(f"Injecting metadata for doc_id {doc.id_}: {doc.metadata}")
 
             # 4. Insert the new document(s)
             logger.debug(f"Inserting new nodes for doc_id: {doc_id} with project_id '{project_id}'")
+            # Node parsing (splitting) happens implicitly during insertion here if not customized
             for doc in documents:
-                self.index.insert(doc)
+                 self.index.insert(doc) # This handles embedding and insertion into vector store
 
             logger.info(f"Successfully indexed/updated file: {file_path} with project_id '{project_id}'")
 
@@ -206,6 +231,7 @@ class IndexManager:
         """
         Deletes nodes associated with a specific file path from the index.
         """
+        # ... (delete_doc method remains unchanged) ...
         if not isinstance(file_path, Path):
              logger.error(f"IndexManager.delete_doc called with invalid type for file_path: {type(file_path)}")
              return
@@ -219,6 +245,7 @@ class IndexManager:
             logger.info(f"Successfully deleted nodes for file {file_path} from index (if they existed).")
         except Exception as e:
             logger.error(f"Error deleting document for file {file_path} (doc_id: {doc_id}): {e}", exc_info=True)
+
 
 # --- Singleton Instance ---
 try:

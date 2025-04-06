@@ -20,7 +20,7 @@ from llama_index.core.retrievers import VectorIndexRetriever
 from llama_index.core.query_engine import RetrieverQueryEngine
 from llama_index.core.vector_stores import ExactMatchFilter, MetadataFilters
 from llama_index.core.base.response.schema import Response, NodeWithScore
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Dict
 
 from app.rag.index_manager import index_manager
 from app.core.config import settings # Import settings
@@ -31,6 +31,7 @@ logger = logging.getLogger(__name__)
 # Use settings for configuration
 REPHRASE_SIMILARITY_TOP_K = settings.RAG_GENERATION_SIMILARITY_TOP_K # Reuse generation K for context retrieval during edits for now
 REPHRASE_SUGGESTION_COUNT = settings.RAG_REPHRASE_SUGGESTION_COUNT # Number of suggestions
+PREVIOUS_SCENE_COUNT = settings.RAG_GENERATION_PREVIOUS_SCENE_COUNT # Number of previous scenes to load
 
 class RagEngine:
     """
@@ -56,7 +57,7 @@ class RagEngine:
 
     async def query(self, project_id: str, query_text: str) -> Tuple[str, List[NodeWithScore]]:
         """Performs a RAG query against the index, filtered by project_id."""
-        # ... (query method remains unchanged) ...
+        # ... (query method remains unchanged, maybe add character name logging) ...
         logger.info(f"RagEngine: Received query for project '{project_id}': '{query_text}'")
 
         if not self.index or not self.llm:
@@ -99,7 +100,10 @@ class RagEngine:
             if source_nodes:
                  logger.debug(f"Retrieved {len(source_nodes)} source nodes:")
                  for i, node in enumerate(source_nodes):
-                      logger.debug(f"  Node {i+1}: Score={node.score:.4f}, ID={node.node_id}, Path={node.metadata.get('file_path', 'N/A')}")
+                      # Log character name if available in metadata
+                      char_name = node.metadata.get('character_name')
+                      char_info = f" (Character: {char_name})" if char_name else ""
+                      logger.debug(f"  Node {i+1}: Score={node.score:.4f}, ID={node.node_id}, Path={node.metadata.get('file_path', 'N/A')}{char_info}")
             else:
                  logger.debug("No source nodes retrieved or available in response.")
 
@@ -114,28 +118,31 @@ class RagEngine:
 
     async def generate_scene(self, project_id: str, chapter_id: str, prompt_summary: Optional[str], previous_scene_order: Optional[int]) -> str:
         """
-        Generates a scene draft using explicit context (plan, synopsis, previous scene)
+        Generates a scene draft using explicit context (plan, synopsis, previous N scenes)
         and RAG context for the given project and chapter.
 
         Args:
             project_id: The ID of the project.
             chapter_id: The ID of the chapter for the new scene.
             prompt_summary: An optional user-provided summary to guide generation.
-            previous_scene_order: The order number of the preceding scene (if any).
+            previous_scene_order: The order number of the scene immediately preceding
+                                  the one to be generated (0 if first scene).
 
         Returns:
             The generated scene content as a Markdown string or an error message.
         """
-        logger.info(f"RagEngine: Starting enhanced scene generation for project '{project_id}', chapter '{chapter_id}'. Previous order: {previous_scene_order}. Summary: '{prompt_summary}'")
+        logger.info(f"RagEngine: Starting enhanced scene generation for project '{project_id}', chapter '{chapter_id}'. Previous order: {previous_scene_order}. Prev Scene Count: {PREVIOUS_SCENE_COUNT}. Summary: '{prompt_summary}'")
 
         if not self.index or not self.llm:
              logger.error("RagEngine cannot generate scene: Index or LLM is not available.")
              return "Error: RAG components are not properly initialized."
 
         explicit_context = {}
+        previous_scenes_content: List[Tuple[int, str]] = [] # Store as (order, content) tuples
+
         try:
             # --- 1. Load Explicit Context ---
-            logger.debug("Loading explicit context: Plan, Synopsis, Previous Scene...")
+            logger.debug("Loading explicit context: Plan, Synopsis, Previous Scene(s)...")
 
             # Load Plan
             try:
@@ -153,32 +160,49 @@ class RagEngine:
                  if e.status_code == 404: logger.warning("synopsis.md not found."); explicit_context['synopsis'] = "Not Available"
                  else: raise
 
-            # Load Previous Scene Content
-            explicit_context['previous_scene'] = "N/A (This is the first scene)"
-            if previous_scene_order is not None and previous_scene_order > 0:
-                logger.debug(f"Attempting to load previous scene (order {previous_scene_order}) for chapter {chapter_id}")
+            # Load Previous Scene(s) Content
+            if previous_scene_order is not None and previous_scene_order > 0 and PREVIOUS_SCENE_COUNT > 0:
+                logger.debug(f"Attempting to load up to {PREVIOUS_SCENE_COUNT} previous scene(s) ending at order {previous_scene_order} for chapter {chapter_id}")
                 try:
-                    # Find scene ID from metadata based on order
+                    # Read chapter metadata once to map order to ID
                     chapter_metadata = file_service.read_chapter_metadata(project_id, chapter_id)
-                    previous_scene_id = None
-                    for scene_id, data in chapter_metadata.get('scenes', {}).items():
-                        if data.get('order') == previous_scene_order:
-                            previous_scene_id = scene_id
-                            break
+                    scenes_by_order: Dict[int, str] = { # {order: scene_id}
+                         data.get('order'): scene_id
+                         for scene_id, data in chapter_metadata.get('scenes', {}).items() if data.get('order') is not None
+                    }
 
-                    if previous_scene_id:
-                        scene_path = file_service._get_scene_path(project_id, chapter_id, previous_scene_id)
-                        explicit_context['previous_scene'] = file_service.read_text_file(scene_path)
-                        logger.debug(f"Loaded previous scene content (ID: {previous_scene_id})")
-                    else:
-                        logger.warning(f"Could not find scene with order {previous_scene_order} in chapter {chapter_id} metadata.")
-                        explicit_context['previous_scene'] = f"N/A (Scene with order {previous_scene_order} not found in metadata)"
+                    # Loop backwards from previous_scene_order
+                    loaded_count = 0
+                    for target_order in range(previous_scene_order, 0, -1):
+                        if loaded_count >= PREVIOUS_SCENE_COUNT:
+                            break # Stop if we've loaded enough scenes
+
+                        scene_id_to_load = scenes_by_order.get(target_order)
+                        if scene_id_to_load:
+                            try:
+                                scene_path = file_service._get_scene_path(project_id, chapter_id, scene_id_to_load)
+                                content = file_service.read_text_file(scene_path)
+                                previous_scenes_content.append((target_order, content))
+                                loaded_count += 1
+                                logger.debug(f"Loaded previous scene content (Order: {target_order}, ID: {scene_id_to_load})")
+                            except HTTPException as scene_load_err:
+                                if scene_load_err.status_code == 404:
+                                    logger.warning(f"Scene file not found for order {target_order} (ID: {scene_id_to_load}), skipping.")
+                                else:
+                                    logger.error(f"Error loading scene file for order {target_order} (ID: {scene_id_to_load}): {scene_load_err.detail}")
+                                    # Optionally append an error placeholder to previous_scenes_content
+                        else:
+                             logger.debug(f"No scene found with order {target_order} in metadata.")
+
+                    # Reverse the list so it's in chronological order [oldest_loaded ... most_recent_loaded]
+                    previous_scenes_content.reverse()
 
                 except HTTPException as e:
                     if e.status_code == 404:
-                         logger.warning(f"Failed to load previous scene (order {previous_scene_order}): {e.detail}")
-                         explicit_context['previous_scene'] = f"N/A (Error loading previous scene: {e.detail})"
+                         logger.warning(f"Chapter metadata not found for {chapter_id} while loading previous scenes: {e.detail}")
                     else: raise # Re-raise other file errors
+                except Exception as general_err:
+                     logger.error(f"Unexpected error loading previous scenes: {general_err}", exc_info=True)
 
             # --- 2. Retrieve RAG Context ---
             # Retrieval query can still be guided by the summary
@@ -198,9 +222,14 @@ class RagEngine:
             retrieved_nodes: List[NodeWithScore] = await retriever.aretrieve(retrieval_query)
             logger.info(f"Retrieved {len(retrieved_nodes)} nodes for RAG context.")
 
-            rag_context_str = "\n\n---\n\n".join(
-                 [f"Source: {node.metadata.get('file_path', 'N/A')}\n\n{node.get_content()}" for node in retrieved_nodes]
-            ) if retrieved_nodes else "No additional context retrieved via search."
+            # Include character name in RAG context string if available
+            rag_context_list = []
+            if retrieved_nodes:
+                 for node in retrieved_nodes:
+                      char_name = node.metadata.get('character_name')
+                      char_info = f" [Character: {char_name}]" if char_name else ""
+                      rag_context_list.append(f"Source: {node.metadata.get('file_path', 'N/A')}{char_info}\n\n{node.get_content()}")
+            rag_context_str = "\n\n---\n\n".join(rag_context_list) if rag_context_list else "No additional context retrieved via search."
 
 
             # --- 3. Build Generation Prompt ---
@@ -208,35 +237,49 @@ class RagEngine:
             system_prompt = (
                 "You are an expert writing assistant helping a user draft the next scene in their creative writing project. "
                 "Generate a coherent and engaging scene draft in Markdown format. "
-                "Pay close attention to the provided Project Plan, Synopsis, and the content of the Immediately Previous Scene to ensure consistency and logical progression. "
+                "Pay close attention to the provided Project Plan, Synopsis, and the content of the Immediately Previous Scene(s) to ensure consistency and logical progression. "
                 "Also consider the Additional Context retrieved via search."
             )
 
+            # Construct Previous Scenes part of the prompt
+            previous_scenes_prompt_part = ""
+            if previous_scenes_content:
+                 for order, content in previous_scenes_content:
+                      # Label the most recent one differently if desired
+                      label = f"Immediately Previous Scene (Order: {order})" if order == previous_scene_order else f"Previous Scene (Order: {order})"
+                      previous_scenes_prompt_part += f"**{label}:**\n```markdown\n{content}\n```\n\n"
+            else:
+                 previous_scenes_prompt_part = "**Previous Scene(s):** N/A (Generating the first scene)\n\n"
+
+
             user_message_content = (
-                f"Please write a draft for the scene that follows the 'Immediately Previous Scene' provided below.\n\n"
+                f"Please write a draft for the scene that follows the previous scene(s) provided below.\n\n"
                 f"**Project Plan:**\n```markdown\n{explicit_context.get('plan', 'Not Available')}\n```\n\n"
                 f"**Project Synopsis:**\n```markdown\n{explicit_context.get('synopsis', 'Not Available')}\n```\n\n"
-                f"**Immediately Previous Scene (Order: {previous_scene_order}):**\n```markdown\n{explicit_context.get('previous_scene', 'N/A')}\n```\n\n"
+                # Add the constructed previous scenes block
+                f"{previous_scenes_prompt_part}"
                 f"**Additional Retrieved Context:**\n```markdown\n{rag_context_str}\n```\n\n"
                 f"**New Scene Details:**\n"
                 f"- Belongs to: Chapter ID '{chapter_id}'\n"
-                f"- Should logically follow the previous scene.\n"
+                f"- Should logically follow the provided previous scene(s).\n"
             )
             if prompt_summary:
                 user_message_content += f"- User Guidance/Focus for New Scene: {prompt_summary}\n\n"
             else:
-                user_message_content += "- User Guidance/Focus for New Scene: (None provided - focus on natural progression from the previous scene and overall context)\n\n"
+                user_message_content += "- User Guidance/Focus for New Scene: (None provided - focus on natural progression from the previous scene(s) and overall context)\n\n"
 
             user_message_content += (
                 "**Instructions:**\n"
                 "- Generate the new scene content in pure Markdown format.\n"
                 "- Start directly with the scene content (e.g., a heading like '## Scene Title' or directly with narrative).\n"
-                "- Ensure the new scene flows logically from the 'Immediately Previous Scene'.\n"
+                "- Ensure the new scene flows logically from the previous scene(s).\n"
                 "- Maintain consistency with characters, plot points, and world details mentioned in the Plan, Synopsis, and other context.\n"
                 "- Do NOT add explanations or commentary outside the new scene's Markdown content."
             )
 
             full_prompt = f"{system_prompt}\n\nUser: {user_message_content}\n\nAssistant:"
+            # Optional: Log the full prompt if needed for debugging (can be very long)
+            # logger.debug(f"Full Generation Prompt:\n{full_prompt}")
             logger.info("Calling LLM for enhanced scene generation...")
             llm_response = await self.llm.acomplete(full_prompt)
 
@@ -284,9 +327,15 @@ class RagEngine:
             retrieved_nodes: List[NodeWithScore] = await retriever.aretrieve(retrieval_query)
             logger.info(f"Retrieved {len(retrieved_nodes)} nodes for rephrase context.")
 
-            context_str = "\n\n---\n\n".join(
-                 [f"Source: {node.metadata.get('file_path', 'N/A')}\n\n{node.get_content()}" for node in retrieved_nodes]
-            ) if retrieved_nodes else "No specific context was retrieved."
+            # Include character name in RAG context string if available
+            rag_context_list = []
+            if retrieved_nodes:
+                 for node in retrieved_nodes:
+                      char_name = node.metadata.get('character_name')
+                      char_info = f" [Character: {char_name}]" if char_name else ""
+                      rag_context_list.append(f"Source: {node.metadata.get('file_path', 'N/A')}{char_info}\n\n{node.get_content()}")
+            rag_context_str = "\n\n---\n\n".join(rag_context_list) if rag_context_list else "No additional context retrieved via search."
+
 
             # 3. Build Rephrase Prompt
             logger.debug("Building rephrase prompt...")
@@ -297,7 +346,7 @@ class RagEngine:
 
             user_message_content = (
                 f"Please provide {REPHRASE_SUGGESTION_COUNT} alternative ways to phrase the following selected text, considering the context.\n\n"
-                f"**Broader Project Context:**\n```markdown\n{context_str}\n```\n\n"
+                f"**Broader Project Context:**\n```markdown\n{rag_context_str}\n```\n\n"
                 f"**Text to Rephrase:**\n```\n{selected_text}\n```\n\n"
             )
             if context_before:
@@ -326,12 +375,15 @@ class RagEngine:
 
             # 5. Parse the Numbered List Response
             logger.debug(f"Raw LLM response for parsing:\n{generated_text}")
+            # Use regex to find lines starting with number, dot, optional space
             suggestions = re.findall(r"^\s*\d+\.\s*(.*)", generated_text, re.MULTILINE)
 
             if not suggestions:
                 logger.warning(f"Could not parse numbered list from LLM response. Response was:\n{generated_text}")
+                # Return the raw response as a single suggestion if parsing fails, better than nothing
                 return [f"Error: Could not parse suggestions. Raw response: {generated_text}"]
 
+            # Clean up potential leading/trailing whitespace from parsed suggestions
             suggestions = [s.strip() for s in suggestions]
 
             logger.info(f"Successfully parsed {len(suggestions)} rephrase suggestions for project '{project_id}'.")
