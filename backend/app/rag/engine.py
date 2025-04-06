@@ -62,10 +62,31 @@ class RagEngine:
         logger.debug(f"RagEngine Facade: Delegating query for project '{project_id}' to QueryProcessor.")
         return await self.query_processor.query(project_id, query_text)
 
-    async def generate_scene(self, project_id: str, chapter_id: str, prompt_summary: Optional[str], previous_scene_order: Optional[int]) -> str:
-        """Delegates scene generation to SceneGenerator."""
+    # --- Updated Signature ---
+    async def generate_scene(
+        self,
+        project_id: str,
+        chapter_id: str,
+        prompt_summary: Optional[str],
+        previous_scene_order: Optional[int],
+        # Add the explicit context arguments here
+        explicit_plan: str,
+        explicit_synopsis: str,
+        explicit_previous_scenes: List[Tuple[int, str]]
+        ) -> str:
+        """Delegates scene generation to SceneGenerator, passing all context."""
         logger.debug(f"RagEngine Facade: Delegating generate_scene for project '{project_id}', chapter '{chapter_id}' to SceneGenerator.")
-        return await self.scene_generator.generate_scene(project_id, chapter_id, prompt_summary, previous_scene_order)
+        # Pass all arguments through to the actual generator
+        return await self.scene_generator.generate_scene(
+            project_id=project_id,
+            chapter_id=chapter_id,
+            prompt_summary=prompt_summary,
+            previous_scene_order=previous_scene_order,
+            explicit_plan=explicit_plan,
+            explicit_synopsis=explicit_synopsis,
+            explicit_previous_scenes=explicit_previous_scenes
+        )
+    # --- End Updated Signature ---
 
     async def rephrase(self, project_id: str, selected_text: str, context_before: Optional[str], context_after: Optional[str]) -> List[str]:
         """Delegates rephrasing to Rephraser."""
