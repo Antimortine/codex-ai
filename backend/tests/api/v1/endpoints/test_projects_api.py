@@ -38,7 +38,11 @@ def test_list_projects_empty(mock_project_service: MagicMock):
     response = client.get("/api/v1/projects/")
 
     assert response.status_code == 200
-    assert response.json() == {"projects": []}
+    # Specific assertion for the structure
+    response_data = response.json()
+    assert "projects" in response_data
+    assert isinstance(response_data["projects"], list)
+    assert len(response_data["projects"]) == 0
     mock_project_service.get_all.assert_called_once() # Verify the service method was called
 
 @patch('app.api.v1.endpoints.projects.project_service', autospec=True)
@@ -52,14 +56,15 @@ def test_list_projects_with_data(mock_project_service: MagicMock):
     response = client.get("/api/v1/projects/")
 
     assert response.status_code == 200
-    # Pydantic models in response are dicts, compare dicts
-    expected_data = {
-        "projects": [
-            {"id": "uuid-1", "name": "Project Alpha"},
-            {"id": "uuid-2", "name": "Project Beta"}
-        ]
-    }
-    assert response.json() == expected_data
+    response_data = response.json()
+    assert "projects" in response_data
+    assert isinstance(response_data["projects"], list)
+    assert len(response_data["projects"]) == 2
+    # Assert specific fields for each project in the list
+    assert response_data["projects"][0]["id"] == "uuid-1"
+    assert response_data["projects"][0]["name"] == "Project Alpha"
+    assert response_data["projects"][1]["id"] == "uuid-2"
+    assert response_data["projects"][1]["name"] == "Project Beta"
     mock_project_service.get_all.assert_called_once()
 
 @patch('app.api.v1.endpoints.projects.project_service', autospec=True)
@@ -68,20 +73,25 @@ def test_create_project_success(mock_project_service: MagicMock):
     project_name = "My New Test Project"
     new_project_data = {"name": project_name}
     # Configure the mock service's create method
-    created_project = ProjectRead(id="new-uuid", name=project_name)
+    created_project_id = "new-uuid"
+    created_project = ProjectRead(id=created_project_id, name=project_name)
     mock_project_service.create.return_value = created_project
 
     response = client.post("/api/v1/projects/", json=new_project_data)
 
     assert response.status_code == 201 # Check for Created status
-    # Compare dicts
-    assert response.json() == {"id": "new-uuid", "name": project_name}
+    # Assert specific fields in the response
+    response_data = response.json()
+    assert response_data["id"] == created_project_id
+    assert response_data["name"] == project_name
     # Verify the service method was called correctly
     mock_project_service.create.assert_called_once()
     # Check the argument passed to the mock (it's a Pydantic model instance passed as kwarg)
-    _, call_kwargs = mock_project_service.create.call_args
-    assert isinstance(call_kwargs['project_in'], ProjectCreate)
-    assert call_kwargs['project_in'].name == project_name
+    call_args, call_kwargs = mock_project_service.create.call_args
+    assert "project_in" in call_kwargs
+    project_in_arg = call_kwargs['project_in']
+    assert isinstance(project_in_arg, ProjectCreate)
+    assert project_in_arg.name == project_name
 
 
 @patch('app.api.v1.endpoints.projects.project_service', autospec=True)
@@ -122,29 +132,35 @@ def test_create_project_empty_name(mock_project_service: MagicMock):
 def test_get_project_success(mock_project_service: MagicMock):
     """Test successfully getting a project by ID."""
     project_id = "existing-uuid"
-    project_data = ProjectRead(id=project_id, name="Found Project")
+    project_name = "Found Project"
+    project_data = ProjectRead(id=project_id, name=project_name)
     mock_project_service.get_by_id.return_value = project_data
 
     response = client.get(f"/api/v1/projects/{project_id}")
 
     assert response.status_code == 200
-    assert response.json() == {"id": project_id, "name": "Found Project"}
+    # Assert specific fields
+    response_data = response.json()
+    assert response_data["id"] == project_id
+    assert response_data["name"] == project_name
     mock_project_service.get_by_id.assert_called_once_with(project_id=project_id)
 
 @patch('app.api.v1.endpoints.projects.project_service', autospec=True)
 def test_get_project_not_found(mock_project_service: MagicMock):
     """Test getting a project that does not exist (404)."""
     project_id = "non-existent-uuid"
+    error_detail = f"Project {project_id} not found"
     # Configure the mock to raise the expected HTTPException
     mock_project_service.get_by_id.side_effect = HTTPException(
         status_code=status.HTTP_404_NOT_FOUND,
-        detail=f"Project {project_id} not found"
+        detail=error_detail
     )
 
     response = client.get(f"/api/v1/projects/{project_id}")
 
     assert response.status_code == 404
-    assert response.json() == {"detail": f"Project {project_id} not found"}
+    # Assert exact error detail if it's consistent
+    assert response.json() == {"detail": error_detail}
     mock_project_service.get_by_id.assert_called_once_with(project_id=project_id)
 
 # --- Tests for PATCH /projects/{project_id} ---
@@ -153,37 +169,50 @@ def test_get_project_not_found(mock_project_service: MagicMock):
 def test_update_project_success(mock_project_service: MagicMock):
     """Test successfully updating a project's name."""
     project_id = "update-uuid"
-    update_data = {"name": "Updated Project Name"}
-    updated_project = ProjectRead(id=project_id, name="Updated Project Name")
+    updated_name = "Updated Project Name"
+    update_data = {"name": updated_name}
+    updated_project = ProjectRead(id=project_id, name=updated_name)
     mock_project_service.update.return_value = updated_project
 
     response = client.patch(f"/api/v1/projects/{project_id}", json=update_data)
 
     assert response.status_code == 200
-    assert response.json() == {"id": project_id, "name": "Updated Project Name"}
+    # Assert specific fields
+    response_data = response.json()
+    assert response_data["id"] == project_id
+    assert response_data["name"] == updated_name
     # Verify the service method was called correctly
     mock_project_service.update.assert_called_once()
     call_args, call_kwargs = mock_project_service.update.call_args
-    assert call_kwargs['project_id'] == project_id
-    assert isinstance(call_kwargs['project_in'], ProjectUpdate)
-    assert call_kwargs['project_in'].name == update_data['name']
+    assert "project_id" in call_kwargs and call_kwargs['project_id'] == project_id
+    assert "project_in" in call_kwargs
+    project_in_arg = call_kwargs['project_in']
+    assert isinstance(project_in_arg, ProjectUpdate)
+    assert project_in_arg.name == updated_name
 
 @patch('app.api.v1.endpoints.projects.project_service', autospec=True)
 def test_update_project_not_found(mock_project_service: MagicMock):
     """Test updating a project that does not exist (404)."""
     project_id = "non-existent-uuid"
     update_data = {"name": "Doesn't Matter"}
+    error_detail = f"Project {project_id} not found"
     # Configure the mock to raise 404
     mock_project_service.update.side_effect = HTTPException(
         status_code=status.HTTP_404_NOT_FOUND,
-        detail=f"Project {project_id} not found"
+        detail=error_detail
     )
 
     response = client.patch(f"/api/v1/projects/{project_id}", json=update_data)
 
     assert response.status_code == 404
-    assert response.json() == {"detail": f"Project {project_id} not found"}
-    mock_project_service.update.assert_called_once() # Service method is still called
+    assert response.json() == {"detail": error_detail}
+    # Verify service call arguments even on error
+    mock_project_service.update.assert_called_once()
+    call_args, call_kwargs = mock_project_service.update.call_args
+    assert call_kwargs['project_id'] == project_id
+    assert isinstance(call_kwargs['project_in'], ProjectUpdate)
+    assert call_kwargs['project_in'].name == update_data['name']
+
 
 @patch('app.api.v1.endpoints.projects.project_service', autospec=True)
 def test_update_project_empty_name(mock_project_service: MagicMock):
@@ -216,21 +245,25 @@ def test_delete_project_success(mock_project_service: MagicMock):
     response = client.delete(f"/api/v1/projects/{project_id}")
 
     assert response.status_code == 200 # Status OK
-    assert response.json() == {"message": f"Project {project_id} deleted successfully"}
+    # Assert specific message field
+    response_data = response.json()
+    assert "message" in response_data
+    assert response_data["message"] == f"Project {project_id} deleted successfully"
     mock_project_service.delete.assert_called_once_with(project_id=project_id)
 
 @patch('app.api.v1.endpoints.projects.project_service', autospec=True)
 def test_delete_project_not_found(mock_project_service: MagicMock):
     """Test deleting a project that does not exist (404)."""
     project_id = "non-existent-uuid"
+    error_detail = f"Project {project_id} not found"
     # Configure the mock to raise 404
     mock_project_service.delete.side_effect = HTTPException(
         status_code=status.HTTP_404_NOT_FOUND,
-        detail=f"Project {project_id} not found"
+        detail=error_detail
     )
 
     response = client.delete(f"/api/v1/projects/{project_id}")
 
     assert response.status_code == 404
-    assert response.json() == {"detail": f"Project {project_id} not found"}
+    assert response.json() == {"detail": error_detail}
     mock_project_service.delete.assert_called_once_with(project_id=project_id)

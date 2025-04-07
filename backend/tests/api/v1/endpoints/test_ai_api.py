@@ -55,7 +55,7 @@ def mock_chapter_exists(*args, **kwargs):
     project_id_arg = kwargs.get('project_id')
     chapter_id_arg = kwargs.get('chapter_id')
     if chapter_id_arg == NON_EXISTENT_CHAPTER_ID:
-         raise HTTPException(status_code=404, detail=f"Chapter {chapter_id_arg} not found")
+         raise HTTPException(status_code=404, detail=f"Chapter {chapter_id_arg} not found in project {project_id_arg}")
     # Assume project exists if chapter check is reached
     return ChapterRead(id=chapter_id_arg, project_id=project_id_arg, title=f"Mock Chapter {chapter_id_arg}", order=1)
 
@@ -75,14 +75,23 @@ def test_query_project_success(mock_project_dep: MagicMock, mock_ai_svc: MagicMo
     response = client.post(f"/api/v1/ai/query/{PROJECT_ID}", json=query_data)
 
     assert response.status_code == status.HTTP_200_OK
+    # Assert specific response structure and fields
     response_data = response.json()
+    assert "answer" in response_data
     assert response_data["answer"] == mock_answer
+    assert "source_nodes" in response_data
+    assert isinstance(response_data["source_nodes"], list)
     assert len(response_data["source_nodes"]) == 2
+    # Assert specific fields within source nodes
     assert response_data["source_nodes"][0]["id"] == "n1"
     assert response_data["source_nodes"][0]["text"] == "Source 1"
     assert response_data["source_nodes"][0]["score"] == 0.9
     assert response_data["source_nodes"][0]["metadata"]["file_path"] == "plan.md"
     assert response_data["source_nodes"][1]["id"] == "n2"
+    assert response_data["source_nodes"][1]["text"] == "Source 2"
+    assert response_data["source_nodes"][1]["score"] == 0.8
+    assert response_data["source_nodes"][1]["metadata"]["file_path"] == "scenes/s1.md"
+    # Verify dependency and service calls
     mock_project_dep.get_by_id.assert_called_once_with(project_id=PROJECT_ID)
     mock_ai_svc.query_project.assert_awaited_once_with(PROJECT_ID, query_data["query"])
 
@@ -99,7 +108,9 @@ def test_query_project_no_sources(mock_project_dep: MagicMock, mock_ai_svc: Magi
 
     assert response.status_code == status.HTTP_200_OK
     response_data = response.json()
+    assert "answer" in response_data
     assert response_data["answer"] == mock_answer
+    assert "source_nodes" in response_data
     assert response_data["source_nodes"] == [] # Expect empty list
     mock_project_dep.get_by_id.assert_called_once_with(project_id=PROJECT_ID)
     mock_ai_svc.query_project.assert_awaited_once_with(PROJECT_ID, query_data["query"])
@@ -110,12 +121,14 @@ def test_query_project_service_error(mock_project_dep: MagicMock, mock_ai_svc: M
     """Test AI query when the AI service raises an error."""
     mock_project_dep.get_by_id.side_effect = mock_project_exists
     query_data = {"query": "This will fail"}
-    mock_ai_svc.query_project = AsyncMock(side_effect=HTTPException(status_code=500, detail="AI service failed"))
+    error_detail = "AI service failed"
+    mock_ai_svc.query_project = AsyncMock(side_effect=HTTPException(status_code=500, detail=error_detail))
 
     response = client.post(f"/api/v1/ai/query/{PROJECT_ID}", json=query_data)
 
     assert response.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
-    assert "AI service failed" in response.json()["detail"]
+    # Assert exact error detail passed through from service
+    assert response.json() == {"detail": error_detail}
     mock_project_dep.get_by_id.assert_called_once_with(project_id=PROJECT_ID)
     mock_ai_svc.query_project.assert_awaited_once_with(PROJECT_ID, query_data["query"])
 
@@ -133,9 +146,13 @@ def test_generate_scene_success(mock_chapter_dep: MagicMock, mock_ai_svc: MagicM
     response = client.post(f"/api/v1/ai/generate/scene/{PROJECT_ID}/{CHAPTER_ID}", json=gen_data)
 
     assert response.status_code == status.HTTP_200_OK
-    assert response.json() == {"generated_content": mock_generated_content}
+    # Assert specific response field
+    response_data = response.json()
+    assert "generated_content" in response_data
+    assert response_data["generated_content"] == mock_generated_content
+    # Verify dependency check
     mock_chapter_dep.get_by_id.assert_called_once_with(project_id=PROJECT_ID, chapter_id=CHAPTER_ID)
-    # Assert that the service was called with the correct arguments, including the request model object
+    # Verify service call arguments
     mock_ai_svc.generate_scene_draft.assert_awaited_once()
     call_args, call_kwargs = mock_ai_svc.generate_scene_draft.call_args
     assert call_kwargs['project_id'] == PROJECT_ID
@@ -148,32 +165,33 @@ def test_generate_scene_success(mock_chapter_dep: MagicMock, mock_ai_svc: MagicM
 @patch('app.api.v1.endpoints.ai.ai_service', autospec=True)
 @patch('app.api.v1.endpoints.scenes.chapter_service', autospec=True)
 def test_generate_scene_service_error(mock_chapter_dep: MagicMock, mock_ai_svc: MagicMock):
-    """Test AI scene generation when the AI service returns an error string."""
+    """Test AI scene generation when the AI service raises an HTTPException."""
     mock_chapter_dep.get_by_id.side_effect = mock_chapter_exists
     gen_data = {"prompt_summary": "This generation fails"}
-    error_message = "Error: Generation failed due to policy."
-    # Simulate service returning the error string, which the endpoint should catch
-    mock_ai_svc.generate_scene_draft = AsyncMock(return_value=error_message)
+    error_detail = "Failed to generate scene draft: Generation failed due to policy."
+    # Simulate service raising the HTTPException directly
+    mock_ai_svc.generate_scene_draft = AsyncMock(side_effect=HTTPException(status_code=500, detail=error_detail))
 
     response = client.post(f"/api/v1/ai/generate/scene/{PROJECT_ID}/{CHAPTER_ID}", json=gen_data)
 
     assert response.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
-    assert error_message in response.json()["detail"] # Endpoint should include the service error
+    assert response.json() == {"detail": error_detail} # Endpoint should pass the exception through
     mock_chapter_dep.get_by_id.assert_called_once_with(project_id=PROJECT_ID, chapter_id=CHAPTER_ID)
     mock_ai_svc.generate_scene_draft.assert_awaited_once()
 
 @patch('app.api.v1.endpoints.ai.ai_service', autospec=True)
 @patch('app.api.v1.endpoints.scenes.chapter_service', autospec=True)
 def test_generate_scene_service_exception(mock_chapter_dep: MagicMock, mock_ai_svc: MagicMock):
-    """Test AI scene generation when the AI service raises an exception."""
+    """Test AI scene generation when the AI service raises an unexpected exception."""
     mock_chapter_dep.get_by_id.side_effect = mock_chapter_exists
     gen_data = {"prompt_summary": "This generation fails"}
-    mock_ai_svc.generate_scene_draft = AsyncMock(side_effect=HTTPException(status_code=503, detail="LLM unavailable"))
+    mock_ai_svc.generate_scene_draft = AsyncMock(side_effect=ValueError("Unexpected service error")) # Non-HTTP error
 
     response = client.post(f"/api/v1/ai/generate/scene/{PROJECT_ID}/{CHAPTER_ID}", json=gen_data)
 
-    assert response.status_code == status.HTTP_503_SERVICE_UNAVAILABLE
-    assert "LLM unavailable" in response.json()["detail"]
+    assert response.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
+    # Check the generic error message from the endpoint's exception handler
+    assert f"Failed to process AI scene generation for project {PROJECT_ID}, chapter {CHAPTER_ID}" in response.json()["detail"]
     mock_chapter_dep.get_by_id.assert_called_once_with(project_id=PROJECT_ID, chapter_id=CHAPTER_ID)
     mock_ai_svc.generate_scene_draft.assert_awaited_once()
 
@@ -199,9 +217,13 @@ def test_rephrase_text_success(mock_project_dep: MagicMock, mock_ai_svc: MagicMo
     response = client.post(f"/api/v1/ai/edit/rephrase/{PROJECT_ID}", json=rephrase_data)
 
     assert response.status_code == status.HTTP_200_OK
-    assert response.json() == {"suggestions": mock_suggestions}
+    # Assert specific response field
+    response_data = response.json()
+    assert "suggestions" in response_data
+    assert response_data["suggestions"] == mock_suggestions
+    # Verify dependency check
     mock_project_dep.get_by_id.assert_called_once_with(project_id=PROJECT_ID)
-    # Assert that the service was called with the correct arguments, including the request model object
+    # Verify service call arguments
     mock_ai_svc.rephrase_text.assert_awaited_once()
     call_args, call_kwargs = mock_ai_svc.rephrase_text.call_args
     assert call_kwargs['project_id'] == PROJECT_ID
@@ -213,31 +235,32 @@ def test_rephrase_text_success(mock_project_dep: MagicMock, mock_ai_svc: MagicMo
 @patch('app.api.v1.endpoints.ai.ai_service', autospec=True)
 @patch('app.api.v1.endpoints.content_blocks.project_service', autospec=True)
 def test_rephrase_text_service_error(mock_project_dep: MagicMock, mock_ai_svc: MagicMock):
-    """Test AI rephrase when the AI service returns an error string."""
+    """Test AI rephrase when the AI service raises an HTTPException."""
     mock_project_dep.get_by_id.side_effect = mock_project_exists
     rephrase_data = {"selected_text": "This rephrase fails"}
-    error_message = "Error: Rephrasing blocked by filter."
-    # Simulate service returning the error string in a list
-    mock_ai_svc.rephrase_text = AsyncMock(return_value=[error_message])
+    error_detail = "Failed to rephrase text: Rephrasing blocked by filter."
+    # Simulate service raising the HTTPException directly
+    mock_ai_svc.rephrase_text = AsyncMock(side_effect=HTTPException(status_code=500, detail=error_detail))
 
     response = client.post(f"/api/v1/ai/edit/rephrase/{PROJECT_ID}", json=rephrase_data)
 
     assert response.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
-    assert error_message in response.json()["detail"] # Endpoint should include the service error
+    assert response.json() == {"detail": error_detail} # Endpoint should pass the exception through
     mock_project_dep.get_by_id.assert_called_once_with(project_id=PROJECT_ID)
     mock_ai_svc.rephrase_text.assert_awaited_once()
 
 @patch('app.api.v1.endpoints.ai.ai_service', autospec=True)
 @patch('app.api.v1.endpoints.content_blocks.project_service', autospec=True)
 def test_rephrase_text_service_exception(mock_project_dep: MagicMock, mock_ai_svc: MagicMock):
-    """Test AI rephrase when the AI service raises an exception."""
+    """Test AI rephrase when the AI service raises an unexpected exception."""
     mock_project_dep.get_by_id.side_effect = mock_project_exists
     rephrase_data = {"selected_text": "This rephrase fails"}
-    mock_ai_svc.rephrase_text = AsyncMock(side_effect=HTTPException(status_code=500, detail="Rephrase service error"))
+    mock_ai_svc.rephrase_text = AsyncMock(side_effect=TypeError("Unexpected argument")) # Non-HTTP error
 
     response = client.post(f"/api/v1/ai/edit/rephrase/{PROJECT_ID}", json=rephrase_data)
 
     assert response.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
-    assert "Rephrase service error" in response.json()["detail"]
+    # Check the generic error message from the endpoint's exception handler
+    assert f"Failed to process AI rephrase request for project {PROJECT_ID}" in response.json()["detail"]
     mock_project_dep.get_by_id.assert_called_once_with(project_id=PROJECT_ID)
     mock_ai_svc.rephrase_text.assert_awaited_once()

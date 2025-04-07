@@ -39,7 +39,6 @@ WORLD_CONTENT = "## World Info\n\nDetails about the world."
 UPDATED_CONTENT = "This is the updated content."
 
 # --- Mock Dependency Helper ---
-# Mocks the project_service.get_by_id call used in the dependency
 def mock_project_exists(*args, **kwargs):
     project_id_arg = kwargs.get('project_id', args[0] if args else PROJECT_ID)
     if project_id_arg == NON_EXISTENT_PROJECT_ID:
@@ -47,7 +46,6 @@ def mock_project_exists(*args, **kwargs):
     return ProjectRead(id=project_id_arg, name=f"Mock Project {project_id_arg}")
 
 # --- Parameterization Data ---
-# Define the different block types and their initial content
 BLOCK_TYPES = [
     ("plan", PLAN_CONTENT),
     ("synopsis", SYNOPSIS_CONTENT),
@@ -71,7 +69,10 @@ def test_get_block_success(mock_project_dep: MagicMock, mock_file_svc: MagicMock
     response = client.get(endpoint_path)
 
     assert response.status_code == status.HTTP_200_OK
-    assert response.json() == {"project_id": PROJECT_ID, "content": initial_content}
+    # Assert specific fields
+    response_data = response.json()
+    assert response_data["project_id"] == PROJECT_ID
+    assert response_data["content"] == initial_content
     mock_project_dep.get_by_id.assert_called_once_with(project_id=PROJECT_ID)
     mock_file_svc.read_content_block_file.assert_called_once_with(PROJECT_ID, file_name)
 
@@ -89,7 +90,10 @@ def test_get_block_file_not_found(mock_project_dep: MagicMock, mock_file_svc: Ma
     response = client.get(endpoint_path)
 
     assert response.status_code == status.HTTP_200_OK
-    assert response.json() == {"project_id": PROJECT_ID, "content": ""} # Endpoint handles 404 by returning empty
+    # Assert specific fields for the handled 404 case
+    response_data = response.json()
+    assert response_data["project_id"] == PROJECT_ID
+    assert response_data["content"] == "" # Endpoint handles 404 by returning empty
     mock_project_dep.get_by_id.assert_called_once_with(project_id=PROJECT_ID)
     mock_file_svc.read_content_block_file.assert_called_once_with(PROJECT_ID, file_name)
 
@@ -99,13 +103,13 @@ def test_get_block_file_not_found(mock_project_dep: MagicMock, mock_file_svc: Ma
 def test_get_block_project_not_found(mock_project_dep: MagicMock, mock_file_svc: MagicMock, block_name: str, initial_content: str):
     """Test GET when the project itself doesn't exist (404 from dependency)."""
     endpoint_path_404 = f"/api/v1/projects/{NON_EXISTENT_PROJECT_ID}/{block_name}"
-
-    mock_project_dep.get_by_id.side_effect = HTTPException(status_code=404, detail=f"Project {NON_EXISTENT_PROJECT_ID} not found")
+    error_detail = f"Project {NON_EXISTENT_PROJECT_ID} not found"
+    mock_project_dep.get_by_id.side_effect = HTTPException(status_code=404, detail=error_detail)
 
     response = client.get(endpoint_path_404)
 
     assert response.status_code == status.HTTP_404_NOT_FOUND
-    assert f"Project {NON_EXISTENT_PROJECT_ID} not found" in response.json()["detail"]
+    assert response.json() == {"detail": error_detail}
     mock_project_dep.get_by_id.assert_called_once_with(project_id=NON_EXISTENT_PROJECT_ID)
     mock_file_svc.read_content_block_file.assert_not_called()
 
@@ -125,8 +129,12 @@ def test_update_block_success(mock_project_dep: MagicMock, mock_file_svc: MagicM
     response = client.put(endpoint_path, json=update_data)
 
     assert response.status_code == status.HTTP_200_OK
-    assert response.json() == {"project_id": PROJECT_ID, "content": UPDATED_CONTENT}
+    # Assert specific fields
+    response_data = response.json()
+    assert response_data["project_id"] == PROJECT_ID
+    assert response_data["content"] == UPDATED_CONTENT
     mock_project_dep.get_by_id.assert_called_once_with(project_id=PROJECT_ID)
+    # Verify service call arguments
     mock_file_svc.write_content_block_file.assert_called_once_with(PROJECT_ID, file_name, UPDATED_CONTENT)
 
 @pytest.mark.parametrize("block_name, initial_content", BLOCK_TYPES)
@@ -135,14 +143,14 @@ def test_update_block_success(mock_project_dep: MagicMock, mock_file_svc: MagicM
 def test_update_block_project_not_found(mock_project_dep: MagicMock, mock_file_svc: MagicMock, block_name: str, initial_content: str):
     """Test PUT when the project doesn't exist (404 from dependency)."""
     endpoint_path_404 = f"/api/v1/projects/{NON_EXISTENT_PROJECT_ID}/{block_name}"
-
-    mock_project_dep.get_by_id.side_effect = HTTPException(status_code=404, detail=f"Project {NON_EXISTENT_PROJECT_ID} not found")
+    error_detail = f"Project {NON_EXISTENT_PROJECT_ID} not found"
+    mock_project_dep.get_by_id.side_effect = HTTPException(status_code=404, detail=error_detail)
     update_data = {"content": UPDATED_CONTENT}
 
     response = client.put(endpoint_path_404, json=update_data)
 
     assert response.status_code == status.HTTP_404_NOT_FOUND
-    assert f"Project {NON_EXISTENT_PROJECT_ID} not found" in response.json()["detail"]
+    assert response.json() == {"detail": error_detail}
     mock_project_dep.get_by_id.assert_called_once_with(project_id=NON_EXISTENT_PROJECT_ID)
     mock_file_svc.write_content_block_file.assert_not_called()
 
@@ -159,8 +167,9 @@ def test_update_block_validation_error(mock_project_dep: MagicMock, mock_file_sv
     response = client.put(endpoint_path, json=invalid_data)
 
     assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
-    assert response.json()['detail'][0]['type'] == 'missing'
-    assert response.json()['detail'][0]['loc'] == ['body', 'content']
+    response_data = response.json()
+    assert response_data['detail'][0]['type'] == 'missing'
+    assert response_data['detail'][0]['loc'] == ['body', 'content']
     mock_project_dep.get_by_id.assert_called_once_with(project_id=PROJECT_ID)
     mock_file_svc.write_content_block_file.assert_not_called()
 
@@ -171,17 +180,18 @@ def test_update_block_write_error(mock_project_dep: MagicMock, mock_file_svc: Ma
     """Test PUT when file writing fails."""
     endpoint_path = f"/api/v1/projects/{PROJECT_ID}/{block_name}"
     file_name = f"{block_name}.md"
+    error_detail = f"Could not write to {file_name}"
 
     mock_project_dep.get_by_id.side_effect = mock_project_exists
     mock_file_svc.write_content_block_file.side_effect = HTTPException(
         status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-        detail=f"Could not write to {file_name}"
+        detail=error_detail
     )
     update_data = {"content": UPDATED_CONTENT}
 
     response = client.put(endpoint_path, json=update_data)
 
     assert response.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
-    assert f"Could not write to {file_name}" in response.json()["detail"]
+    assert response.json() == {"detail": error_detail}
     mock_project_dep.get_by_id.assert_called_once_with(project_id=PROJECT_ID)
     mock_file_svc.write_content_block_file.assert_called_once_with(PROJECT_ID, file_name, UPDATED_CONTENT)

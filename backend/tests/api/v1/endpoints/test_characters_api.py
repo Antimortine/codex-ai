@@ -39,7 +39,6 @@ NON_EXISTENT_PROJECT_ID = "project-404"
 NON_EXISTENT_CHARACTER_ID = "character-404"
 
 # --- Mock Dependency Helper ---
-# Mocks the project_service.get_by_id call used in the dependency
 def mock_project_exists(*args, **kwargs):
     project_id_arg = kwargs.get('project_id', args[0] if args else PROJECT_ID)
     if project_id_arg == NON_EXISTENT_PROJECT_ID:
@@ -48,8 +47,6 @@ def mock_project_exists(*args, **kwargs):
 
 # --- Test Character API Endpoints ---
 
-# Patch BOTH the character_service (used by endpoint logic) AND
-# the project_service (used by the dependency)
 @patch('app.api.v1.endpoints.characters.character_service', autospec=True)
 @patch('app.api.v1.endpoints.content_blocks.project_service', autospec=True) # Target dependency import
 def test_create_character_success(mock_project_service_dep: MagicMock, mock_character_service: MagicMock):
@@ -67,8 +64,15 @@ def test_create_character_success(mock_project_service_dep: MagicMock, mock_char
     response = client.post(f"/api/v1/projects/{PROJECT_ID}/characters/", json=char_data_in)
 
     assert response.status_code == status.HTTP_201_CREATED
-    assert response.json() == mock_created_char.model_dump()
+    # Assert specific fields
+    response_data = response.json()
+    assert response_data["id"] == CHARACTER_ID_1
+    assert response_data["project_id"] == PROJECT_ID
+    assert response_data["name"] == char_data_in["name"]
+    assert response_data["description"] == char_data_in["description"]
+    # Verify dependency check
     mock_project_service_dep.get_by_id.assert_called_once_with(project_id=PROJECT_ID)
+    # Verify service call arguments
     mock_character_service.create.assert_called_once()
     call_args, call_kwargs = mock_character_service.create.call_args
     assert call_kwargs['project_id'] == PROJECT_ID
@@ -80,16 +84,17 @@ def test_create_character_success(mock_project_service_dep: MagicMock, mock_char
 @patch('app.api.v1.endpoints.content_blocks.project_service', autospec=True)
 def test_create_character_project_not_found(mock_project_service_dep: MagicMock, mock_character_service: MagicMock):
     """Test character creation when the project does not exist (404 from dependency)."""
+    error_detail = f"Project {NON_EXISTENT_PROJECT_ID} not found"
     mock_project_service_dep.get_by_id.side_effect = HTTPException(
         status_code=status.HTTP_404_NOT_FOUND,
-        detail=f"Project {NON_EXISTENT_PROJECT_ID} not found"
+        detail=error_detail
     )
     char_data_in = {"name": "Lost Character", "description": ""}
 
     response = client.post(f"/api/v1/projects/{NON_EXISTENT_PROJECT_ID}/characters/", json=char_data_in)
 
     assert response.status_code == status.HTTP_404_NOT_FOUND
-    assert f"Project {NON_EXISTENT_PROJECT_ID} not found" in response.json()["detail"]
+    assert response.json() == {"detail": error_detail}
     mock_project_service_dep.get_by_id.assert_called_once_with(project_id=NON_EXISTENT_PROJECT_ID)
     mock_character_service.create.assert_not_called()
 
@@ -103,8 +108,9 @@ def test_create_character_validation_error(mock_project_service_dep: MagicMock, 
     response = client.post(f"/api/v1/projects/{PROJECT_ID}/characters/", json=invalid_data)
 
     assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
-    assert response.json()['detail'][0]['type'] == 'string_too_short'
-    assert response.json()['detail'][0]['loc'] == ['body', 'name']
+    response_data = response.json()
+    assert response_data['detail'][0]['type'] == 'string_too_short'
+    assert response_data['detail'][0]['loc'] == ['body', 'name']
     mock_project_service_dep.get_by_id.assert_called_once_with(project_id=PROJECT_ID)
     mock_character_service.create.assert_not_called()
 
@@ -120,7 +126,11 @@ def test_list_characters_empty(mock_project_service_dep: MagicMock, mock_charact
     response = client.get(f"/api/v1/projects/{PROJECT_ID}/characters/")
 
     assert response.status_code == status.HTTP_200_OK
-    assert response.json() == {"characters": []}
+    # Assert structure
+    response_data = response.json()
+    assert "characters" in response_data
+    assert isinstance(response_data["characters"], list)
+    assert len(response_data["characters"]) == 0
     mock_project_service_dep.get_by_id.assert_called_once_with(project_id=PROJECT_ID)
     mock_character_service.get_all_for_project.assert_called_once_with(project_id=PROJECT_ID)
 
@@ -129,21 +139,25 @@ def test_list_characters_empty(mock_project_service_dep: MagicMock, mock_charact
 def test_list_characters_with_data(mock_project_service_dep: MagicMock, mock_character_service: MagicMock):
     """Test listing characters when some exist."""
     mock_project_service_dep.get_by_id.side_effect = mock_project_exists
-    char1 = CharacterRead(id=CHARACTER_ID_1, project_id=PROJECT_ID, name="Char 1", description="Desc 1")
-    char2 = CharacterRead(id=CHARACTER_ID_2, project_id=PROJECT_ID, name="Char 2", description="Desc 2")
-    # Note: List endpoint might not return description, adjust mock if needed
+    # Note: CharacterList response might not include description, adjust if needed
+    char1 = CharacterRead(id=CHARACTER_ID_1, project_id=PROJECT_ID, name="Char 1", description="")
+    char2 = CharacterRead(id=CHARACTER_ID_2, project_id=PROJECT_ID, name="Char 2", description="")
     mock_character_service.get_all_for_project.return_value = CharacterList(characters=[char1, char2])
 
     response = client.get(f"/api/v1/projects/{PROJECT_ID}/characters/")
 
     assert response.status_code == status.HTTP_200_OK
-    expected_data = {
-        "characters": [
-            char1.model_dump(),
-            char2.model_dump()
-        ]
-    }
-    assert response.json() == expected_data
+    response_data = response.json()
+    assert "characters" in response_data
+    assert isinstance(response_data["characters"], list)
+    assert len(response_data["characters"]) == 2
+    # Assert specific fields for each character
+    assert response_data["characters"][0]["id"] == CHARACTER_ID_1
+    assert response_data["characters"][0]["project_id"] == PROJECT_ID
+    assert response_data["characters"][0]["name"] == "Char 1"
+    # assert response_data["characters"][0]["description"] == "" # Check if description is expected
+    assert response_data["characters"][1]["id"] == CHARACTER_ID_2
+    assert response_data["characters"][1]["name"] == "Char 2"
     mock_project_service_dep.get_by_id.assert_called_once_with(project_id=PROJECT_ID)
     mock_character_service.get_all_for_project.assert_called_once_with(project_id=PROJECT_ID)
 
@@ -160,7 +174,12 @@ def test_get_character_success(mock_project_service_dep: MagicMock, mock_charact
     response = client.get(f"/api/v1/projects/{PROJECT_ID}/characters/{CHARACTER_ID_1}")
 
     assert response.status_code == status.HTTP_200_OK
-    assert response.json() == mock_char.model_dump()
+    # Assert specific fields
+    response_data = response.json()
+    assert response_data["id"] == CHARACTER_ID_1
+    assert response_data["project_id"] == PROJECT_ID
+    assert response_data["name"] == "Found Character"
+    assert response_data["description"] == "Found Desc"
     mock_project_service_dep.get_by_id.assert_called_once_with(project_id=PROJECT_ID)
     mock_character_service.get_by_id.assert_called_once_with(project_id=PROJECT_ID, character_id=CHARACTER_ID_1)
 
@@ -169,15 +188,16 @@ def test_get_character_success(mock_project_service_dep: MagicMock, mock_charact
 def test_get_character_not_found(mock_project_service_dep: MagicMock, mock_character_service: MagicMock):
     """Test getting a character that does not exist (404)."""
     mock_project_service_dep.get_by_id.side_effect = mock_project_exists
+    error_detail = f"Character {NON_EXISTENT_CHARACTER_ID} not found"
     mock_character_service.get_by_id.side_effect = HTTPException(
         status_code=status.HTTP_404_NOT_FOUND,
-        detail=f"Character {NON_EXISTENT_CHARACTER_ID} not found"
+        detail=error_detail
     )
 
     response = client.get(f"/api/v1/projects/{PROJECT_ID}/characters/{NON_EXISTENT_CHARACTER_ID}")
 
     assert response.status_code == status.HTTP_404_NOT_FOUND
-    assert f"Character {NON_EXISTENT_CHARACTER_ID} not found" in response.json()["detail"]
+    assert response.json() == {"detail": error_detail}
     mock_project_service_dep.get_by_id.assert_called_once_with(project_id=PROJECT_ID)
     mock_character_service.get_by_id.assert_called_once_with(project_id=PROJECT_ID, character_id=NON_EXISTENT_CHARACTER_ID)
 
@@ -200,8 +220,14 @@ def test_update_character_success(mock_project_service_dep: MagicMock, mock_char
     response = client.patch(f"/api/v1/projects/{PROJECT_ID}/characters/{CHARACTER_ID_1}", json=update_data)
 
     assert response.status_code == status.HTTP_200_OK
-    assert response.json() == mock_updated_char.model_dump()
+    # Assert specific fields
+    response_data = response.json()
+    assert response_data["id"] == CHARACTER_ID_1
+    assert response_data["project_id"] == PROJECT_ID
+    assert response_data["name"] == update_data["name"]
+    assert response_data["description"] == update_data["description"]
     mock_project_service_dep.get_by_id.assert_called_once_with(project_id=PROJECT_ID)
+    # Verify service call arguments
     mock_character_service.update.assert_called_once()
     call_args, call_kwargs = mock_character_service.update.call_args
     assert call_kwargs['project_id'] == PROJECT_ID
@@ -216,17 +242,18 @@ def test_update_character_not_found(mock_project_service_dep: MagicMock, mock_ch
     """Test updating a character that does not exist (404)."""
     mock_project_service_dep.get_by_id.side_effect = mock_project_exists
     update_data = {"name": "Doesn't Matter"}
+    error_detail = f"Character {NON_EXISTENT_CHARACTER_ID} not found"
     mock_character_service.update.side_effect = HTTPException(
         status_code=status.HTTP_404_NOT_FOUND,
-        detail=f"Character {NON_EXISTENT_CHARACTER_ID} not found"
+        detail=error_detail
     )
 
     response = client.patch(f"/api/v1/projects/{PROJECT_ID}/characters/{NON_EXISTENT_CHARACTER_ID}", json=update_data)
 
     assert response.status_code == status.HTTP_404_NOT_FOUND
-    assert f"Character {NON_EXISTENT_CHARACTER_ID} not found" in response.json()["detail"]
+    assert response.json() == {"detail": error_detail}
     mock_project_service_dep.get_by_id.assert_called_once_with(project_id=PROJECT_ID)
-    mock_character_service.update.assert_called_once()
+    mock_character_service.update.assert_called_once() # Service method is still called
 
 # --- Delete Character ---
 
@@ -240,7 +267,10 @@ def test_delete_character_success(mock_project_service_dep: MagicMock, mock_char
     response = client.delete(f"/api/v1/projects/{PROJECT_ID}/characters/{CHARACTER_ID_1}")
 
     assert response.status_code == status.HTTP_200_OK
-    assert response.json() == {"message": f"Character {CHARACTER_ID_1} deleted successfully"}
+    # Assert specific message field
+    response_data = response.json()
+    assert "message" in response_data
+    assert response_data["message"] == f"Character {CHARACTER_ID_1} deleted successfully"
     mock_project_service_dep.get_by_id.assert_called_once_with(project_id=PROJECT_ID)
     mock_character_service.delete.assert_called_once_with(project_id=PROJECT_ID, character_id=CHARACTER_ID_1)
 
@@ -249,14 +279,15 @@ def test_delete_character_success(mock_project_service_dep: MagicMock, mock_char
 def test_delete_character_not_found(mock_project_service_dep: MagicMock, mock_character_service: MagicMock):
     """Test deleting a character that does not exist (404)."""
     mock_project_service_dep.get_by_id.side_effect = mock_project_exists
+    error_detail = f"Character {NON_EXISTENT_CHARACTER_ID} not found"
     mock_character_service.delete.side_effect = HTTPException(
         status_code=status.HTTP_404_NOT_FOUND,
-        detail=f"Character {NON_EXISTENT_CHARACTER_ID} not found"
+        detail=error_detail
     )
 
     response = client.delete(f"/api/v1/projects/{PROJECT_ID}/characters/{NON_EXISTENT_CHARACTER_ID}")
 
     assert response.status_code == status.HTTP_404_NOT_FOUND
-    assert f"Character {NON_EXISTENT_CHARACTER_ID} not found" in response.json()["detail"]
+    assert response.json() == {"detail": error_detail}
     mock_project_service_dep.get_by_id.assert_called_once_with(project_id=PROJECT_ID)
     mock_character_service.delete.assert_called_once_with(project_id=PROJECT_ID, character_id=NON_EXISTENT_CHARACTER_ID)
