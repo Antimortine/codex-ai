@@ -2,29 +2,32 @@ fastapi
 uvicorn[standard]
 python-dotenv
 pydantic-settings
-llama-cloud==0.1.17
-llama-cloud-services==0.6.9
-llama-index==0.12.28
-llama-index-agent-openai==0.4.6
-llama-index-cli==0.4.1
-llama-index-core==0.12.28
+
+# --- LlamaIndex and Google AI Dependencies (Attempting Compatibility) ---
+
+# Pin google-generativeai to the range required by embeddings-google
+google-generativeai>=0.5.2,<0.6.0
+
+# Keep the latest embeddings-google which requires the above range
 llama-index-embeddings-google==0.3.1
-llama-index-embeddings-openai==0.3.1
-llama-index-indices-managed-llama-cloud==0.6.11
-llama-index-llms-gemini==0.4.14
-llama-index-llms-openai==0.3.30
-llama-index-multi-modal-llms-openai==0.4.3
-llama-index-program-openai==0.3.1
-llama-index-question-gen-openai==0.3.0
-llama-index-readers-file==0.4.7
-llama-index-readers-llama-parse==0.4.0
-llama-index-vector-stores-chroma==0.4.1
-llama-parse==0.6.4.post1
-google-ai-generativelanguage==0.6.15
-google-api-core==2.24.2
-google-api-python-client==2.166.0
-google-auth==2.38.0
-google-auth-httplib2==0.2.0
-google-generativeai==0.8.4
-googleapis-common-protos==1.69.2
+
+# Downgrade llms-gemini to a version potentially compatible with google-generativeai 0.5.x
+# Update: Try 0.3.1 which requires google-generativeai>=0.5.0,<0.6.0, aligning with embeddings
+llama-index-llms-gemini==0.3.1
+
+# Keep core llama-index relatively recent, but allow flexibility
+# Let's use versions compatible with the older Gemini components if possible
+# Update: embeddings-google requires >=0.12.0
+llama-index>=0.12.0,<0.13.0 # Adjusted range for embeddings-google compatibility
+llama-index-core>=0.12.0,<0.13.0
+
+# Add other specific llama-index-* integrations if needed, without strict pins initially
+llama-index-readers-file
+llama-index-vector-stores-chroma
+
+# --- Other Dependencies ---
 chromadb>=0.4.0
+
+# --- Testing Dependencies ---
+pytest
+httpx
