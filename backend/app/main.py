@@ -17,9 +17,10 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import logging
 import traceback
+import time # Import time for middleware timing
 
 # Set up logging
-logging.basicConfig(level=logging.DEBUG)
+logging.basicConfig(level=logging.DEBUG) # Ensure DEBUG level
 logger = logging.getLogger(__name__)
 
 # Import the main API router
@@ -32,21 +33,41 @@ from app.api.v1.api import api_router
 # Metadata like title, description, version can be added here later.
 app = FastAPI(title="Codex AI Backend")
 
-# Global exception handler
+
+# --- ADDED: Simple Request Logging Middleware ---
+@app.middleware("http")
+async def log_requests(request: Request, call_next):
+    start_time = time.time()
+    logger.info(f"MIDDLEWARE: Incoming request: {request.method} {request.url.path}")
+    try:
+        response = await call_next(request)
+        process_time = time.time() - start_time
+        logger.info(f"MIDDLEWARE: Finished request: {request.method} {request.url.path} - Status: {response.status_code} - Time: {process_time:.4f}s")
+        return response
+    except Exception as e:
+        process_time = time.time() - start_time
+        logger.error(f"MIDDLEWARE: Exception during request: {request.method} {request.url.path} - Error: {e} - Time: {process_time:.4f}s", exc_info=True)
+        # Re-raise the exception so the global handler can catch it
+        raise e
+# --- END ADDED MIDDLEWARE ---
+
+
+# Global exception handler (Keep this AFTER the logging middleware)
 @app.exception_handler(Exception)
 async def global_exception_handler(request: Request, exc: Exception):
-    logger.error(f"Unhandled exception: {exc}")
-    logger.error(traceback.format_exc())
+    logger.error(f"GLOBAL HANDLER: Unhandled exception for {request.method} {request.url.path}: {exc}", exc_info=True)
+    # logger.error(traceback.format_exc()) # exc_info=True in logger.error does this
     return JSONResponse(
         status_code=500,
         content={
             "message": "An unexpected error occurred",
-            "error": str(exc),
-            "trace": traceback.format_exc().split('\n')
+            "error_type": type(exc).__name__, # Add type for clarity
+            "error_details": str(exc),
+            # "trace": traceback.format_exc().split('\n') # Maybe too verbose for client
         }
     )
 
-# --- CORS Middleware ---
+# --- CORS Middleware (Keep this AFTER the logging middleware if you want to see logs even for CORS-rejected requests) ---
 origins = [
     "http://localhost",       # Allow local access if needed
     "http://127.0.0.1",       # Allow local access via IP
@@ -73,8 +94,8 @@ async def read_root():
     """
     Health check endpoint. Returns a welcome message.
     """
-    logger.debug("Root endpoint was called!")
-    print("Root endpoint was called! CORS seems to be working.")
+    logger.debug("Root endpoint handler called!")
+    # print("Root endpoint was called! CORS seems to be working.") # Redundant with logger
     return {"message": "Welcome to Codex AI Backend!"}
 
 # --- Test Endpoint ---
@@ -83,8 +104,8 @@ async def test_endpoint():
     """
     Simple test endpoint to verify routing.
     """
-    logger.debug("Test endpoint was called!")
-    print("Test endpoint was called!")
+    logger.debug("Test endpoint handler called!")
+    # print("Test endpoint was called!") # Redundant with logger
     return {"status": "test successful"}
 
 # --- Include API Routers ---
@@ -96,9 +117,15 @@ app.include_router(api_router, prefix="/api/v1")
 @app.on_event("startup")
 async def startup_event():
     logger.info("Starting up Codex AI Backend...")
-    print("Starting up Codex AI Backend...")
-    
+    # print("Starting up Codex AI Backend...") # Redundant with logger
+
     # Log all registered routes for debugging
     logger.info("Registered routes:")
     for route in app.routes:
-        logger.info(f"Route: {route.path}, Methods: {route.methods}")
+        # Filter out middleware routes for cleaner logging if desired
+        if hasattr(route, 'path'):
+             logger.info(f"Route: {route.path}, Name: {route.name if hasattr(route, 'name') else 'N/A'}, Methods: {route.methods if hasattr(route, 'methods') else 'Middleware/Other'}")
+
+@app.on_event("shutdown")
+async def shutdown_event():
+    logger.info("Shutting down Codex AI Backend...")
