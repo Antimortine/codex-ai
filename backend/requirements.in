@@ -28,3 +28,4 @@ chromadb>=0.4.0
 # --- Testing ---
 pytest
 httpx
+pytest-asyncio

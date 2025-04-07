@@ -17,10 +17,11 @@ from fastapi.middleware.cors import CORSMiddleware
 from fastapi.responses import JSONResponse
 import logging
 import traceback
-import time # Import time for middleware timing
+import time
+from contextlib import asynccontextmanager # Import asynccontextmanager
 
 # Set up logging
-logging.basicConfig(level=logging.DEBUG) # Ensure DEBUG level
+logging.basicConfig(level=logging.DEBUG)
 logger = logging.getLogger(__name__)
 
 # Import the main API router
@@ -28,15 +29,37 @@ from app.api.v1.api import api_router
 # Assuming config will be needed soon
 # from app.core.config import settings
 
+
+# --- Lifespan Event Handler ---
+@asynccontextmanager
+async def lifespan(app: FastAPI):
+    # Code to run on startup
+    logger.info("Lifespan: Starting up Codex AI Backend...")
+    # Log registered routes (optional, can be verbose)
+    logger.info("Lifespan: Registered routes:")
+    for route in app.routes:
+        if hasattr(route, 'path'):
+             logger.info(f"  Route: {route.path}, Name: {route.name if hasattr(route, 'name') else 'N/A'}, Methods: {route.methods if hasattr(route, 'methods') else 'Middleware/Other'}")
+    print("Lifespan: Startup complete.") # Keep print for visual confirmation if needed
+
+    yield # The application runs while yielded
+
+    # Code to run on shutdown
+    logger.info("Lifespan: Shutting down Codex AI Backend...")
+    print("Lifespan: Shutdown complete.")
+
+
 # --- FastAPI App Initialization ---
-# Create the main FastAPI application instance.
-# Metadata like title, description, version can be added here later.
-app = FastAPI(title="Codex AI Backend")
+# Pass the lifespan manager to the FastAPI constructor
+app = FastAPI(title="Codex AI Backend", lifespan=lifespan)
 
 
 # --- ADDED: Simple Request Logging Middleware ---
 @app.middleware("http")
 async def log_requests(request: Request, call_next):
+    # --- ADDED PRINT STATEMENT ---
+    print(f"--- Entering log_requests middleware for: {request.method} {request.url.path} ---")
+    # --- END ADDED PRINT STATEMENT ---
     start_time = time.time()
     logger.info(f"MIDDLEWARE: Incoming request: {request.method} {request.url.path}")
     try:
@@ -113,19 +136,20 @@ async def test_endpoint():
 # Using settings.API_V1_STR is cleaner if defined in config.py
 app.include_router(api_router, prefix="/api/v1")
 
-# Startup logging
-@app.on_event("startup")
-async def startup_event():
-    logger.info("Starting up Codex AI Backend...")
-    # print("Starting up Codex AI Backend...") # Redundant with logger
-
-    # Log all registered routes for debugging
-    logger.info("Registered routes:")
-    for route in app.routes:
-        # Filter out middleware routes for cleaner logging if desired
-        if hasattr(route, 'path'):
-             logger.info(f"Route: {route.path}, Name: {route.name if hasattr(route, 'name') else 'N/A'}, Methods: {route.methods if hasattr(route, 'methods') else 'Middleware/Other'}")
-
-@app.on_event("shutdown")
-async def shutdown_event():
-    logger.info("Shutting down Codex AI Backend...")
+# --- REMOVED Old Startup/Shutdown Event Handlers ---
+# @app.on_event("startup")
+# async def startup_event():
+#     logger.info("Starting up Codex AI Backend...")
+#     # print("Starting up Codex AI Backend...") # Redundant with logger
+#
+#     # Log all registered routes for debugging
+#     logger.info("Registered routes:")
+#     for route in app.routes:
+#         # Filter out middleware routes for cleaner logging if desired
+#         if hasattr(route, 'path'):
+#              logger.info(f"Route: {route.path}, Name: {route.name if hasattr(route, 'name') else 'N/A'}, Methods: {route.methods if hasattr(route, 'methods') else 'Middleware/Other'}")
+#
+# @app.on_event("shutdown")
+# async def shutdown_event():
+#     logger.info("Shutting down Codex AI Backend...")
+# --- END REMOVED ---
