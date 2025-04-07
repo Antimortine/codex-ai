@@ -14,13 +14,13 @@
  * limitations under the License.
  */
 
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react'; // Added useEffect, useRef
 import PropTypes from 'prop-types';
-import MDEditor, { commands } from '@uiw/react-md-editor'; // Import commands
+import MDEditor, { commands } from '@uiw/react-md-editor';
 import { rephraseText } from '../api/codexApi';
 
 // --- Suggestion Popup Component ---
-const popupStyles = {
+const popupBaseStyles = {
     position: 'absolute',
     zIndex: 1010,
     backgroundColor: 'white',
@@ -28,15 +28,27 @@ const popupStyles = {
     borderRadius: '4px',
     boxShadow: '0 2px 10px rgba(0,0,0,0.2)',
     padding: '5px',
-    minWidth: '150px',
-    marginTop: '5px', // Add some space below toolbar
+    minWidth: '200px', // Increased minWidth
+    maxWidth: '400px', // Added maxWidth
+    maxHeight: '300px', // Added maxHeight
+    overflowY: 'auto', // Allow scrolling for many suggestions
+    marginTop: '5px',
+    outline: 'none', // Remove default focus outline
 };
 
-const suggestionStyles = {
+const suggestionBaseStyles = {
     cursor: 'pointer',
-    padding: '4px 8px',
+    padding: '5px 10px', // Increased padding
     borderBottom: '1px solid #eee',
     fontSize: '0.9em',
+    whiteSpace: 'nowrap', // Prevent wrapping
+    overflow: 'hidden',
+    textOverflow: 'ellipsis', // Add ellipsis if too long
+};
+
+const suggestionHighlightedStyles = {
+    ...suggestionBaseStyles,
+    backgroundColor: '#e0e0e0', // Highlight color
 };
 
 const errorStyles = {
@@ -45,13 +57,84 @@ const errorStyles = {
     padding: '5px',
 };
 
-const SuggestionPopup = ({ suggestions, isLoading, error, onSelect, onClose }) => {
+const SuggestionPopup = ({ suggestions, isLoading, error, onSelect, onClose, top, left }) => {
+    const [highlightedIndex, setHighlightedIndex] = useState(-1); // -1 means nothing highlighted
+    const popupRef = useRef(null); // Ref for the popup container
+
+    // Focus the popup when it becomes visible to capture key events
+    useEffect(() => {
+        if (popupRef.current) {
+            popupRef.current.focus();
+            setHighlightedIndex(-1); // Reset highlight when popup appears/changes
+        }
+    }, [isLoading, error, suggestions]); // Re-run if loading/error/suggestions change
+
+    // Reset highlight index if suggestions list changes
+     useEffect(() => {
+        setHighlightedIndex(-1);
+    }, [suggestions]);
+
+    const handleKeyDown = useCallback((event) => {
+        if (isLoading || error || !suggestions || suggestions.length === 0) return;
+
+        switch (event.key) {
+            case 'ArrowDown':
+                event.preventDefault(); // Prevent page scroll
+                setHighlightedIndex(prevIndex =>
+                    prevIndex === suggestions.length - 1 ? 0 : prevIndex + 1
+                );
+                break;
+            case 'ArrowUp':
+                event.preventDefault(); // Prevent page scroll
+                setHighlightedIndex(prevIndex =>
+                    prevIndex <= 0 ? suggestions.length - 1 : prevIndex - 1
+                );
+                break;
+            case 'Enter':
+                event.preventDefault();
+                if (highlightedIndex >= 0 && highlightedIndex < suggestions.length) {
+                    onSelect(suggestions[highlightedIndex]);
+                }
+                break;
+            case 'Escape':
+                event.preventDefault();
+                onClose();
+                break;
+            default:
+                break;
+        }
+    }, [suggestions, highlightedIndex, isLoading, error, onSelect, onClose]);
+
+    // Scroll highlighted item into view
+    useEffect(() => {
+        if (highlightedIndex !== -1 && popupRef.current) {
+            const highlightedElement = popupRef.current.querySelector(`[data-index="${highlightedIndex}"]`);
+            if (highlightedElement) {
+                highlightedElement.scrollIntoView({ block: 'nearest', inline: 'nearest' });
+            }
+        }
+    }, [highlightedIndex]);
+
+
     if (!isLoading && !error && (!suggestions || suggestions.length === 0)) {
-        return null; // Don't show if nothing to display
+        return null;
     }
 
+    // Combine base styles with dynamic top/left
+    const dynamicPopupStyles = {
+        ...popupBaseStyles,
+        top: `${top}px`,
+        left: `${left}px`,
+    };
+
     return (
-        <div style={popupStyles}>
+        // Added ref and tabIndex for focus, onKeyDown handler
+        <div
+            ref={popupRef}
+            style={dynamicPopupStyles}
+            tabIndex={-1} // Make it focusable
+            onKeyDown={handleKeyDown}
+        >
              <button onClick={onClose} style={{ float: 'right', border:'none', background:'none', cursor:'pointer', fontSize:'1.1em', padding:'0 5px' }}>×</button>
              {isLoading && <div>Loading...</div>}
              {error && <div style={errorStyles}>Error: {error}</div>}
@@ -61,12 +144,13 @@ const SuggestionPopup = ({ suggestions, isLoading, error, onSelect, onClose }) =
                     {suggestions.map((s, index) => (
                         <div
                             key={index}
-                            style={suggestionStyles}
-                            className="suggestion-item" // For potential CSS hover
+                            data-index={index} // Add data-index for querySelector
+                            style={index === highlightedIndex ? suggestionHighlightedStyles : suggestionBaseStyles}
+                            className="suggestion-item"
                             onClick={() => onSelect(s)}
+                            onMouseEnter={() => setHighlightedIndex(index)} // Highlight on hover
                             role="button"
-                            tabIndex={0}
-                            onKeyPress={(e) => e.key === 'Enter' && onSelect(s)}
+                            // Removed tabIndex and onKeyPress as container handles keys
                         >
                             {s}
                         </div>
@@ -83,6 +167,8 @@ SuggestionPopup.propTypes = {
     error: PropTypes.string,
     onSelect: PropTypes.func.isRequired,
     onClose: PropTypes.func.isRequired,
+    top: PropTypes.number.isRequired, // Position prop
+    left: PropTypes.number.isRequired, // Position prop
 };
 
 
@@ -94,39 +180,58 @@ function AIEditorWrapper({ value, onChange, height = 300, projectId, ...restProp
         suggestions: [],
         isLoading: false,
         error: null,
+        // --- ADDED: Popup position ---
+        top: 50, // Default position
+        left: null, // Default to right alignment later
     });
-    // Store selection state needed for replacement
     const [activeSelection, setActiveSelection] = useState({ start: -1, end: -1, text: '' });
+    const editorRef = useRef(null); // Ref for the editor container div
 
     // --- Custom Rephrase Command ---
     const rephraseCommand = {
         name: 'rephrase',
         keyCommand: 'rephrase',
         buttonProps: { 'aria-label': 'Rephrase selected text', title: 'Rephrase selected text (AI)' },
-        icon: ( // Simple icon placeholder
+        icon: (
             <svg width="12" height="12" viewBox="0 0 24 24">
                 <path fill="currentColor" d="m12.16 6.84l-1.76 1.76l4.6 4.6l-4.6 4.6l1.76 1.76l6.36-6.36zM8.4 6.84l-6.36 6.36l6.36 6.36l1.76-1.76l-4.6-4.6l4.6-4.6z"/>
             </svg>
         ),
         execute: async (state, api) => {
             console.log("Rephrase command executed.");
-            // Use state object which proved reliable
             const selection = state?.selection;
             const selectedText = selection ? state.text.substring(selection.start, selection.end) : '';
 
             if (!selectedText || selectedText.trim().length === 0 || !selection) {
                 console.log("No text selected for rephrasing.");
-                setPopupState(prev => ({ ...prev, visible: false })); // Ensure popup is hidden
+                setPopupState(prev => ({ ...prev, visible: false }));
                 return;
             }
 
             console.log(`Selected: "${selectedText}", Start: ${selection.start}, End: ${selection.end}`);
-            // Store selection details from the reliable 'state' object
             setActiveSelection({ start: selection.start, end: selection.end, text: selectedText });
-            // Show loading popup
-            setPopupState({ visible: true, isLoading: true, error: null, suggestions: [] });
 
-            // Get context
+            // --- Calculate Popup Position ---
+            let popupTop = 50; // Default below toolbar
+            let popupLeft = null; // Default right alignment
+            if (editorRef.current) {
+                const editorRect = editorRef.current.getBoundingClientRect();
+                // Position near top-right corner of the editor container
+                popupTop = 45; // Adjust as needed based on toolbar height
+                popupLeft = editorRect.width - 420; // Approx popup width + padding
+                if (popupLeft < 10) popupLeft = 10; // Ensure it doesn't go off-screen left
+            }
+            // -----------------------------
+
+            setPopupState({
+                visible: true,
+                isLoading: true,
+                error: null,
+                suggestions: [],
+                top: popupTop,
+                left: popupLeft
+            });
+
             const contextBefore = state.text.substring(Math.max(0, selection.start - 50), selection.start);
             const contextAfter = state.text.substring(selection.end, Math.min(state.text.length, selection.end + 50));
 
@@ -167,38 +272,36 @@ function AIEditorWrapper({ value, onChange, height = 300, projectId, ...restProp
         } else {
             console.error("Cannot apply suggestion, stored selection indices are invalid.");
              navigator.clipboard.writeText(suggestion)
-                .then(() => setPopupState(prev => ({...prev, error:"Could not apply suggestion. Copied."}))) // Show error briefly in popup
+                .then(() => setPopupState(prev => ({...prev, error:"Could not apply suggestion. Copied."})))
                 .catch(err => {
                     console.error("Clipboard write failed:", err);
                     setPopupState(prev => ({...prev, error:"Could not apply suggestion or copy."}));
                 });
-             // Don't close immediately if there was an error
              return;
         }
-        // Close popup after successful application
         setPopupState(prev => ({ ...prev, visible: false }));
         setActiveSelection({ start: -1, end: -1, text: '' });
     }, [activeSelection, onChange, value]);
 
     // --- Handle Popup Close ---
     const handlePopupClose = useCallback(() => {
-        setPopupState(prev => ({ ...prev, visible: false, error: null })); // Hide and clear error
+        setPopupState(prev => ({ ...prev, visible: false, error: null }));
         setActiveSelection({ start: -1, end: -1, text: '' });
     }, []);
 
 
     return (
-        <div style={{ position: 'relative' }}> {/* Position relative for absolute popup */}
+        // Added ref to the container
+        <div ref={editorRef} style={{ position: 'relative' }}>
             <MDEditor
                 value={value}
                 onChange={onChange}
                 height={height}
                 commands={[
-                    // Sensible default command set
                     commands.bold, commands.italic, commands.strikethrough, commands.hr, commands.title, commands.divider,
                     commands.link, commands.quote, commands.code, commands.codeBlock, commands.image, commands.divider,
                     commands.unorderedListCommand, commands.orderedListCommand, commands.checkedListCommand, commands.divider,
-                    rephraseCommand, // Add our command
+                    rephraseCommand,
                     commands.divider,
                     commands.help,
                 ]}
@@ -206,17 +309,17 @@ function AIEditorWrapper({ value, onChange, height = 300, projectId, ...restProp
             />
 
             {/* Render Suggestion Popup Conditionally */}
-            {/* Position near top-right, adjust as needed */}
             {popupState.visible && (
-                 <div style={{position:'absolute', top: '40px', right:'10px', zIndex:1010}}>
-                    <SuggestionPopup
-                        suggestions={popupState.suggestions}
-                        isLoading={popupState.isLoading}
-                        error={popupState.error}
-                        onSelect={handleSuggestionSelect}
-                        onClose={handlePopupClose}
-                    />
-                 </div>
+                 // Pass position props
+                 <SuggestionPopup
+                    suggestions={popupState.suggestions}
+                    isLoading={popupState.isLoading}
+                    error={popupState.error}
+                    onSelect={handleSuggestionSelect}
+                    onClose={handlePopupClose}
+                    top={popupState.top}
+                    left={popupState.left}
+                 />
             )}
         </div>
     );
