@@ -1,4 +1,4 @@
-# Copyright 2025 Antimortine (antimortine@gmail.com)
+# Copyright 2025 Antimortine
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -53,7 +53,6 @@ async def query_project_context(
     - **project_id**: The UUID of the project to query within.
     - **query_request**: Contains the user's query text.
     """
-    # ... (query_project_context remains unchanged) ...
     logger.info(f"Received AI query request for project {project_id}: '{query_request.query}'")
     try:
         # Call the AIService method - it now returns a tuple
@@ -81,12 +80,20 @@ async def query_project_context(
         # Return the response model, now including formatted source nodes
         return AIQueryResponse(answer=answer_text, source_nodes=formatted_nodes)
 
+    # --- MODIFIED EXCEPTION HANDLING ---
+    except HTTPException as http_exc:
+        # Re-raise HTTPExceptions directly (like 404 from dependency or 5xx from service)
+        logger.warning(f"HTTPException during AI query for project {project_id}: {http_exc.status_code} - {http_exc.detail}")
+        raise http_exc
     except Exception as e:
-        logger.error(f"Error processing AI query for project {project_id}: {e}", exc_info=True)
+        # Catch any other unexpected exceptions
+        logger.error(f"Unexpected error processing AI query for project {project_id}: {e}", exc_info=True)
+        # Raise a generic 500 error
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to process AI query for project {project_id}."
+            detail=f"Failed to process AI query for project {project_id} due to an internal error."
         )
+    # --- END MODIFIED EXCEPTION HANDLING ---
 
 
 @router.post(
@@ -107,7 +114,6 @@ async def generate_scene_draft(
     - **chapter_id**: The UUID of the parent chapter (in path).
     - **request_data**: Contains optional guidance for generation (e.g., prompt_summary).
     """
-    # ... (generate_scene_draft remains unchanged) ...
     project_id, chapter_id = ids
     logger.info(f"Received AI scene generation request for project {project_id}, chapter {chapter_id}. Summary: '{request_data.prompt_summary}'")
 
@@ -119,6 +125,8 @@ async def generate_scene_draft(
         )
 
         # Check if the service returned an error message (simple check for now)
+        # AIService now raises HTTPException for errors, so this check might be redundant
+        # but kept for defense.
         if isinstance(generated_content, str) and generated_content.startswith("Error:"):
              logger.error(f"Scene generation failed for project {project_id}, chapter {chapter_id}: {generated_content}")
              raise HTTPException(
@@ -129,15 +137,18 @@ async def generate_scene_draft(
         logger.info(f"Successfully generated scene draft for project {project_id}, chapter {chapter_id}.")
         return AISceneGenerationResponse(generated_content=generated_content)
 
+    # --- MODIFIED EXCEPTION HANDLING ---
     except HTTPException as http_exc:
-         # Re-raise HTTPException (e.g., 404 from dependency)
+         # Re-raise HTTPException (e.g., 404 from dependency or 5xx from service)
+         logger.warning(f"HTTPException during scene generation for project {project_id}, chapter {chapter_id}: {http_exc.status_code} - {http_exc.detail}")
          raise http_exc
     except Exception as e:
-        logger.error(f"Error processing AI scene generation for project {project_id}, chapter {chapter_id}: {e}", exc_info=True)
+        logger.error(f"Unexpected error processing AI scene generation for project {project_id}, chapter {chapter_id}: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to process AI scene generation for project {project_id}, chapter {chapter_id}."
+            detail=f"Failed to process AI scene generation for project {project_id}, chapter {chapter_id} due to an internal error."
         )
+    # --- END MODIFIED EXCEPTION HANDLING ---
 
 
 @router.post(
@@ -165,7 +176,8 @@ async def rephrase_text_endpoint(
             request_data=request_data
         )
 
-        # Check if the service returned an error message (simple check for now)
+        # Check if the service returned an error message
+        # AIService now raises HTTPException for errors, so this check might be redundant
         if suggestions and isinstance(suggestions[0], str) and suggestions[0].startswith("Error:"):
              logger.error(f"Rephrasing failed for project {project_id}: {suggestions[0]}")
              raise HTTPException(
@@ -176,15 +188,18 @@ async def rephrase_text_endpoint(
         logger.info(f"Successfully generated {len(suggestions)} rephrase suggestions for project {project_id}.")
         return AIRephraseResponse(suggestions=suggestions)
 
+    # --- MODIFIED EXCEPTION HANDLING ---
     except HTTPException as http_exc:
-         # Re-raise HTTPException (e.g., 404 from dependency)
+         # Re-raise HTTPException (e.g., 404 from dependency or 5xx from service)
+         logger.warning(f"HTTPException during rephrase for project {project_id}: {http_exc.status_code} - {http_exc.detail}")
          raise http_exc
     except Exception as e:
-        logger.error(f"Error processing AI rephrase request for project {project_id}: {e}", exc_info=True)
+        logger.error(f"Unexpected error processing AI rephrase request for project {project_id}: {e}", exc_info=True)
         raise HTTPException(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to process AI rephrase request for project {project_id}."
+            detail=f"Failed to process AI rephrase request for project {project_id} due to an internal error."
         )
+    # --- END MODIFIED EXCEPTION HANDLING ---
 
 
 # --- Add other AI editing endpoints later ---
