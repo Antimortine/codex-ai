@@ -73,6 +73,8 @@ colorama==0.4.6
     #   uvicorn
 coloredlogs==15.0.1
     # via onnxruntime
+coverage[toml]==7.8.0
+    # via pytest-cov
 dataclasses-json==0.6.7
     # via llama-index-core
 deprecated==1.2.18
@@ -455,7 +457,10 @@ pytest==8.3.5
     # via
     #   -r requirements.in
     #   pytest-asyncio
+    #   pytest-cov
 pytest-asyncio==0.26.0
+    # via -r requirements.in
+pytest-cov==6.1.1
     # via -r requirements.in
 python-dateutil==2.9.0.post0
     # via
