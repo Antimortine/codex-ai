@@ -87,7 +87,7 @@ function ProjectDetailPage() {
     const [project, setProject] = useState(null);
     const [chapters, setChapters] = useState([]);
     const [characters, setCharacters] = useState([]);
-    const [scenes, setScenes] = useState({}); // Holds scenes keyed by chapterId: { chapterId1: [scene1, scene2], ... }
+    const [scenes, setScenes] = useState({});
     const [isLoadingProject, setIsLoadingProject] = useState(true);
     const [isLoadingChapters, setIsLoadingChapters] = useState(true);
     const [isLoadingCharacters, setIsLoadingCharacters] = useState(true);
@@ -95,78 +95,53 @@ function ProjectDetailPage() {
     const [error, setError] = useState(null);
     const [newChapterTitle, setNewChapterTitle] = useState('');
     const [newCharacterName, setNewCharacterName] = useState('');
-    // --- State for Editing Project Name ---
     const [isEditingName, setIsEditingName] = useState(false);
     const [editedProjectName, setEditedProjectName] = useState('');
     const [isSavingName, setIsSavingName] = useState(false);
     const [saveNameError, setSaveNameError] = useState(null);
     const [saveNameSuccess, setSaveNameSuccess] = useState('');
-    // --- State for AI Scene Generation ---
-    const [generationSummaries, setGenerationSummaries] = useState({}); // { chapterId: 'summary' }
-    const [isGeneratingScene, setIsGeneratingScene] = useState(false); // Track generation loading state
-    const [generatingChapterId, setGeneratingChapterId] = useState(null); // Track which chapter is generating
-    const [generationError, setGenerationError] = useState(null); // Store generation errors
-    const [generatedSceneContent, setGeneratedSceneContent] = useState(''); // Store the generated content
-    const [showGeneratedSceneModal, setShowGeneratedSceneModal] = useState(false); // Control modal visibility
-    const [chapterIdForGeneratedScene, setChapterIdForGeneratedScene] = useState(null); // Store chapter ID when modal opens
-    const [isCreatingSceneFromDraft, setIsCreatingSceneFromDraft] = useState(false); // Loading state for creating from draft
-    const [createSceneError, setCreateSceneError] = useState(null); // Error state for creating from draft
+    const [generationSummaries, setGenerationSummaries] = useState({});
+    const [isGeneratingScene, setIsGeneratingScene] = useState(false);
+    const [generatingChapterId, setGeneratingChapterId] = useState(null);
+    const [generationError, setGenerationError] = useState(null);
+    const [generatedSceneContent, setGeneratedSceneContent] = useState('');
+    const [showGeneratedSceneModal, setShowGeneratedSceneModal] = useState(false);
+    const [chapterIdForGeneratedScene, setChapterIdForGeneratedScene] = useState(null);
+    const [isCreatingSceneFromDraft, setIsCreatingSceneFromDraft] = useState(false);
+    const [createSceneError, setCreateSceneError] = useState(null);
 
     // --- useEffect for Data Fetching ---
     useEffect(() => {
-        // ... (useEffect logic remains the same) ...
         let isMounted = true;
         setError(null);
         setSaveNameError(null);
         setSaveNameSuccess('');
         setGenerationError(null);
-        setCreateSceneError(null); // Reset create scene error
+        setCreateSceneError(null);
 
         const fetchAllData = async () => {
             if (!projectId) {
-                console.log("useEffect running, but projectId is still missing.");
                 if (isMounted) setError("Project ID not found in URL.");
-                setIsLoadingProject(false);
-                setIsLoadingChapters(false);
-                setIsLoadingCharacters(false);
-                setIsLoadingScenes(false);
+                setIsLoadingProject(false); setIsLoadingChapters(false); setIsLoadingCharacters(false); setIsLoadingScenes(false);
                 return;
             }
-            console.log("useEffect running with projectId:", projectId);
 
             if (isMounted) {
-                setIsLoadingProject(true);
-                setIsLoadingChapters(true);
-                setIsLoadingCharacters(true);
-                setIsLoadingScenes(true);
-                setProject(null);
-                setChapters([]);
-                setCharacters([]);
-                setScenes({});
-                setGenerationSummaries({}); // Reset summaries on load
+                setIsLoadingProject(true); setIsLoadingChapters(true); setIsLoadingCharacters(true); setIsLoadingScenes(true);
+                setProject(null); setChapters([]); setCharacters([]); setScenes({}); setGenerationSummaries({});
             }
 
             try {
-                console.log("Fetching project...");
                 const projectResponse = await getProject(projectId);
-                if (isMounted) {
-                    setProject(projectResponse.data);
-                    setEditedProjectName(projectResponse.data.name || '');
-                }
-                console.log("Project fetched.");
+                if (isMounted) { setProject(projectResponse.data); setEditedProjectName(projectResponse.data.name || ''); }
 
-                console.log("Fetching chapters...");
                 const chaptersResponse = await listChapters(projectId);
                 const sortedChapters = (chaptersResponse.data.chapters || []).sort((a, b) => a.order - b.order);
                 if (isMounted) setChapters(sortedChapters);
-                console.log("Chapters fetched.");
 
-                console.log("Fetching characters...");
                 const charactersResponse = await listCharacters(projectId);
                 if (isMounted) setCharacters(charactersResponse.data.characters || []);
-                console.log("Characters fetched.");
 
-                console.log("Fetching scenes for chapters...");
                 const scenesData = {};
                 await Promise.all(sortedChapters.map(async (chapter) => {
                     try {
@@ -180,43 +155,24 @@ function ProjectDetailPage() {
                     }
                 }));
                 if (isMounted) setScenes(scenesData);
-                console.log("Scenes fetched.");
 
             } catch (err) {
                 console.error("Error during data fetching:", err);
-                if (isMounted) {
-                    setError(`Failed to load project data: ${err.message}`);
-                    setProject(null);
-                    setChapters([]);
-                    setCharacters([]);
-                    setScenes({});
-                }
+                if (isMounted) { setError(`Failed to load project data: ${err.message}`); setProject(null); setChapters([]); setCharacters([]); setScenes({}); }
             } finally {
-                if (isMounted) {
-                    setIsLoadingProject(false);
-                    setIsLoadingChapters(false);
-                    setIsLoadingCharacters(false);
-                    setIsLoadingScenes(false);
-                }
-                console.log("All fetching finished.");
+                if (isMounted) { setIsLoadingProject(false); setIsLoadingChapters(false); setIsLoadingCharacters(false); setIsLoadingScenes(false); }
             }
         };
 
         fetchAllData();
 
-        return () => {
-            isMounted = false;
-            console.log("ProjectDetailPage cleanup ran.");
-        };
+        return () => { isMounted = false; };
     }, [projectId]);
 
 
     // --- Action Handlers ---
     const refreshChaptersAndScenes = async () => {
-        // ... (refreshChaptersAndScenes logic remains the same) ...
-         setIsLoadingChapters(true);
-         setIsLoadingScenes(true);
-         setScenes({});
+         setIsLoadingChapters(true); setIsLoadingScenes(true); setScenes({});
          let chapterFetchError = false;
          try {
              const response = await listChapters(projectId);
@@ -242,13 +198,10 @@ function ProjectDetailPage() {
              setError(prev => prev ? `${prev} | Failed to load chapters.` : 'Failed to load chapters.');
              chapterFetchError = true;
          } finally {
-             setIsLoadingChapters(false);
-             setIsLoadingScenes(false);
+             setIsLoadingChapters(false); setIsLoadingScenes(false);
          }
      };
 
-    // --- handleCreateChapter, handleDeleteChapter, handleCreateCharacter, handleDeleteCharacter, handleCreateScene, handleDeleteScene, handleEditNameClick, handleCancelEditName, handleSaveName remain the same ---
-    // ... (omitted for brevity, assume they are unchanged) ...
     const handleCreateChapter = async (e) => {
         e.preventDefault();
         if (!newChapterTitle.trim()) return;
@@ -259,24 +212,18 @@ function ProjectDetailPage() {
             setNewChapterTitle('');
             refreshChaptersAndScenes();
         } catch (err) {
-            console.error("Error creating chapter:", err);
-            setError("Failed to create chapter.");
-            setIsLoadingChapters(false);
+            console.error("Error creating chapter:", err); setError("Failed to create chapter."); setIsLoadingChapters(false);
         }
     };
 
     const handleDeleteChapter = async (chapterId, chapterTitle) => {
         if (!window.confirm(`Delete chapter "${chapterTitle}" and ALL ITS SCENES?`)) return;
-        setIsLoadingChapters(true);
-        setIsLoadingScenes(true);
+        setIsLoadingChapters(true); setIsLoadingScenes(true);
         try {
             await deleteChapter(projectId, chapterId);
             refreshChaptersAndScenes();
         } catch (err) {
-             console.error("Error deleting chapter:", err);
-             setError("Failed to delete chapter.");
-             setIsLoadingChapters(false);
-             setIsLoadingScenes(false);
+             console.error("Error deleting chapter:", err); setError("Failed to delete chapter."); setIsLoadingChapters(false); setIsLoadingScenes(false);
         }
     };
 
@@ -290,8 +237,7 @@ function ProjectDetailPage() {
             const response = await listCharacters(projectId);
             setCharacters(response.data.characters || []);
         } catch (err) {
-             console.error("Error creating character:", err);
-             setError("Failed to create character.");
+             console.error("Error creating character:", err); setError("Failed to create character.");
         } finally {
              setIsLoadingCharacters(false);
         }
@@ -305,8 +251,7 @@ function ProjectDetailPage() {
             const response = await listCharacters(projectId);
             setCharacters(response.data.characters || []);
         } catch (err) {
-             console.error("Error deleting character:", err);
-             setError("Failed to delete character.");
+             console.error("Error deleting character:", err); setError("Failed to delete character.");
         } finally {
              setIsLoadingCharacters(false);
         }
@@ -318,16 +263,10 @@ function ProjectDetailPage() {
          setIsLoadingScenes(true);
          try {
              const newSceneData = { title: "New Scene", order: nextOrder, content: "" };
-             console.log("Attempting to create scene with data:", newSceneData);
-             const response = await createScene(projectId, chapterId, newSceneData);
-             console.log("Scene created response:", response.data);
-             refreshChaptersAndScenes(); // Refresh is handled here
+             await createScene(projectId, chapterId, newSceneData);
+             refreshChaptersAndScenes();
          } catch(err) {
-             console.error("Error creating scene:", err);
-             setError("Failed to create scene.");
-             setIsLoadingScenes(false); // Ensure loading state is reset on error
-         } finally {
-             // Loading state reset is handled by refreshChaptersAndScenes on success
+             console.error("Error creating scene:", err); setError("Failed to create scene."); setIsLoadingScenes(false);
          }
     };
 
@@ -338,418 +277,125 @@ function ProjectDetailPage() {
              await deleteScene(projectId, chapterId, sceneId);
              refreshChaptersAndScenes();
          } catch(err) {
-            console.error("Error deleting scene:", err);
-            setError("Failed to delete scene.");
-            setIsLoadingScenes(false);
+            console.error("Error deleting scene:", err); setError("Failed to delete scene."); setIsLoadingScenes(false);
          }
     };
 
     const handleEditNameClick = () => {
-        setEditedProjectName(project?.name || '');
-        setIsEditingName(true);
-        setSaveNameError(null);
-        setSaveNameSuccess('');
+        setEditedProjectName(project?.name || ''); setIsEditingName(true); setSaveNameError(null); setSaveNameSuccess('');
     };
 
-    const handleCancelEditName = () => {
-        setIsEditingName(false);
-    };
+    const handleCancelEditName = () => { setIsEditingName(false); };
 
     const handleSaveName = async () => {
-        if (!editedProjectName.trim()) {
-            setSaveNameError("Project name cannot be empty.");
-            return;
-        }
-        if (editedProjectName === project?.name) {
-            setIsEditingName(false);
-            return;
-        }
-
-        setIsSavingName(true);
-        setSaveNameError(null);
-        setSaveNameSuccess('');
-
+        if (!editedProjectName.trim()) { setSaveNameError("Project name cannot be empty."); return; }
+        if (editedProjectName === project?.name) { setIsEditingName(false); return; }
+        setIsSavingName(true); setSaveNameError(null); setSaveNameSuccess('');
         try {
             const response = await updateProject(projectId, { name: editedProjectName });
-            setProject(response.data);
-            setIsEditingName(false);
-            setSaveNameSuccess('Project name updated successfully!');
+            setProject(response.data); setIsEditingName(false); setSaveNameSuccess('Project name updated successfully!');
             setTimeout(() => setSaveNameSuccess(''), 3000);
         } catch (err) {
-            console.error("Error updating project name:", err);
-            setSaveNameError("Failed to update project name. Please try again.");
+            console.error("Error updating project name:", err); setSaveNameError("Failed to update project name. Please try again.");
         } finally {
             setIsSavingName(false);
         }
     };
 
-
-    // --- AI Generation Handler ---
     const handleGenerateSceneDraft = async (chapterId) => {
-        const summary = generationSummaries[chapterId] || ''; // Get summary for the specific chapter
-        setIsGeneratingScene(true);
-        setGeneratingChapterId(chapterId); // Mark which chapter is generating
-        setGenerationError(null);
-        setGeneratedSceneContent('');
-        setShowGeneratedSceneModal(false);
-        setCreateSceneError(null); // Clear any previous create error
-
-        // **Calculate previous scene order**
+        const summary = generationSummaries[chapterId] || '';
+        setIsGeneratingScene(true); setGeneratingChapterId(chapterId); setGenerationError(null);
+        setGeneratedSceneContent(''); setShowGeneratedSceneModal(false); setCreateSceneError(null);
         const currentScenesInChapter = scenes[chapterId] || [];
-        const previousSceneOrder = currentScenesInChapter.length > 0
-            ? Math.max(...currentScenesInChapter.map(s => s.order))
-            : 0; // If no scenes, previous order is 0
-
-        const requestData = {
-            prompt_summary: summary,
-            previous_scene_order: previousSceneOrder // Include the order
-        };
-
-        console.log(`Requesting scene draft for chapter ${chapterId} with data:`, requestData);
-
+        const previousSceneOrder = currentScenesInChapter.length > 0 ? Math.max(...currentScenesInChapter.map(s => s.order)) : 0;
+        const requestData = { prompt_summary: summary, previous_scene_order: previousSceneOrder };
         try {
-            const response = await generateSceneDraft(projectId, chapterId, requestData); // Pass updated requestData
-            console.log("AI Generation Response:", response.data);
+            const response = await generateSceneDraft(projectId, chapterId, requestData);
             setGeneratedSceneContent(response.data.generated_content || "AI returned empty content.");
-            setChapterIdForGeneratedScene(chapterId); // Store the relevant chapter ID
-            setShowGeneratedSceneModal(true); // Show the modal with the content
+            setChapterIdForGeneratedScene(chapterId); setShowGeneratedSceneModal(true);
         } catch (err) {
             console.error("Error generating scene draft:", err);
             const errorMsg = err.response?.data?.detail || err.message || 'Failed to generate scene draft.';
-            setGenerationError(errorMsg);
-            setShowGeneratedSceneModal(false);
+            setGenerationError(errorMsg); setShowGeneratedSceneModal(false);
         } finally {
-            setIsGeneratingScene(false);
-            setGeneratingChapterId(null); // Reset generating chapter ID
+            setIsGeneratingScene(false); setGeneratingChapterId(null);
         }
     };
 
-    // --- Create Scene From Draft Handler ---
     const handleCreateSceneFromDraft = async () => {
-        // ... (handleCreateSceneFromDraft logic remains the same) ...
-        if (!chapterIdForGeneratedScene || !generatedSceneContent) {
-            setCreateSceneError("Missing chapter ID or generated content.");
-            return;
-        }
-
-        setIsCreatingSceneFromDraft(true);
-        setCreateSceneError(null);
-
+        if (!chapterIdForGeneratedScene || !generatedSceneContent) { setCreateSceneError("Missing chapter ID or generated content."); return; }
+        setIsCreatingSceneFromDraft(true); setCreateSceneError(null);
         try {
-            // 1. Extract Title (simple logic)
             let title = "Generated Scene";
             const lines = generatedSceneContent.split('\n');
-            if (lines[0]?.startsWith('#')) { // Check if first line is a Markdown heading
-                title = lines[0].replace(/^[#\s]+/, '').trim(); // Remove leading '#' and spaces
-            } else if (lines[0]?.trim()) { // Use first non-empty line if no heading
-                 title = lines[0].trim();
-            }
-            // Truncate title if too long
-            if (title.length > 100) {
-                 title = title.substring(0, 97) + "...";
-            }
-
-            // 2. Calculate Next Order
+            if (lines[0]?.startsWith('#')) { title = lines[0].replace(/^[#\s]+/, '').trim(); }
+            else if (lines[0]?.trim()) { title = lines[0].trim(); }
+            if (title.length > 100) { title = title.substring(0, 97) + "..."; }
             const currentScenes = scenes[chapterIdForGeneratedScene] || [];
             const nextOrder = currentScenes.length > 0 ? Math.max(...currentScenes.map(s => s.order)) + 1 : 1;
-
-            // 3. Call API
-            const newSceneData = {
-                 title: title,
-                 order: nextOrder,
-                 content: generatedSceneContent
-            };
-            console.log("Attempting to create scene from draft with data:", newSceneData);
+            const newSceneData = { title: title, order: nextOrder, content: generatedSceneContent };
             await createScene(projectId, chapterIdForGeneratedScene, newSceneData);
-
-            // 4. Close modal and refresh
-            setShowGeneratedSceneModal(false);
-            setGeneratedSceneContent(''); // Clear content
-            setChapterIdForGeneratedScene(null); // Clear stored chapter ID
-            refreshChaptersAndScenes(); // Refresh the scene list
-
+            setShowGeneratedSceneModal(false); setGeneratedSceneContent(''); setChapterIdForGeneratedScene(null);
+            refreshChaptersAndScenes();
         } catch (err) {
             console.error("Error creating scene from draft:", err);
             const errorMsg = err.response?.data?.detail || err.message || 'Failed to create scene from draft.';
-            setCreateSceneError(errorMsg); // Show error within the modal
+            setCreateSceneError(errorMsg);
         } finally {
             setIsCreatingSceneFromDraft(false);
         }
     };
 
-
-    // Handler for updating generation summary state
-    const handleSummaryChange = (chapterId, value) => {
-        // ... (handleSummaryChange logic remains the same) ...
-        setGenerationSummaries(prev => ({
-            ...prev,
-            [chapterId]: value
-        }));
-    };
-
-     // Handler for copying generated text
-    const copyGeneratedText = () => {
-        // ... (copyGeneratedText logic remains the same) ...
-        navigator.clipboard.writeText(generatedSceneContent)
-            .then(() => {
-                console.log('Generated text copied to clipboard');
-            })
-            .catch(err => {
-                console.error('Failed to copy text: ', err);
-            });
-    };
+    const handleSummaryChange = (chapterId, value) => { setGenerationSummaries(prev => ({ ...prev, [chapterId]: value })); };
+    const copyGeneratedText = () => { navigator.clipboard.writeText(generatedSceneContent).catch(err => console.error('Failed to copy text: ', err)); };
 
     // --- Rendering Logic ---
-    // ... (Rendering logic remains largely the same, including modal and sections) ...
-    // ... Only relevant parts shown below for brevity ...
      const isLoading = isLoadingProject || isLoadingChapters || isLoadingCharacters || isLoadingScenes;
+     if (isLoadingProject && !project && !error) { return <p>Loading project...</p>; }
+     if (error && !isLoading) { return ( <div> <p style={{ color: 'red' }}>Error: {error}</p> <Link to="/"> &lt; Back to Project List</Link> </div> ); }
+     if (!isLoadingProject && !project) { return ( <div> <p>Project not found.</p> <Link to="/"> &lt; Back to Project List</Link> </div> ); }
 
-     if (isLoadingProject && !project && !error) {
-         return <p>Loading project...</p>;
-     }
-
-    if (error && !isLoading) { // Only show main error if not loading something else
-        return (
-             <div>
-                <p style={{ color: 'red' }}>Error: {error}</p>
-                <Link to="/"> &lt; Back to Project List</Link>
-            </div>
-        );
-    }
-
-    if (!isLoadingProject && !project) {
-        return (
-             <div>
-                <p>Project not found.</p>
-                <Link to="/"> &lt; Back to Project List</Link>
-            </div>
-        );
-    }
-
-    // Main render
     return (
         <div>
-            {/* --- Generated Scene Modal --- */}
-            {showGeneratedSceneModal && (
-                 <div style={modalStyles.overlay}>
-                    <div style={modalStyles.content}>
-                        <button
-                           style={modalStyles.closeButton}
-                           onClick={() => setShowGeneratedSceneModal(false)}
-                           disabled={isCreatingSceneFromDraft} // Disable close while creating
-                        >
-                            × {/* Close button */}
-                        </button>
-                        <h3>Generated Scene Draft</h3>
-                        {/* Display generated content in a textarea */}
-                        <textarea
-                            style={modalStyles.textarea}
-                            value={generatedSceneContent}
-                            readOnly
-                        />
-                        {/* Display error related to creating scene from draft */}
-                        {createSceneError && <p style={{ color: 'red', marginTop:'5px', fontSize:'0.9em' }}>Error: {createSceneError}</p>}
-                        {/* Action buttons */}
-                        <button
-                           style={modalStyles.createButton}
-                           onClick={handleCreateSceneFromDraft}
-                           disabled={isCreatingSceneFromDraft || !generatedSceneContent.trim()} // Disable if creating or no content
-                        >
-                            {isCreatingSceneFromDraft ? 'Creating Scene...' : 'Create Scene with this Draft'}
-                        </button>
-                        <button
-                            style={modalStyles.copyButton}
-                            onClick={copyGeneratedText}
-                            disabled={isCreatingSceneFromDraft}
-                        >
-                           Copy Text
-                        </button>
-                        <button
-                            onClick={() => setShowGeneratedSceneModal(false)}
-                            disabled={isCreatingSceneFromDraft}
-                        >
-                           Cancel
-                        </button>
-                    </div>
-                </div>
-            )}
-
-             {/* --- Rest of the page content (nav, header, sections) --- */}
-            <nav>
-                <Link to="/"> &lt; Back to Project List</Link>
-            </nav>
-
-            {/* Project Header */}
-             <div style={{ display: 'flex', alignItems: 'center', marginBottom: '0.5rem' }}>
-                 {/* ... Project Name Editing UI ... */}
-                 {!isEditingName ? (
-                    <>
-                        <h1 style={{ marginRight: '1rem', marginBottom: 0 }}>
-                            Project: {project?.name || 'Loading...'}
-                        </h1>
-                        {project && (
-                            <button onClick={handleEditNameClick} disabled={isLoadingProject || isSavingName || isGeneratingScene || isCreatingSceneFromDraft}>
-                                Edit Name
-                            </button>
-                        )}
-                    </>
-                ) : (
-                    <>
-                        <input
-                            type="text"
-                            value={editedProjectName}
-                            onChange={(e) => setEditedProjectName(e.target.value)}
-                            disabled={isSavingName}
-                            style={{ fontSize: '1.5em', marginRight: '0.5rem' }}
-                            aria-label="Project Name"
-                        />
-                        <button onClick={handleSaveName} disabled={isSavingName || !editedProjectName.trim()}>
-                            {isSavingName ? 'Saving...' : 'Save Name'}
-                        </button>
-                        <button onClick={handleCancelEditName} disabled={isSavingName} style={{ marginLeft: '0.5rem' }}>
-                            Cancel
-                        </button>
-                    </>
-                )}
+            {/* Modal */}
+            {showGeneratedSceneModal && ( <div style={modalStyles.overlay}> <div style={modalStyles.content}> <button style={modalStyles.closeButton} onClick={() => setShowGeneratedSceneModal(false)} disabled={isCreatingSceneFromDraft}> × </button> <h3>Generated Scene Draft</h3> <textarea style={modalStyles.textarea} value={generatedSceneContent} readOnly /> {createSceneError && <p style={{ color: 'red', marginTop:'5px', fontSize:'0.9em' }}>Error: {createSceneError}</p>} <button style={modalStyles.createButton} onClick={handleCreateSceneFromDraft} disabled={isCreatingSceneFromDraft || !generatedSceneContent.trim()}> {isCreatingSceneFromDraft ? 'Creating Scene...' : 'Create Scene with this Draft'} </button> <button style={modalStyles.copyButton} onClick={copyGeneratedText} disabled={isCreatingSceneFromDraft}> Copy Text </button> <button onClick={() => setShowGeneratedSceneModal(false)} disabled={isCreatingSceneFromDraft}> Cancel </button> </div> </div> )}
+            {/* Page Content */}
+            <nav> <Link to="/"> &lt; Back to Project List</Link> </nav>
+            <div style={{ display: 'flex', alignItems: 'center', marginBottom: '0.5rem' }}>
+                 {!isEditingName ? ( <> <h1 style={{ marginRight: '1rem', marginBottom: 0 }}> Project: {project?.name || 'Loading...'} </h1> {project && ( <button onClick={handleEditNameClick} disabled={isLoadingProject || isSavingName || isGeneratingScene || isCreatingSceneFromDraft}> Edit Name </button> )} </> ) : ( <> <input type="text" value={editedProjectName} onChange={(e) => setEditedProjectName(e.target.value)} disabled={isSavingName} style={{ fontSize: '1.5em', marginRight: '0.5rem' }} aria-label="Project Name" /> <button onClick={handleSaveName} disabled={isSavingName || !editedProjectName.trim()}> {isSavingName ? 'Saving...' : 'Save Name'} </button> <button onClick={handleCancelEditName} disabled={isSavingName} style={{ marginLeft: '0.5rem' }}> Cancel </button> </> )}
             </div>
             {saveNameError && <p style={{ color: 'red', marginTop: '0.2rem' }}>{saveNameError}</p>}
             {saveNameSuccess && <p style={{ color: 'green', marginTop: '0.2rem' }}>{saveNameSuccess}</p>}
             <p>ID: {projectId}</p>
             <hr />
-
-            {/* --- AI Query Interface --- */}
             {projectId && <QueryInterface projectId={projectId} />}
-            <hr /> {/* Add separator */}
-
-
-            {/* Chapters Section */}
+            <hr />
             <section>
                 <h2>Chapters</h2>
                 {isLoadingChapters ? <p>Loading chapters...</p> : (
                     chapters.length === 0 ? <p>No chapters yet.</p> :
                     chapters.map(chapter => (
-                        <div key={chapter.id} style={{ border: '1px solid #eee', padding: '10px', marginBottom: '10px' }}>
-                           {/* ... Chapter Title/Delete ... */}
-                           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '5px' }}>
-                                <strong>{chapter.order}: {chapter.title}</strong>
-                                <button onClick={() => handleDeleteChapter(chapter.id, chapter.title)} style={{ marginLeft: '1rem', color: 'red', cursor: 'pointer' }} disabled={isLoadingChapters || isLoadingScenes || isGeneratingScene || isCreatingSceneFromDraft}>
-                                    Delete Chapter
-                                </button>
-                            </div>
-                            {/* --- Scene List --- */}
-                            {isLoadingScenes ? <p style={{marginLeft:'20px'}}>Loading scenes...</p> : (
-                                <ul style={{ listStyle: 'none', paddingLeft: '20px' }}>
-                                    {(scenes[chapter.id] || []).map(scene => (
-                                        // ... Scene list item ...
-                                         <li key={scene.id} style={{ marginBottom: '0.3rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                                             <Link to={`/projects/${projectId}/chapters/${chapter.id}/scenes/${scene.id}`}>
-                                                {scene.order}: {scene.title}
-                                            </Link>
-                                             <button onClick={() => handleDeleteScene(chapter.id, scene.id, scene.title)} style={{ marginLeft: '1rem', fontSize: '0.8em', color: 'orange', cursor: 'pointer' }} disabled={isLoadingScenes || isGeneratingScene || isCreatingSceneFromDraft}>
-                                                Del Scene
-                                            </button>
-                                        </li>
-                                    ))}
-                                    {(scenes[chapter.id]?.length === 0 || !scenes[chapter.id]) && !isLoadingScenes && <p style={{marginLeft:'20px', fontStyle:'italic'}}>No scenes in this chapter yet.</p>}
-                                </ul>
-                            )}
-                            {/* --- Actions for Chapter (Add Scene, Generate Scene) --- */}
-                             <div style={{marginLeft: '20px', marginTop: '10px', borderTop: '1px dashed #ccc', paddingTop: '10px'}}>
-                                {/* ... Add Scene Manually Button ... */}
-                                <button onClick={() => handleCreateScene(chapter.id)} style={{marginRight: '10px'}} disabled={isLoadingScenes || isGeneratingScene || isCreatingSceneFromDraft}>+ Add Scene Manually</button>
-                                {/* --- AI Scene Generation UI --- */}
-                                <div style={{ marginTop: '10px', padding:'5px', backgroundColor:'#f0f8ff', borderRadius:'3px' }}>
-                                    {/* ... Input and Button for AI Generation ... */}
-                                     <label htmlFor={`summary-${chapter.id}`} style={{ fontSize: '0.9em', marginRight: '5px' }}>Optional Prompt/Summary for AI:</label>
-                                    <input
-                                        type="text"
-                                        id={`summary-${chapter.id}`}
-                                        value={generationSummaries[chapter.id] || ''}
-                                        onChange={(e) => handleSummaryChange(chapter.id, e.target.value)}
-                                        placeholder="e.g., Character meets the informant"
-                                        disabled={isGeneratingScene || isCreatingSceneFromDraft}
-                                        style={{ fontSize: '0.9em', marginRight: '5px', minWidth:'250px' }}
-                                    />
-                                    <button
-                                        onClick={() => handleGenerateSceneDraft(chapter.id)} // No change needed here, logic is inside handler
-                                        disabled={isGeneratingScene || isCreatingSceneFromDraft}
-                                    >
-                                        {isGeneratingScene && generatingChapterId === chapter.id ? 'Generating...' : '+ Add Scene using AI'}
-                                    </button>
-                                    {/* Show loading/error specific to this chapter */}
-                                    {isGeneratingScene && generatingChapterId === chapter.id && <span style={{ marginLeft:'5px', fontStyle:'italic', fontSize:'0.9em' }}> (AI is working...)</span>}
-                                    {generationError && generatingChapterId === chapter.id && <p style={{ color: 'red', fontSize: '0.9em', marginTop:'5px' }}>Error: {generationError}</p>}
-                                </div>
-                                {/* --- End AI Scene Generation UI --- */}
-                            </div>
+                        // *** ADD data-testid HERE ***
+                        <div key={chapter.id} data-testid={`chapter-section-${chapter.id}`} style={{ border: '1px solid #eee', padding: '10px', marginBottom: '10px' }}>
+                           <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '5px' }}> <strong>{chapter.order}: {chapter.title}</strong> <button onClick={() => handleDeleteChapter(chapter.id, chapter.title)} style={{ marginLeft: '1rem', color: 'red', cursor: 'pointer' }} disabled={isLoadingChapters || isLoadingScenes || isGeneratingScene || isCreatingSceneFromDraft}> Delete Chapter </button> </div>
+                            {isLoadingScenes ? <p style={{marginLeft:'20px'}}>Loading scenes...</p> : ( <ul style={{ listStyle: 'none', paddingLeft: '20px' }}> {(scenes[chapter.id] || []).map(scene => ( <li key={scene.id} style={{ marginBottom: '0.3rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}> <Link to={`/projects/${projectId}/chapters/${chapter.id}/scenes/${scene.id}`}> {scene.order}: {scene.title} </Link> <button onClick={() => handleDeleteScene(chapter.id, scene.id, scene.title)} style={{ marginLeft: '1rem', fontSize: '0.8em', color: 'orange', cursor: 'pointer' }} disabled={isLoadingScenes || isGeneratingScene || isCreatingSceneFromDraft}> Del Scene </button> </li> ))} {(scenes[chapter.id]?.length === 0 || !scenes[chapter.id]) && !isLoadingScenes && <p style={{marginLeft:'20px', fontStyle:'italic'}}>No scenes in this chapter yet.</p>} </ul> )}
+                             <div style={{marginLeft: '20px', marginTop: '10px', borderTop: '1px dashed #ccc', paddingTop: '10px'}}> <button onClick={() => handleCreateScene(chapter.id)} style={{marginRight: '10px'}} disabled={isLoadingScenes || isGeneratingScene || isCreatingSceneFromDraft}>+ Add Scene Manually</button> <div style={{ marginTop: '10px', padding:'5px', backgroundColor:'#f0f8ff', borderRadius:'3px' }}> <label htmlFor={`summary-${chapter.id}`} style={{ fontSize: '0.9em', marginRight: '5px' }}>Optional Prompt/Summary for AI:</label> <input type="text" id={`summary-${chapter.id}`} value={generationSummaries[chapter.id] || ''} onChange={(e) => handleSummaryChange(chapter.id, e.target.value)} placeholder="e.g., Character meets the informant" disabled={isGeneratingScene || isCreatingSceneFromDraft} style={{ fontSize: '0.9em', marginRight: '5px', minWidth:'250px' }} /> <button onClick={() => handleGenerateSceneDraft(chapter.id)} disabled={isGeneratingScene || isCreatingSceneFromDraft}> {isGeneratingScene && generatingChapterId === chapter.id ? 'Generating...' : '+ Add Scene using AI'} </button> {isGeneratingScene && generatingChapterId === chapter.id && <span style={{ marginLeft:'5px', fontStyle:'italic', fontSize:'0.9em' }}> (AI is working...)</span>} {generationError && generatingChapterId === chapter.id && <p style={{ color: 'red', fontSize: '0.9em', marginTop:'5px' }}>Error: {generationError}</p>} </div> </div>
                         </div>
                     ))
                 )}
-                 {/* ... Add Chapter Form ... */}
-                 <form onSubmit={handleCreateChapter} style={{ marginTop: '1rem' }}>
-                    <input
-                      type="text"
-                      value={newChapterTitle}
-                      onChange={(e) => setNewChapterTitle(e.target.value)}
-                      placeholder="New chapter title"
-                      disabled={isLoadingChapters || isGeneratingScene || isCreatingSceneFromDraft}
-                    />
-                    <button type="submit" disabled={isLoadingChapters || isGeneratingScene || isCreatingSceneFromDraft}>Add Chapter</button>
-                 </form>
+                 <form onSubmit={handleCreateChapter} style={{ marginTop: '1rem' }}> <input type="text" value={newChapterTitle} onChange={(e) => setNewChapterTitle(e.target.value)} placeholder="New chapter title" disabled={isLoadingChapters || isGeneratingScene || isCreatingSceneFromDraft} /> <button type="submit" disabled={isLoadingChapters || isGeneratingScene || isCreatingSceneFromDraft}>Add Chapter</button> </form>
             </section>
             <hr />
-
-            {/* Characters Section */}
-             <section>
-                 {/* ... Characters List/Form ... */}
-                 <h2>Characters</h2>
-                {isLoadingCharacters ? <p>Loading characters...</p> : (
-                 <ul>
-                    {characters.map(character => (
-                        <li key={character.id} style={{ marginBottom: '0.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
-                            <Link to={`/projects/${projectId}/characters/${character.id}`}>
-                                {character.name}
-                            </Link>
-                            <span>
-                                <button onClick={() => handleDeleteCharacter(character.id, character.name)} style={{ marginLeft: '1rem', color: 'red', cursor: 'pointer' }} disabled={isLoadingCharacters || isGeneratingScene || isCreatingSceneFromDraft}>
-                                    Delete
-                                </button>
-                            </span>
-                        </li>
-                    ))}
-                    {characters.length === 0 && !isLoadingCharacters && <p>No characters yet.</p>}
-                 </ul>
-             )}
-                <form onSubmit={handleCreateCharacter} style={{ marginTop: '0.5rem' }}>
-                    <input
-                      type="text"
-                      value={newCharacterName}
-                      onChange={(e) => setNewCharacterName(e.target.value)}
-                      placeholder="New character name"
-                      disabled={isLoadingCharacters || isGeneratingScene || isCreatingSceneFromDraft}
-                    />
-                    <button type="submit" disabled={isLoadingCharacters || isGeneratingScene || isCreatingSceneFromDraft}>Add Character</button>
-                </form>
-            </section>
-            <hr />
-
-            {/* Other Content Blocks Section */}
             <section>
-                 {/* ... Other Content Links ... */}
-                 <h2>Other Content</h2>
-                <ul style={{ listStyle: 'none', paddingLeft: 0 }}>
-                    <li style={{ marginBottom: '0.5rem' }}>
-                        <Link to={`/projects/${projectId}/plan`}>Edit Plan</Link>
-                    </li>
-                    <li style={{ marginBottom: '0.5rem' }}>
-                        <Link to={`/projects/${projectId}/synopsis`}>Edit Synopsis</Link>
-                    </li>
-                    <li style={{ marginBottom: '0.5rem' }}>
-                        <Link to={`/projects/${projectId}/world`}>Edit World Info</Link>
-                    </li>
-                </ul>
+                 <h2>Characters</h2>
+                {isLoadingCharacters ? <p>Loading characters...</p> : ( <ul> {characters.map(character => ( <li key={character.id} style={{ marginBottom: '0.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}> <Link to={`/projects/${projectId}/characters/${character.id}`}> {character.name} </Link> <span> <button onClick={() => handleDeleteCharacter(character.id, character.name)} style={{ marginLeft: '1rem', color: 'red', cursor: 'pointer' }} disabled={isLoadingCharacters || isGeneratingScene || isCreatingSceneFromDraft}> Delete </button> </span> </li> ))} {characters.length === 0 && !isLoadingCharacters && <p>No characters yet.</p>} </ul> )}
+                <form onSubmit={handleCreateCharacter} style={{ marginTop: '0.5rem' }}> <input type="text" value={newCharacterName} onChange={(e) => setNewCharacterName(e.target.value)} placeholder="New character name" disabled={isLoadingCharacters || isGeneratingScene || isCreatingSceneFromDraft} /> <button type="submit" disabled={isLoadingCharacters || isGeneratingScene || isCreatingSceneFromDraft}>Add Character</button> </form>
             </section>
-
+            <hr />
+            <section>
+                 <h2>Other Content</h2>
+                <ul style={{ listStyle: 'none', paddingLeft: 0 }}> <li style={{ marginBottom: '0.5rem' }}> <Link to={`/projects/${projectId}/plan`}>Edit Plan</Link> </li> <li style={{ marginBottom: '0.5rem' }}> <Link to={`/projects/${projectId}/synopsis`}>Edit Synopsis</Link> </li> <li style={{ marginBottom: '0.5rem' }}> <Link to={`/projects/${projectId}/world`}>Edit World Info</Link> </li> </ul>
+            </section>
         </div>
     );
 }
