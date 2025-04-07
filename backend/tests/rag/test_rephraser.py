@@ -23,27 +23,9 @@ from llama_index.core.schema import NodeWithScore, TextNode
 from app.rag.rephraser import Rephraser
 from app.core.config import settings # For RAG settings
 
-# --- Fixtures ---
+# --- Fixtures are now defined in tests/rag/conftest.py ---
+# Removed mock_llm, mock_retriever, mock_index definitions
 
-@pytest.fixture
-def mock_llm():
-    """Fixture for a mock LLM."""
-    llm = MagicMock(spec=LLM)
-    llm.acomplete = AsyncMock()
-    return llm
-
-@pytest.fixture
-def mock_retriever():
-    """Fixture for a mock VectorIndexRetriever."""
-    retriever = MagicMock(spec=VectorIndexRetriever)
-    retriever.aretrieve = AsyncMock()
-    return retriever
-
-@pytest.fixture
-def mock_index(mock_retriever):
-    """Fixture for a mock VectorStoreIndex."""
-    index = MagicMock(spec=VectorStoreIndex)
-    return index
 
 # --- Test Rephraser ---
 
@@ -52,8 +34,8 @@ def mock_index(mock_retriever):
 @patch('app.rag.rephraser.VectorIndexRetriever', autospec=True)
 async def test_rephrase_success_with_context(
     mock_retriever_class: MagicMock,
-    mock_llm: MagicMock,
-    mock_index: MagicMock
+    mock_llm: MagicMock,             # Injected from conftest.py
+    mock_index: MagicMock            # Injected from conftest.py
 ):
     """Test successful rephrasing with surrounding context and RAG nodes."""
     # Arrange
@@ -106,8 +88,8 @@ async def test_rephrase_success_with_context(
 @patch('app.rag.rephraser.VectorIndexRetriever', autospec=True)
 async def test_rephrase_success_no_context(
     mock_retriever_class: MagicMock,
-    mock_llm: MagicMock,
-    mock_index: MagicMock
+    mock_llm: MagicMock,             # Injected from conftest.py
+    mock_index: MagicMock            # Injected from conftest.py
 ):
     """Test successful rephrasing with only selected text (no surrounding/RAG)."""
     # Arrange
@@ -147,8 +129,8 @@ async def test_rephrase_success_no_context(
 @patch('app.rag.rephraser.VectorIndexRetriever', autospec=True)
 async def test_rephrase_retriever_error(
     mock_retriever_class: MagicMock,
-    mock_llm: MagicMock,
-    mock_index: MagicMock
+    mock_llm: MagicMock,             # Injected from conftest.py
+    mock_index: MagicMock            # Injected from conftest.py
 ):
     """Test rephrasing when the retriever fails."""
     # Arrange
@@ -174,8 +156,8 @@ async def test_rephrase_retriever_error(
 @patch('app.rag.rephraser.VectorIndexRetriever', autospec=True)
 async def test_rephrase_llm_error(
     mock_retriever_class: MagicMock,
-    mock_llm: MagicMock,
-    mock_index: MagicMock
+    mock_llm: MagicMock,             # Injected from conftest.py
+    mock_index: MagicMock            # Injected from conftest.py
 ):
     """Test rephrasing when the LLM call fails."""
     # Arrange
@@ -203,8 +185,8 @@ async def test_rephrase_llm_error(
 @patch('app.rag.rephraser.VectorIndexRetriever', autospec=True)
 async def test_rephrase_llm_empty_response(
     mock_retriever_class: MagicMock,
-    mock_llm: MagicMock,
-    mock_index: MagicMock
+    mock_llm: MagicMock,             # Injected from conftest.py
+    mock_index: MagicMock            # Injected from conftest.py
 ):
     """Test rephrasing when the LLM returns an empty response."""
     # Arrange
@@ -232,8 +214,8 @@ async def test_rephrase_llm_empty_response(
 @patch('app.rag.rephraser.VectorIndexRetriever', autospec=True)
 async def test_rephrase_llm_unparseable_response(
     mock_retriever_class: MagicMock,
-    mock_llm: MagicMock,
-    mock_index: MagicMock
+    mock_llm: MagicMock,             # Injected from conftest.py
+    mock_index: MagicMock            # Injected from conftest.py
 ):
     """Test rephrasing when the LLM response cannot be parsed as a numbered list."""
     # Arrange
@@ -264,7 +246,10 @@ async def test_rephrase_llm_unparseable_response(
     mock_llm.acomplete.assert_awaited_once()
 
 @pytest.mark.asyncio
-async def test_rephrase_empty_input(mock_llm: MagicMock, mock_index: MagicMock):
+async def test_rephrase_empty_input(
+    mock_llm: MagicMock,             # Injected from conftest.py
+    mock_index: MagicMock            # Injected from conftest.py
+):
     """Test rephrasing with empty selected text."""
     # Arrange
     project_id = "proj-rp-7"

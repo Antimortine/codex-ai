@@ -23,36 +23,9 @@ from llama_index.core.schema import NodeWithScore, TextNode
 from app.rag.query_processor import QueryProcessor
 from app.core.config import settings # For RAG_QUERY_SIMILARITY_TOP_K
 
-# --- Fixtures ---
+# --- Fixtures are now defined in tests/rag/conftest.py ---
+# Removed mock_llm, mock_retriever, mock_index definitions
 
-@pytest.fixture
-def mock_llm():
-    """Fixture for a mock LLM."""
-    llm = MagicMock(spec=LLM)
-    # Configure the async completion method
-    llm.acomplete = AsyncMock()
-    return llm
-
-@pytest.fixture
-def mock_retriever():
-    """Fixture for a mock VectorIndexRetriever."""
-    retriever = MagicMock(spec=VectorIndexRetriever)
-    # Configure the async retrieval method
-    retriever.aretrieve = AsyncMock()
-    return retriever
-
-@pytest.fixture
-def mock_index(mock_retriever):
-    """Fixture for a mock VectorStoreIndex that returns our mock retriever."""
-    index = MagicMock(spec=VectorStoreIndex)
-    # Mock the behavior of creating a retriever from the index
-    # We need to handle the __call__ or a specific method if LlamaIndex uses one
-    # For simplicity, let's assume VectorIndexRetriever is instantiated directly
-    # in the test setup or we patch its instantiation.
-    # A simpler approach for testing QueryProcessor: pass the mock retriever directly if possible,
-    # or mock the specific call that creates the retriever.
-    # Let's patch the VectorIndexRetriever class itself.
-    return index # The index itself might not need much mocking if we patch the retriever creation
 
 # --- Test QueryProcessor ---
 
@@ -61,8 +34,8 @@ def mock_index(mock_retriever):
 @patch('app.rag.query_processor.VectorIndexRetriever', autospec=True)
 async def test_query_success_with_nodes(
     mock_retriever_class: MagicMock, # The patched class
-    mock_llm: MagicMock,
-    mock_index: MagicMock # Mock index is passed but might not be strictly needed if retriever is patched
+    mock_llm: MagicMock,             # Injected from conftest.py
+    mock_index: MagicMock            # Injected from conftest.py
 ):
     """Test successful query with retrieved nodes."""
     # Arrange
@@ -115,8 +88,8 @@ async def test_query_success_with_nodes(
 @patch('app.rag.query_processor.VectorIndexRetriever', autospec=True)
 async def test_query_success_no_nodes(
     mock_retriever_class: MagicMock,
-    mock_llm: MagicMock,
-    mock_index: MagicMock
+    mock_llm: MagicMock,             # Injected from conftest.py
+    mock_index: MagicMock            # Injected from conftest.py
 ):
     """Test successful query when no nodes are retrieved."""
     # Arrange
@@ -155,8 +128,8 @@ async def test_query_success_no_nodes(
 @patch('app.rag.query_processor.VectorIndexRetriever', autospec=True)
 async def test_query_retriever_error(
     mock_retriever_class: MagicMock,
-    mock_llm: MagicMock,
-    mock_index: MagicMock
+    mock_llm: MagicMock,             # Injected from conftest.py
+    mock_index: MagicMock            # Injected from conftest.py
 ):
     """Test query when the retriever fails."""
     # Arrange
@@ -183,8 +156,8 @@ async def test_query_retriever_error(
 @patch('app.rag.query_processor.VectorIndexRetriever', autospec=True)
 async def test_query_llm_error(
     mock_retriever_class: MagicMock,
-    mock_llm: MagicMock,
-    mock_index: MagicMock
+    mock_llm: MagicMock,             # Injected from conftest.py
+    mock_index: MagicMock            # Injected from conftest.py
 ):
     """Test query when the LLM call fails."""
     # Arrange
@@ -214,8 +187,8 @@ async def test_query_llm_error(
 @patch('app.rag.query_processor.VectorIndexRetriever', autospec=True)
 async def test_query_llm_empty_response(
     mock_retriever_class: MagicMock,
-    mock_llm: MagicMock,
-    mock_index: MagicMock
+    mock_llm: MagicMock,             # Injected from conftest.py
+    mock_index: MagicMock            # Injected from conftest.py
 ):
     """Test query when the LLM returns an empty response."""
     # Arrange

@@ -23,28 +23,9 @@ from llama_index.core.schema import NodeWithScore, TextNode
 from app.rag.scene_generator import SceneGenerator
 from app.core.config import settings # For RAG_GENERATION_SIMILARITY_TOP_K
 
-# --- Fixtures (can potentially share with query processor tests via conftest.py later) ---
+# --- Fixtures are now defined in tests/rag/conftest.py ---
+# Removed mock_llm, mock_retriever, mock_index definitions
 
-@pytest.fixture
-def mock_llm():
-    """Fixture for a mock LLM."""
-    llm = MagicMock(spec=LLM)
-    llm.acomplete = AsyncMock()
-    return llm
-
-@pytest.fixture
-def mock_retriever():
-    """Fixture for a mock VectorIndexRetriever."""
-    retriever = MagicMock(spec=VectorIndexRetriever)
-    retriever.aretrieve = AsyncMock()
-    return retriever
-
-@pytest.fixture
-def mock_index(mock_retriever):
-    """Fixture for a mock VectorStoreIndex."""
-    index = MagicMock(spec=VectorStoreIndex)
-    # This fixture might not be strictly necessary if we patch the retriever creation
-    return index
 
 # --- Test SceneGenerator ---
 
@@ -53,8 +34,8 @@ def mock_index(mock_retriever):
 @patch('app.rag.scene_generator.VectorIndexRetriever', autospec=True)
 async def test_generate_scene_success_with_context(
     mock_retriever_class: MagicMock,
-    mock_llm: MagicMock,
-    mock_index: MagicMock
+    mock_llm: MagicMock,             # Injected from conftest.py
+    mock_index: MagicMock            # Injected from conftest.py
 ):
     """Test successful scene generation with plan, synopsis, previous scenes, and RAG context."""
     # Arrange
@@ -109,8 +90,8 @@ async def test_generate_scene_success_with_context(
 @patch('app.rag.scene_generator.VectorIndexRetriever', autospec=True)
 async def test_generate_scene_success_first_scene(
     mock_retriever_class: MagicMock,
-    mock_llm: MagicMock,
-    mock_index: MagicMock
+    mock_llm: MagicMock,             # Injected from conftest.py
+    mock_index: MagicMock            # Injected from conftest.py
 ):
     """Test successful generation for the first scene (no previous scenes)."""
     # Arrange
@@ -156,8 +137,8 @@ async def test_generate_scene_success_first_scene(
 @patch('app.rag.scene_generator.VectorIndexRetriever', autospec=True)
 async def test_generate_scene_success_no_rag_nodes(
     mock_retriever_class: MagicMock,
-    mock_llm: MagicMock,
-    mock_index: MagicMock
+    mock_llm: MagicMock,             # Injected from conftest.py
+    mock_index: MagicMock            # Injected from conftest.py
 ):
     """Test successful generation when retriever finds no relevant nodes."""
     # Arrange
@@ -203,8 +184,8 @@ async def test_generate_scene_success_no_rag_nodes(
 @patch('app.rag.scene_generator.VectorIndexRetriever', autospec=True)
 async def test_generate_scene_retriever_error(
     mock_retriever_class: MagicMock,
-    mock_llm: MagicMock,
-    mock_index: MagicMock
+    mock_llm: MagicMock,             # Injected from conftest.py
+    mock_index: MagicMock            # Injected from conftest.py
 ):
     """Test generation when the retriever fails."""
     # Arrange
@@ -235,8 +216,8 @@ async def test_generate_scene_retriever_error(
 @patch('app.rag.scene_generator.VectorIndexRetriever', autospec=True)
 async def test_generate_scene_llm_error(
     mock_retriever_class: MagicMock,
-    mock_llm: MagicMock,
-    mock_index: MagicMock
+    mock_llm: MagicMock,             # Injected from conftest.py
+    mock_index: MagicMock            # Injected from conftest.py
 ):
     """Test generation when the LLM call fails."""
     # Arrange
@@ -269,8 +250,8 @@ async def test_generate_scene_llm_error(
 @patch('app.rag.scene_generator.VectorIndexRetriever', autospec=True)
 async def test_generate_scene_llm_empty_response(
     mock_retriever_class: MagicMock,
-    mock_llm: MagicMock,
-    mock_index: MagicMock
+    mock_llm: MagicMock,             # Injected from conftest.py
+    mock_index: MagicMock            # Injected from conftest.py
 ):
     """Test generation when the LLM returns an empty response."""
     # Arrange
