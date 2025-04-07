@@ -36,7 +36,6 @@ class RagEngine:
         Initializes the RagEngine by creating instances of the task processors,
         passing them the shared index and LLM components from IndexManager.
         """
-        # Ensure IndexManager components are ready (already checked by processors, but good practice)
         if not hasattr(index_manager, 'index') or not index_manager.index:
              logger.critical("IndexManager's index is not initialized! RagEngine Facade cannot function.")
              raise RuntimeError("RagEngine cannot initialize without a valid index from IndexManager.")
@@ -57,26 +56,30 @@ class RagEngine:
              logger.critical(f"Failed to initialize RAG task processors: {e}", exc_info=True)
              raise
 
-    async def query(self, project_id: str, query_text: str) -> Tuple[str, List[NodeWithScore]]:
-        """Delegates RAG querying to QueryProcessor."""
+    # --- MODIFIED: Added explicit_plan and explicit_synopsis ---
+    async def query(self, project_id: str, query_text: str, explicit_plan: str, explicit_synopsis: str) -> Tuple[str, List[NodeWithScore]]:
+        """Delegates RAG querying to QueryProcessor, passing explicit context."""
         logger.debug(f"RagEngine Facade: Delegating query for project '{project_id}' to QueryProcessor.")
-        return await self.query_processor.query(project_id, query_text)
+        return await self.query_processor.query(
+            project_id=project_id,
+            query_text=query_text,
+            explicit_plan=explicit_plan,
+            explicit_synopsis=explicit_synopsis
+        )
+    # --- END MODIFIED ---
 
-    # --- MODIFIED: Updated Signature to accept explicit context ---
     async def generate_scene(
         self,
         project_id: str,
         chapter_id: str,
         prompt_summary: Optional[str],
         previous_scene_order: Optional[int],
-        # Add the explicit context arguments here
         explicit_plan: str,
         explicit_synopsis: str,
         explicit_previous_scenes: List[Tuple[int, str]]
         ) -> str:
         """Delegates scene generation to SceneGenerator, passing all context."""
         logger.debug(f"RagEngine Facade: Delegating generate_scene for project '{project_id}', chapter '{chapter_id}' to SceneGenerator.")
-        # Pass all arguments through to the actual generator
         return await self.scene_generator.generate_scene(
             project_id=project_id,
             chapter_id=chapter_id,
@@ -86,7 +89,6 @@ class RagEngine:
             explicit_synopsis=explicit_synopsis,
             explicit_previous_scenes=explicit_previous_scenes
         )
-    # --- End Updated Signature ---
 
     async def rephrase(self, project_id: str, selected_text: str, context_before: Optional[str], context_after: Optional[str]) -> List[str]:
         """Delegates rephrasing to Rephraser."""
@@ -94,10 +96,8 @@ class RagEngine:
         return await self.rephraser.rephrase(project_id, selected_text, context_before, context_after)
 
 # --- Singleton Instance ---
-# Create an instance of the facade
 try:
      rag_engine = RagEngine()
 except Exception as e:
      logger.critical(f"Failed to create RagEngine facade instance on startup: {e}", exc_info=True)
-     # Propagate the error to prevent the app from starting incorrectly
      raise RuntimeError(f"Failed to initialize RagEngine: {e}") from e
