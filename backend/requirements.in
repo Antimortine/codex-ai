@@ -1,0 +1,30 @@
+# --- Core Framework ---
+fastapi
+uvicorn[standard]
+python-dotenv
+pydantic-settings
+
+# --- LlamaIndex & Dependencies (Using Recommended Google Adapter) ---
+llama-index>=0.10.30 # Use a recent stable version
+
+# LLM Integration (Use newer Google adapter)
+llama-index-llms-google-genai
+google-generativeai>=0.5.0
+
+# Embedding Integration (HuggingFace)
+llama-index-embeddings-huggingface
+sentence-transformers
+accelerate # Needed by transformers/sentence-transformers
+torch>=2.0.0 # Needed by transformers/sentence-transformers
+transformers>=4.40.0
+
+# Other needed LlamaIndex components
+llama-index-readers-file
+llama-index-vector-stores-chroma
+
+# --- Other Dependencies ---
+chromadb>=0.4.0
+
+# --- Testing ---
+pytest
+httpx
