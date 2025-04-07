@@ -65,7 +65,7 @@ function SceneEditPage() {
         return;
     }
     setIsSaving(true);
-    setError(null);
+    setError(null); // Clear previous errors before saving
     setSaveMessage('');
     try {
       // Send updated fields (title, content). Content comes from the state updated by AIEditorWrapper's onChange
@@ -75,7 +75,7 @@ function SceneEditPage() {
       setTimeout(() => setSaveMessage(''), 3000);
     } catch (err) {
       console.error("Error saving scene:", err);
-      setError('Failed to save scene.');
+      setError('Failed to save scene.'); // Set error on save failure
       setSaveMessage('');
     } finally {
       setIsSaving(false);
@@ -92,7 +92,8 @@ function SceneEditPage() {
     return <p>Loading scene editor...</p>;
   }
 
-  if (error && !isSaving) {
+  // Display fetch error prominently if it occurs before save attempt
+  if (error && !isSaving && saveMessage === '') { // Show fetch error if not currently saving and no save message exists
     return (
       <div>
         <p style={{ color: 'red' }}>Error: {error}</p>
@@ -107,7 +108,7 @@ function SceneEditPage() {
       <nav style={{ marginBottom: '1rem' }}>
         {/* Link back to the main project detail page */}
         <Link to={`/projects/${projectId}`}>&lt; Back to Project Overview</Link>
-        {/* TODO: Maybe link back to a specific Chapter view later */}
+        {/* TODO: Maybe link back to a specific Chapter view later? */}
       </nav>
       <h2>Edit Scene: {originalTitle || '...'}</h2>
       <p>Project ID: {projectId}</p>
@@ -144,14 +145,14 @@ function SceneEditPage() {
         </div>
       </div>
 
-      {/* Display save error */}
-      {error && isSaving && <p style={{ color: 'red', marginTop: '0.5rem' }}>Error: {error}</p>}
+      {/* --- MODIFIED ERROR DISPLAY --- Show error if error state is set */}
+      {error && <p style={{ color: 'red', marginTop: '0.5rem' }}>Error: {error}</p>}
       {/* Display save success message */}
       {saveMessage && <p style={{ color: 'green', marginTop: '0.5rem' }}>{saveMessage}</p>}
 
       <button
         onClick={handleSave}
-        disabled={isSaving || !title.trim()} // Disable if saving or title empty
+        disabled={isSaving} // Only disable when actively saving
         style={{ marginTop: '1rem' }}
       >
         {isSaving ? 'Saving...' : 'Save Scene'}
