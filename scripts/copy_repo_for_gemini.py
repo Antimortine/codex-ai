@@ -27,11 +27,13 @@ ALLOWED_EXTENSIONS = {
     '.gitignore', '.env.example',                      # Other common text files (Removed .env)
     '.sql', '.csv',                                    # Data related
     '.xml',                                             # Markup
+    '.ini', # --- ADDED: pytest.ini ---
 }
 EXCLUDED_DIRS = {
     '.git', 'venv', 'node_modules', '__pycache__', 'build', 'dist',
     'coverage', '.vscode', '.idea', 'chroma_db', '.chroma', 'data',
     'user_projects', # Exclude user data directory
+    '.pytest_cache', # --- ADDED: Exclude pytest cache ---
 }
 EXCLUDED_FILES = {
     'package-lock.json', 'yarn.lock',
