@@ -27,8 +27,11 @@ from app.services.file_service import FileService
 from app.rag.engine import RagEngine
 # Import models used in responses/arguments
 from llama_index.core.schema import NodeWithScore, TextNode
+# --- REMOVED: AI model imports not needed for query tests ---
+# from app.core.config import settings # Not needed here
 
-# --- Test AIService Methods ---
+
+# --- Test AIService.query_project Methods ---
 
 @pytest.mark.asyncio
 async def test_query_project_success():
@@ -226,6 +229,3 @@ async def test_query_project_rag_engine_error():
     mock_rag_engine.query.assert_awaited_once_with(
         project_id=project_id, query_text=query_text, explicit_plan=mock_plan_content, explicit_synopsis=mock_synopsis_content
     )
-
-# TODO: Add tests for generate_scene_draft
-# TODO: Add tests for rephrase_text
