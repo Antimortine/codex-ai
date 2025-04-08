@@ -15,17 +15,23 @@
 import logging
 from fastapi import HTTPException, status # Import HTTPException
 from app.rag.engine import rag_engine
-# Import new request/response models
+# Import all needed AI models
 from app.models.ai import (
     AISceneGenerationRequest, AISceneGenerationResponse,
-    AIRephraseRequest, AIRephraseResponse
+    AIRephraseRequest, AIRephraseResponse,
+    AIChapterSplitRequest, AIChapterSplitResponse, ProposedScene # Added chapter split models
 )
 from llama_index.core.base.response.schema import NodeWithScore
 from typing import List, Tuple, Optional, Dict # Import Optional, Dict
 
 # Import FileService to load explicit context
 from app.services.file_service import file_service
+# Import ChapterService to get chapter content
+from app.services.chapter_service import chapter_service
 from app.core.config import settings # Import settings for PREVIOUS_SCENE_COUNT
+
+# --- Import the new ChapterSplitter ---
+from app.rag.chapter_splitter import ChapterSplitter
 
 logger = logging.getLogger(__name__)
 
@@ -34,8 +40,8 @@ PREVIOUS_SCENE_COUNT = settings.RAG_GENERATION_PREVIOUS_SCENE_COUNT
 class AIService:
     """
     Service layer for handling AI-related operations like querying,
-    generation, and editing. Loads explicit context for generation/editing
-    before delegating to the RagEngine facade.
+    generation, editing, and chapter splitting. Loads explicit context
+    before delegating to the appropriate RAG processor.
     """
     def __init__(self):
         # Store reference to the singleton engine instance
@@ -45,6 +51,24 @@ class AIService:
         self.rag_engine = rag_engine
         # Store reference to file service
         self.file_service = file_service
+
+        # --- Instantiate ChapterSplitter ---
+        # It needs the LLM from the engine/index_manager
+        if not hasattr(rag_engine, 'llm') or not rag_engine.llm:
+             logger.critical("RagEngine's LLM is not initialized! AIService cannot initialize ChapterSplitter.")
+             raise RuntimeError("AIService cannot initialize ChapterSplitter without a valid LLM.")
+        # Pass index too, although splitter might not use it initially
+        if not hasattr(rag_engine, 'index') or not rag_engine.index:
+             logger.critical("RagEngine's index is not initialized! AIService cannot initialize ChapterSplitter.")
+             raise RuntimeError("AIService cannot initialize ChapterSplitter without a valid index.")
+        try:
+            self.chapter_splitter = ChapterSplitter(index=rag_engine.index, llm=rag_engine.llm)
+            logger.info("ChapterSplitter initialized within AIService.")
+        except Exception as e:
+            logger.critical(f"Failed to initialize ChapterSplitter within AIService: {e}", exc_info=True)
+            raise RuntimeError(f"Failed to initialize ChapterSplitter: {e}") from e
+        # ---------------------------------
+
         logger.info("AIService initialized.")
 
     async def query_project(self, project_id: str, query_text: str) -> Tuple[str, List[NodeWithScore]]:
@@ -255,6 +279,124 @@ class AIService:
                  status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                  detail="An unexpected error occurred during AI rephrasing."
              )
+
+    # --- NEW: Chapter Splitting Method ---
+    async def split_chapter_into_scenes(
+        self,
+        project_id: str,
+        chapter_id: str,
+        request_data: AIChapterSplitRequest # Currently empty, might add hints later
+        ) -> List[ProposedScene]:
+        """
+        Handles the business logic for splitting a chapter into scenes.
+        Loads chapter content, plan, synopsis and delegates to ChapterSplitter.
+        """
+        logger.info(f"AIService: Processing chapter split request for project {project_id}, chapter {chapter_id}")
+
+        # --- Load Required Context ---
+        explicit_plan = "Not Available"
+        explicit_synopsis = "Not Available"
+        chapter_content = "Not Available"
+
+        logger.debug("AIService (Split): Loading context (Chapter, Plan, Synopsis)...")
+
+        # Load Chapter Content (Crucial for splitting)
+        try:
+            # Need a way to get the chapter content. Assuming chapter_service has get_by_id
+            # that returns an object with a 'content' field, or we need a dedicated method.
+            # Let's assume chapter_service.get_by_id returns enough info, including content path implicitly.
+            # We need the actual content string. Let's add a hypothetical method to file_service
+            # or assume chapter_service can provide it.
+            # FOR NOW: Let's assume we need to read *all* scene files for the chapter and concatenate.
+            # This is inefficient but demonstrates the need. A better approach would be if chapters
+            # were single files or chapter_service could provide the full content.
+            # --- TEMPORARY: Concatenate scenes ---
+            temp_content_parts = []
+            try:
+                # Use chapter_service to get scene metadata (title, order)
+                chapter_meta = self.file_service.read_chapter_metadata(project_id, chapter_id)
+                scenes_in_order = sorted(
+                    chapter_meta.get('scenes', {}).items(),
+                    key=lambda item: item[1].get('order', float('inf'))
+                )
+                for scene_id, scene_meta in scenes_in_order:
+                    try:
+                        scene_path = self.file_service._get_scene_path(project_id, chapter_id, scene_id)
+                        scene_content = self.file_service.read_text_file(scene_path)
+                        # Add a simple separator or header
+                        temp_content_parts.append(f"## {scene_meta.get('title', 'Scene')} (Order: {scene_meta.get('order', '?')})\n\n{scene_content}")
+                    except HTTPException as e:
+                        if e.status_code == 404:
+                            logger.warning(f"AIService (Split): Scene file for {scene_id} not found, skipping for concatenation.")
+                        else: raise e # Re-raise other errors
+                if not temp_content_parts:
+                     logger.warning(f"AIService (Split): No scene content found for chapter {chapter_id}.")
+                     chapter_content = "" # Treat as empty if no scenes found/readable
+                else:
+                     chapter_content = "\n\n---\n\n".join(temp_content_parts) # Join with separator
+                logger.debug(f"AIService (Split): Loaded chapter content by concatenating scenes (Length: {len(chapter_content)})")
+
+            except HTTPException as e:
+                 logger.error(f"AIService (Split): Failed to load chapter metadata or scene files for splitting: {e.detail}", exc_info=True)
+                 raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to load chapter content for splitting.")
+            # --- END TEMPORARY ---
+
+        except Exception as e:
+            logger.error(f"AIService (Split): Unexpected error loading chapter content for project {project_id}, chapter {chapter_id}: {e}", exc_info=True)
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to load chapter content for splitting.")
+
+
+        # Load Plan
+        try:
+            explicit_plan = self.file_service.read_content_block_file(project_id, "plan.md")
+            logger.debug(f"AIService (Split): Loaded plan.md (Length: {len(explicit_plan)})")
+        except HTTPException as e:
+            if e.status_code == 404: logger.warning("AIService (Split): plan.md not found.")
+            else: logger.error(f"AIService (Split): HTTP error loading plan.md: {e.detail}", exc_info=True)
+            explicit_plan = "" # Use empty string on error/not found
+        except Exception as e:
+            logger.error(f"AIService (Split): Unexpected error loading plan.md: {e}", exc_info=True)
+            explicit_plan = "Error loading plan."
+
+        # Load Synopsis
+        try:
+            explicit_synopsis = self.file_service.read_content_block_file(project_id, "synopsis.md")
+            logger.debug(f"AIService (Split): Loaded synopsis.md (Length: {len(explicit_synopsis)})")
+        except HTTPException as e:
+            if e.status_code == 404: logger.warning("AIService (Split): synopsis.md not found.")
+            else: logger.error(f"AIService (Split): HTTP error loading synopsis.md: {e.detail}", exc_info=True)
+            explicit_synopsis = "" # Use empty string on error/not found
+        except Exception as e:
+            logger.error(f"AIService (Split): Unexpected error loading synopsis.md: {e}", exc_info=True)
+            explicit_synopsis = "Error loading synopsis."
+
+        # --- Delegate to ChapterSplitter ---
+        try:
+            if not chapter_content.strip():
+                 logger.warning(f"AIService (Split): Chapter content for {chapter_id} is empty. Returning empty split.")
+                 return []
+
+            logger.debug("AIService (Split): Delegating to ChapterSplitter...")
+            proposed_scenes = await self.chapter_splitter.split(
+                project_id=project_id,
+                chapter_id=chapter_id,
+                chapter_content=chapter_content,
+                explicit_plan=explicit_plan,
+                explicit_synopsis=explicit_synopsis
+                # Pass request_data.hint here if implemented
+            )
+            return proposed_scenes
+
+        except HTTPException as http_exc:
+             logger.error(f"HTTP Exception during chapter split delegation: {http_exc.detail}", exc_info=True)
+             raise http_exc # Re-raise HTTP exceptions from splitter
+        except Exception as e:
+             logger.error(f"Unexpected error during chapter split delegation: {e}", exc_info=True)
+             raise HTTPException(
+                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                 detail="An unexpected error occurred during AI chapter splitting."
+             )
+    # --- END NEW METHOD ---
 
 
     # --- Add other methods later ---

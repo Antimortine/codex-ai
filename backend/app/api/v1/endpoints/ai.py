@@ -24,8 +24,10 @@ from app.models.ai import (
     SourceNodeModel,
     AISceneGenerationRequest,
     AISceneGenerationResponse,
-    AIRephraseRequest,     # Import new request model
-    AIRephraseResponse     # Import new response model
+    AIRephraseRequest,
+    AIRephraseResponse,
+    AIChapterSplitRequest,   # Import new request model
+    AIChapterSplitResponse   # Import new response model
 )
 # Import dependencies for checking project/chapter existence
 from app.api.v1.endpoints.content_blocks import get_project_dependency # Checks project exists
@@ -200,6 +202,52 @@ async def rephrase_text_endpoint(
             detail=f"Failed to process AI rephrase request for project {project_id} due to an internal error."
         )
     # --- END MODIFIED EXCEPTION HANDLING ---
+
+
+# --- NEW: Chapter Splitting Endpoint ---
+@router.post(
+    "/split/chapter/{project_id}/{chapter_id}",
+    response_model=AIChapterSplitResponse,
+    status_code=status.HTTP_200_OK,
+    summary="Split Chapter into Scenes (AI)",
+    description="Uses AI to analyze chapter content and propose a split into distinct scenes with suggested titles."
+)
+async def split_chapter_into_scenes(
+    request_data: AIChapterSplitRequest = Body(...), # Body might be empty for now
+    ids: tuple[str, str] = Depends(get_chapter_dependency) # Ensures project & chapter exist
+):
+    """
+    Analyzes a chapter's content and proposes a split into scenes.
+
+    - **project_id**: The UUID of the parent project (in path).
+    - **chapter_id**: The UUID of the chapter to split (in path).
+    - **request_data**: Optional parameters to guide splitting (currently empty).
+    """
+    project_id, chapter_id = ids
+    logger.info(f"Received AI chapter split request for project {project_id}, chapter {chapter_id}.")
+
+    try:
+        # Call the new service method (to be implemented)
+        proposed_scenes = await ai_service.split_chapter_into_scenes(
+            project_id=project_id,
+            chapter_id=chapter_id,
+            request_data=request_data
+        )
+
+        # AIService method should raise HTTPException on failure or return the list
+        logger.info(f"Successfully proposed {len(proposed_scenes)} scenes for chapter {chapter_id}.")
+        return AIChapterSplitResponse(proposed_scenes=proposed_scenes)
+
+    except HTTPException as http_exc:
+         logger.warning(f"HTTPException during chapter split for project {project_id}, chapter {chapter_id}: {http_exc.status_code} - {http_exc.detail}")
+         raise http_exc
+    except Exception as e:
+        logger.error(f"Unexpected error processing AI chapter split for project {project_id}, chapter {chapter_id}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Failed to process AI chapter split for project {project_id}, chapter {chapter_id} due to an internal error."
+        )
+# --- END NEW ENDPOINT ---
 
 
 # --- Add other AI editing endpoints later ---

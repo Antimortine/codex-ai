@@ -13,9 +13,7 @@
 # limitations under the License.
 
 import pytest
-# --- MODIFIED: Added patch back to the import ---
 from unittest.mock import MagicMock, AsyncMock, call, patch
-# --- END MODIFIED ---
 from fastapi import HTTPException, status
 from pathlib import Path
 import asyncio
@@ -27,8 +25,10 @@ from app.services.file_service import FileService
 from app.rag.engine import RagEngine
 # Import models used in responses/arguments
 from llama_index.core.schema import NodeWithScore, TextNode
-# --- REMOVED: AI model imports not needed for query tests ---
-# from app.core.config import settings # Not needed here
+# --- ADDED: Import LLM and VectorStoreIndex for mocking ---
+from llama_index.core.llms import LLM
+from llama_index.core.indices.vector_store import VectorStoreIndex
+# --- END ADDED ---
 
 
 # --- Test AIService.query_project Methods ---
@@ -48,6 +48,10 @@ async def test_query_project_success():
     # --- Create mock instances manually ---
     mock_file_service = MagicMock(spec=FileService)
     mock_rag_engine = MagicMock(spec=RagEngine)
+    # --- ADDED: Define llm and index attributes on mock_rag_engine ---
+    mock_rag_engine.llm = MagicMock(spec=LLM)
+    mock_rag_engine.index = MagicMock(spec=VectorStoreIndex)
+    # --- END ADDED ---
 
     # Configure mocks
     def file_read_side_effect(p_id, block_name):
@@ -59,18 +63,11 @@ async def test_query_project_success():
     mock_rag_engine.query = AsyncMock(return_value=(mock_answer, mock_source_nodes))
 
     # --- Instantiate AIService with mocks ---
-    # Use patch context manager *only* during instantiation if __init__ uses singletons
     with patch('app.services.ai_service.rag_engine', mock_rag_engine), \
          patch('app.services.ai_service.file_service', mock_file_service):
          service_instance_under_test = AIService()
-         # Ensure the instance uses our mocks if __init__ assigned them,
-         # or assign them manually if __init__ doesn't.
-         # Assuming __init__ assigns them based on the patched singletons:
          assert service_instance_under_test.rag_engine is mock_rag_engine
          assert service_instance_under_test.file_service is mock_file_service
-         # If __init__ doesn't assign, uncomment these:
-         # service_instance_under_test.rag_engine = mock_rag_engine
-         # service_instance_under_test.file_service = mock_file_service
 
 
     # --- Call the method on the test instance ---
@@ -100,6 +97,10 @@ async def test_query_project_context_not_found():
     # Create mock instances
     mock_file_service = MagicMock(spec=FileService)
     mock_rag_engine = MagicMock(spec=RagEngine)
+    # --- ADDED: Define llm and index attributes on mock_rag_engine ---
+    mock_rag_engine.llm = MagicMock(spec=LLM)
+    mock_rag_engine.index = MagicMock(spec=VectorStoreIndex)
+    # --- END ADDED ---
 
     # Configure mocks
     def file_read_side_effect(p_id, block_name):
@@ -118,9 +119,6 @@ async def test_query_project_context_not_found():
          service_instance_under_test = AIService()
          assert service_instance_under_test.rag_engine is mock_rag_engine
          assert service_instance_under_test.file_service is mock_file_service
-         # If __init__ doesn't assign, uncomment these:
-         # service_instance_under_test.rag_engine = mock_rag_engine
-         # service_instance_under_test.file_service = mock_file_service
 
     # Call the method
     answer, source_nodes = await service_instance_under_test.query_project(project_id, query_text)
@@ -149,6 +147,10 @@ async def test_query_project_context_load_error():
     # Create mock instances
     mock_file_service = MagicMock(spec=FileService)
     mock_rag_engine = MagicMock(spec=RagEngine)
+    # --- ADDED: Define llm and index attributes on mock_rag_engine ---
+    mock_rag_engine.llm = MagicMock(spec=LLM)
+    mock_rag_engine.index = MagicMock(spec=VectorStoreIndex)
+    # --- END ADDED ---
 
     # Configure mocks
     def file_read_side_effect(p_id, block_name):
@@ -167,9 +169,6 @@ async def test_query_project_context_load_error():
          service_instance_under_test = AIService()
          assert service_instance_under_test.rag_engine is mock_rag_engine
          assert service_instance_under_test.file_service is mock_file_service
-         # If __init__ doesn't assign, uncomment these:
-         # service_instance_under_test.rag_engine = mock_rag_engine
-         # service_instance_under_test.file_service = mock_file_service
 
     # Call the method
     answer, source_nodes = await service_instance_under_test.query_project(project_id, query_text)
@@ -198,6 +197,10 @@ async def test_query_project_rag_engine_error():
     # Create mock instances
     mock_file_service = MagicMock(spec=FileService)
     mock_rag_engine = MagicMock(spec=RagEngine)
+    # --- ADDED: Define llm and index attributes on mock_rag_engine ---
+    mock_rag_engine.llm = MagicMock(spec=LLM)
+    mock_rag_engine.index = MagicMock(spec=VectorStoreIndex)
+    # --- END ADDED ---
 
     # Configure mocks
     def file_read_side_effect(p_id, block_name):
@@ -214,9 +217,6 @@ async def test_query_project_rag_engine_error():
          service_instance_under_test = AIService()
          assert service_instance_under_test.rag_engine is mock_rag_engine
          assert service_instance_under_test.file_service is mock_file_service
-         # If __init__ doesn't assign, uncomment these:
-         # service_instance_under_test.rag_engine = mock_rag_engine
-         # service_instance_under_test.file_service = mock_file_service
 
     # Call the method and expect the error
     with pytest.raises(RuntimeError, match="LLM API failed"):

@@ -56,6 +56,32 @@ class AIRephraseResponse(BaseModel):
     suggestions: List[str] = Field(..., description="A list of alternative phrasings for the selected text.")
 
 
+# --- Chapter Splitting Models ---
+
+class AIChapterSplitRequest(BaseModel):
+    # We might load the chapter content on the backend based on chapter_id,
+    # so the request body might be empty or contain optional parameters later.
+    # For now, let's keep it simple.
+    # Example optional parameter:
+    # hint: Optional[str] = Field(None, description="Optional hint for the AI on how to split (e.g., 'split by location changes').")
+    pass # No specific request body needed initially
+
+class ProposedScene(BaseModel):
+    """Represents a single scene proposed by the AI splitter."""
+    suggested_title: str = Field(..., description="A title suggested by the AI for the new scene.")
+    content: str = Field(..., description="The Markdown content chunk identified by the AI for this scene.")
+    # We might add suggested_order later if the AI determines it.
+
+# --- NEW: Pydantic model for the Tool's arguments ---
+class ProposedSceneList(BaseModel):
+    """Data model for the list of proposed scenes, used as Tool arguments."""
+    proposed_scenes: List[ProposedScene] = Field(..., description="The list of scenes identified in the chapter.")
+# --- END NEW ---
+
+class AIChapterSplitResponse(BaseModel):
+    proposed_scenes: List[ProposedScene] = Field(..., description="A list of proposed scenes derived from the chapter content.")
+
+
 # Add other models for editing requests/responses later (Summarize, Expand, etc.)
 # class AISummarizeRequest(...)
 # class AISummarizeResponse(...)

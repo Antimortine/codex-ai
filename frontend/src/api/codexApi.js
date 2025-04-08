@@ -94,6 +94,17 @@ export const rephraseText = (projectId, requestData) => {
     return apiClient.post(`/ai/edit/rephrase/${projectId}`, requestData);
 };
 
+/**
+ * Requests the AI to split a chapter's content into proposed scenes.
+ * @param {string} projectId - The ID of the project.
+ * @param {string} chapterId - The ID of the chapter to split.
+ * @param {object} requestData - Optional request body (currently empty).
+ * @returns {Promise<AxiosResponse<any>>} - The Axios response promise. Expected data format: { proposed_scenes: [{ suggested_title: "...", content: "..." }, ...] }
+ */
+export const splitChapterIntoScenes = (projectId, chapterId, requestData = {}) => {
+    return apiClient.post(`/ai/split/chapter/${projectId}/${chapterId}`, requestData);
+};
+
 
 // Optional: Add interceptors for error handling or adding auth tokens later
 // ... (interceptor unchanged) ...

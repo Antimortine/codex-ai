@@ -27,6 +27,10 @@ from app.rag.engine import RagEngine
 from app.models.ai import AISceneGenerationRequest
 # Import settings for PREVIOUS_SCENE_COUNT
 from app.core.config import settings
+# --- ADDED: Import LLM and VectorStoreIndex for mocking ---
+from llama_index.core.llms import LLM
+from llama_index.core.indices.vector_store import VectorStoreIndex
+# --- END ADDED ---
 
 # --- Tests for AIService.generate_scene_draft ---
 
@@ -54,6 +58,11 @@ async def test_generate_scene_draft_success_with_previous(monkeypatch): # Add mo
     # Mocks
     mock_file_service = MagicMock(spec=FileService)
     mock_rag_engine = MagicMock(spec=RagEngine)
+    # --- ADDED: Define llm and index attributes on mock_rag_engine ---
+    mock_rag_engine.llm = MagicMock(spec=LLM)
+    mock_rag_engine.index = MagicMock(spec=VectorStoreIndex)
+    # --- END ADDED ---
+
 
     # Configure file service mocks using side_effect for more control
     def get_scene_path_side_effect(p_id, c_id, s_id):
@@ -78,15 +87,12 @@ async def test_generate_scene_draft_success_with_previous(monkeypatch): # Add mo
     mock_rag_engine.generate_scene = AsyncMock(return_value=mock_generated_content)
 
     # --- Force PREVIOUS_SCENE_COUNT to 1 for this test ---
-    # Patch the setting object directly
     monkeypatch.setattr(settings, 'RAG_GENERATION_PREVIOUS_SCENE_COUNT', 1, raising=False)
-    # Patch the constant within the ai_service module where it's imported
     monkeypatch.setattr('app.services.ai_service.PREVIOUS_SCENE_COUNT', 1, raising=False)
 
     # Instantiate AIService with mocks
     with patch('app.services.ai_service.rag_engine', mock_rag_engine), \
          patch('app.services.ai_service.file_service', mock_file_service):
-        # Instantiation happens after monkeypatching the module-level constant
         service_instance = AIService()
 
     # Call the method
@@ -96,13 +102,8 @@ async def test_generate_scene_draft_success_with_previous(monkeypatch): # Add mo
     assert result == mock_generated_content
     mock_file_service.read_content_block_file.assert_has_calls([call(project_id, "plan.md"), call(project_id, "synopsis.md")], any_order=True)
     mock_file_service.read_chapter_metadata.assert_called_once_with(project_id, chapter_id)
-
-    # Verify _get_scene_path was called ONLY for the expected scene (scene-id-2)
     mock_file_service._get_scene_path.assert_called_once_with(project_id, chapter_id, mock_prev_scene_id)
-
-    # Verify read_text_file was called ONLY for the expected scene path
     mock_file_service.read_text_file.assert_called_once_with(mock_scene_path_2)
-
     mock_rag_engine.generate_scene.assert_awaited_once_with(
         project_id=project_id,
         chapter_id=chapter_id,
@@ -119,7 +120,6 @@ async def test_generate_scene_draft_success_first_scene():
     """Test successful scene generation for the first scene (no previous)."""
     project_id = "gen-proj-2"
     chapter_id = "ch-1"
-    # previous_scene_order is 0 or None for the first scene
     request_data = AISceneGenerationRequest(prompt_summary="The story begins.", previous_scene_order=0)
     mock_plan = "Plan for first scene."
     mock_synopsis = "Synopsis for first scene."
@@ -128,6 +128,10 @@ async def test_generate_scene_draft_success_first_scene():
     # Mocks
     mock_file_service = MagicMock(spec=FileService)
     mock_rag_engine = MagicMock(spec=RagEngine)
+    # --- ADDED: Define llm and index attributes on mock_rag_engine ---
+    mock_rag_engine.llm = MagicMock(spec=LLM)
+    mock_rag_engine.index = MagicMock(spec=VectorStoreIndex)
+    # --- END ADDED ---
 
     # Configure mocks (no chapter metadata or scene read needed)
     mock_file_service.read_content_block_file.side_effect = lambda p_id, b_name: mock_plan if b_name == "plan.md" else mock_synopsis if b_name == "synopsis.md" else pytest.fail("Unexpected block read")
@@ -167,6 +171,10 @@ async def test_generate_scene_draft_context_not_found():
     # Mocks
     mock_file_service = MagicMock(spec=FileService)
     mock_rag_engine = MagicMock(spec=RagEngine)
+    # --- ADDED: Define llm and index attributes on mock_rag_engine ---
+    mock_rag_engine.llm = MagicMock(spec=LLM)
+    mock_rag_engine.index = MagicMock(spec=VectorStoreIndex)
+    # --- END ADDED ---
 
     # Configure mocks
     mock_file_service.read_content_block_file.side_effect = HTTPException(status_code=404, detail="Not Found")
@@ -207,6 +215,10 @@ async def test_generate_scene_draft_context_load_error():
     # Mocks
     mock_file_service = MagicMock(spec=FileService)
     mock_rag_engine = MagicMock(spec=RagEngine)
+    # --- ADDED: Define llm and index attributes on mock_rag_engine ---
+    mock_rag_engine.llm = MagicMock(spec=LLM)
+    mock_rag_engine.index = MagicMock(spec=VectorStoreIndex)
+    # --- END ADDED ---
 
     # Configure mocks
     def read_block_error(p_id, b_name):
@@ -253,6 +265,10 @@ async def test_generate_scene_draft_rag_engine_error():
     # Mocks
     mock_file_service = MagicMock(spec=FileService)
     mock_rag_engine = MagicMock(spec=RagEngine)
+    # --- ADDED: Define llm and index attributes on mock_rag_engine ---
+    mock_rag_engine.llm = MagicMock(spec=LLM)
+    mock_rag_engine.index = MagicMock(spec=VectorStoreIndex)
+    # --- END ADDED ---
 
     # Configure mocks
     mock_file_service.read_content_block_file.side_effect = lambda p_id, b_name: mock_plan if b_name == "plan.md" else mock_synopsis if b_name == "synopsis.md" else pytest.fail("Unexpected block read")
@@ -290,6 +306,10 @@ async def test_generate_scene_draft_rag_engine_returns_error_string():
     # Mocks
     mock_file_service = MagicMock(spec=FileService)
     mock_rag_engine = MagicMock(spec=RagEngine)
+    # --- ADDED: Define llm and index attributes on mock_rag_engine ---
+    mock_rag_engine.llm = MagicMock(spec=LLM)
+    mock_rag_engine.index = MagicMock(spec=VectorStoreIndex)
+    # --- END ADDED ---
 
     # Configure mocks
     mock_file_service.read_content_block_file.side_effect = lambda p_id, b_name: mock_plan if b_name == "plan.md" else mock_synopsis if b_name == "synopsis.md" else pytest.fail("Unexpected block read")

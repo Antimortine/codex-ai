@@ -25,6 +25,10 @@ from app.services.file_service import FileService
 from app.rag.engine import RagEngine
 # Import models used in responses/arguments
 from app.models.ai import AIRephraseRequest
+# --- ADDED: Import LLM and VectorStoreIndex for mocking ---
+from llama_index.core.llms import LLM
+from llama_index.core.indices.vector_store import VectorStoreIndex
+# --- END ADDED ---
 
 # --- Tests for AIService.rephrase_text ---
 
@@ -42,6 +46,10 @@ async def test_rephrase_text_success():
     # Mocks
     mock_rag_engine = MagicMock(spec=RagEngine)
     mock_file_service = MagicMock(spec=FileService) # Needed for instantiation patch
+    # --- ADDED: Define llm and index attributes on mock_rag_engine ---
+    mock_rag_engine.llm = MagicMock(spec=LLM)
+    mock_rag_engine.index = MagicMock(spec=VectorStoreIndex)
+    # --- END ADDED ---
 
     # Configure mock
     mock_rag_engine.rephrase = AsyncMock(return_value=mock_suggestions)
@@ -72,6 +80,10 @@ async def test_rephrase_text_engine_error():
     # Mocks
     mock_rag_engine = MagicMock(spec=RagEngine)
     mock_file_service = MagicMock(spec=FileService)
+    # --- ADDED: Define llm and index attributes on mock_rag_engine ---
+    mock_rag_engine.llm = MagicMock(spec=LLM)
+    mock_rag_engine.index = MagicMock(spec=VectorStoreIndex)
+    # --- END ADDED ---
 
     # Configure mock
     mock_rag_engine.rephrase = AsyncMock(side_effect=HTTPException(status_code=500, detail="Rephrase LLM failed"))
@@ -104,6 +116,10 @@ async def test_rephrase_text_engine_returns_error_string():
     # Mocks
     mock_rag_engine = MagicMock(spec=RagEngine)
     mock_file_service = MagicMock(spec=FileService)
+    # --- ADDED: Define llm and index attributes on mock_rag_engine ---
+    mock_rag_engine.llm = MagicMock(spec=LLM)
+    mock_rag_engine.index = MagicMock(spec=VectorStoreIndex)
+    # --- END ADDED ---
 
     # Configure mock
     mock_rag_engine.rephrase = AsyncMock(return_value=[error_string]) # Engine returns list with error
