@@ -112,7 +112,6 @@ const modalStyles = {
          color: 'white',
          marginRight: '10px',
     },
-    // --- NEW: Style for Split Input Area ---
     splitInputArea: {
         marginTop: '10px',
         padding: '10px',
@@ -152,9 +151,6 @@ function ProjectDetailPage() {
     const [saveNameError, setSaveNameError] = useState(null);
     const [saveNameSuccess, setSaveNameSuccess] = useState('');
     const [generationSummaries, setGenerationSummaries] = useState({});
-    const [isGeneratingScene, setIsGeneratingScene] = useState(false);
-    const [generatingChapterId, setGeneratingChapterId] = useState(null);
-    const [generationError, setGenerationError] = useState(null);
     const [generatedSceneContent, setGeneratedSceneContent] = useState('');
     const [showGeneratedSceneModal, setShowGeneratedSceneModal] = useState(false);
     const [chapterIdForGeneratedScene, setChapterIdForGeneratedScene] = useState(null);
@@ -163,15 +159,21 @@ function ProjectDetailPage() {
 
     // --- State for Chapter Splitting ---
     const [splitInputContent, setSplitInputContent] = useState({}); // { chapterId: "content..." }
-    const [isSplittingChapter, setIsSplittingChapter] = useState(false);
-    const [splittingChapterId, setSplittingChapterId] = useState(null);
-    const [splitError, setSplitError] = useState(null);
     const [proposedSplits, setProposedSplits] = useState([]); // Stores [{suggested_title: "", content: ""}, ...]
     const [chapterIdForSplits, setChapterIdForSplits] = useState(null);
     const [showSplitModal, setShowSplitModal] = useState(false);
     const [isCreatingScenesFromSplit, setIsCreatingScenesFromSplit] = useState(false);
     const [createFromSplitError, setCreateFromSplitError] = useState(null);
-    // --- END State ---
+
+    // --- NEW: State for AI operation status ---
+    const [isGeneratingScene, setIsGeneratingScene] = useState(false);
+    const [generatingChapterId, setGeneratingChapterId] = useState(null);
+    const [generationError, setGenerationError] = useState(null);
+
+    const [isSplittingChapter, setIsSplittingChapter] = useState(false);
+    const [splittingChapterId, setSplittingChapterId] = useState(null);
+    const [splitError, setSplitError] = useState(null);
+    // --- END NEW STATE ---
 
     // --- useEffect for Data Fetching ---
     const fetchAllData = useCallback(async () => {
@@ -179,10 +181,10 @@ function ProjectDetailPage() {
         setError(null);
         setSaveNameError(null);
         setSaveNameSuccess('');
-        setGenerationError(null);
+        setGenerationError(null); // Reset AI errors on full refresh
         setCreateSceneError(null);
-        setSplitError(null);
-        setCreateFromSplitError(null); // Reset this too
+        setSplitError(null); // Reset AI errors on full refresh
+        setCreateFromSplitError(null);
 
         if (!projectId) {
             if (isMounted) setError("Project ID not found in URL.");
@@ -360,21 +362,39 @@ function ProjectDetailPage() {
     // --- END CRUD Handlers ---
 
     // --- AI Scene Generation Handlers ---
-    // ... (handleGenerateSceneDraft, handleCreateSceneFromDraft, handleSummaryChange, copyGeneratedText - unchanged) ...
     const handleGenerateSceneDraft = async (chapterId) => {
         const summary = generationSummaries[chapterId] || '';
-        setIsGeneratingScene(true); setGeneratingChapterId(chapterId); setGenerationError(null);
-        setGeneratedSceneContent(''); setShowGeneratedSceneModal(false); setCreateSceneError(null);
+        // --- MODIFIED: Set loading state ---
+        setIsGeneratingScene(true);
+        setGeneratingChapterId(chapterId);
+        setGenerationError(null);
+        // --- END MODIFIED ---
+        setGeneratedSceneContent('');
+        setShowGeneratedSceneModal(false);
+        setCreateSceneError(null);
         const currentScenesInChapter = scenes[chapterId] || [];
         const previousSceneOrder = currentScenesInChapter.length > 0 ? Math.max(...currentScenesInChapter.map(s => s.order)) : 0;
         const requestData = { prompt_summary: summary, previous_scene_order: previousSceneOrder };
         try {
             const response = await generateSceneDraft(projectId, chapterId, requestData);
             setGeneratedSceneContent(response.data.generated_content || "AI returned empty content.");
-            setChapterIdForGeneratedScene(chapterId); setShowGeneratedSceneModal(true);
-        } catch (err) { console.error("Error generating scene draft:", err); const errorMsg = err.response?.data?.detail || err.message || 'Failed to generate scene draft.'; setGenerationError(errorMsg); setShowGeneratedSceneModal(false); }
-        finally { setIsGeneratingScene(false); setGeneratingChapterId(null); }
+            setChapterIdForGeneratedScene(chapterId);
+            setShowGeneratedSceneModal(true);
+        } catch (err) {
+            console.error("Error generating scene draft:", err);
+            const errorMsg = err.response?.data?.detail || err.message || 'Failed to generate scene draft.';
+            // --- MODIFIED: Set error state ---
+            setGenerationError(errorMsg);
+            // --- END MODIFIED ---
+            setShowGeneratedSceneModal(false);
+        } finally {
+            // --- MODIFIED: Reset loading state ---
+            setIsGeneratingScene(false);
+            setGeneratingChapterId(null);
+            // --- END MODIFIED ---
+        }
     };
+    // ... (handleCreateSceneFromDraft, handleSummaryChange, copyGeneratedText - unchanged) ...
     const handleCreateSceneFromDraft = async () => {
         if (!chapterIdForGeneratedScene || !generatedSceneContent) { setCreateSceneError("Missing chapter ID or generated content."); return; }
         setIsCreatingSceneFromDraft(true); setCreateSceneError(null);
@@ -398,23 +418,20 @@ function ProjectDetailPage() {
 
 
     // --- Chapter Split Handlers ---
-    // --- MODIFIED: handleSplitChapter to use state for content ---
     const handleSplitChapter = async (chapterId) => {
         const contentToSplit = splitInputContent[chapterId] || ''; // Get content from state
         if (!contentToSplit.trim()) {
             setSplitError("Please paste the chapter content into the text area before splitting.");
             setSplittingChapterId(chapterId); // Set chapterId so error shows in the right place
-            // Clear error after a delay
-            setTimeout(() => {
-                setSplitError(null);
-                setSplittingChapterId(null);
-            }, 4000);
+            setTimeout(() => { setSplitError(null); setSplittingChapterId(null); }, 4000);
             return;
         }
 
+        // --- MODIFIED: Set loading state ---
         setIsSplittingChapter(true);
         setSplittingChapterId(chapterId);
         setSplitError(null);
+        // --- END MODIFIED ---
         setProposedSplits([]);
         setShowSplitModal(false);
         setCreateFromSplitError(null);
@@ -428,15 +445,18 @@ function ProjectDetailPage() {
         } catch (err) {
             console.error("Error splitting chapter:", err);
             const errorMsg = err.response?.data?.detail || err.message || 'Failed to split chapter.';
+            // --- MODIFIED: Set error state ---
             setSplitError(errorMsg);
+            // --- END MODIFIED ---
         } finally {
+            // --- MODIFIED: Reset loading state ---
             setIsSplittingChapter(false);
             setSplittingChapterId(null); // Clear loading indicator ID regardless of success/fail
+            // --- END MODIFIED ---
         }
     };
     // --- END MODIFIED ---
 
-    // --- NEW: Handler for split input textarea change ---
     const handleSplitInputChange = (chapterId, value) => {
         setSplitInputContent(prev => ({ ...prev, [chapterId]: value }));
         // Clear error if user starts typing after an error
@@ -445,9 +465,8 @@ function ProjectDetailPage() {
             setSplittingChapterId(null);
         }
     };
-    // --- END NEW Handler ---
 
-    // handleCreateScenesFromSplit remains the same
+    // ... (handleCreateScenesFromSplit unchanged) ...
     const handleCreateScenesFromSplit = async () => {
         if (!chapterIdForSplits || proposedSplits.length === 0) { setCreateFromSplitError("No chapter ID or proposed splits available."); return; }
         setIsCreatingScenesFromSplit(true); setCreateFromSplitError(null);
@@ -473,8 +492,9 @@ function ProjectDetailPage() {
      if (error && !baseLoading) { return ( <div> <p style={{ color: 'red' }}>Error: {error}</p> <Link to="/"> &lt; Back to Project List</Link> </div> ); }
      if (!isLoadingProject && !project) { return ( <div> <p>Project not found.</p> <Link to="/"> &lt; Back to Project List</Link> </div> ); }
 
-    // Determine if any AI or save operation is in progress
+    // --- MODIFIED: Determine if any AI or save operation is in progress ---
     const isAnyOperationLoading = isSavingName || isGeneratingScene || isCreatingSceneFromDraft || isSplittingChapter || isCreatingScenesFromSplit;
+    // --- END MODIFIED ---
 
     return (
         <div>
@@ -518,7 +538,9 @@ function ProjectDetailPage() {
             {/* Page Content */}
             <nav> <Link to="/"> &lt; Back to Project List</Link> </nav>
             <div style={{ display: 'flex', alignItems: 'center', marginBottom: '0.5rem' }}>
+                 {/* --- MODIFIED: Disable Edit Name button during AI operations --- */}
                  {!isEditingName ? ( <> <h1 style={{ marginRight: '1rem', marginBottom: 0 }}> Project: {project?.name || 'Loading...'} </h1> {project && ( <button onClick={handleEditNameClick} disabled={isAnyOperationLoading}> Edit Name </button> )} </> ) : ( <> <input type="text" value={editedProjectName} onChange={(e) => setEditedProjectName(e.target.value)} disabled={isSavingName} style={{ fontSize: '1.5em', marginRight: '0.5rem' }} aria-label="Project Name" /> <button onClick={handleSaveName} disabled={isSavingName || !editedProjectName.trim()}> {isSavingName ? 'Saving...' : 'Save Name'} </button> <button onClick={handleCancelEditName} disabled={isSavingName} style={{ marginLeft: '0.5rem' }}> Cancel </button> </> )}
+                 {/* --- END MODIFIED --- */}
             </div>
             {saveNameError && <p style={{ color: 'red', marginTop: '0.2rem' }}>{saveNameError}</p>}
             {saveNameSuccess && <p style={{ color: 'green', marginTop: '0.2rem' }}>{saveNameSuccess}</p>}
@@ -532,19 +554,32 @@ function ProjectDetailPage() {
                     chapters.length === 0 ? <p>No chapters yet.</p> :
                     chapters.map(chapter => {
                         const chapterHasScenes = scenes[chapter.id] && scenes[chapter.id].length > 0;
-                        const disableSplitButton = isLoadingScenes[chapter.id] || isAnyOperationLoading || chapterHasScenes || !splitInputContent[chapter.id]?.trim();
+                        // --- MODIFIED: Split button disabled logic ---
+                        const isThisChapterSplitting = isSplittingChapter && splittingChapterId === chapter.id;
+                        const disableSplitButton = isLoadingScenes[chapter.id] || isAnyOperationLoading || chapterHasScenes || !splitInputContent[chapter.id]?.trim() || isThisChapterSplitting;
                         const splitButtonTitle = chapterHasScenes
                             ? "Cannot split chapter that already has scenes"
                             : !splitInputContent[chapter.id]?.trim()
                             ? "Paste chapter content below to enable splitting"
+                            : isThisChapterSplitting
+                            ? "AI is currently splitting this chapter..."
+                            : isAnyOperationLoading
+                            ? "Another operation is in progress..."
                             : "Split this chapter into scenes using AI";
+                        // --- END MODIFIED ---
+                        // --- NEW: Generate button disabled logic ---
+                        const isThisChapterGenerating = isGeneratingScene && generatingChapterId === chapter.id;
+                        const disableGenerateButton = isAnyOperationLoading || isLoadingScenes[chapter.id] || isThisChapterGenerating;
+                        // --- END NEW ---
 
                         return (
                             <div key={chapter.id} data-testid={`chapter-section-${chapter.id}`} style={{ border: '1px solid #eee', padding: '10px', marginBottom: '10px' }}>
                                <div style={{ display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '5px' }}>
                                     <strong>{chapter.order}: {chapter.title}</strong>
                                     <div> {/* Container for buttons */}
+                                        {/* --- MODIFIED: Disable delete chapter button during AI operations --- */}
                                         <button onClick={() => handleDeleteChapter(chapter.id, chapter.title)} style={{ marginLeft: '1rem', color: 'red', cursor: 'pointer' }} disabled={isLoadingChapters || isLoadingScenes[chapter.id] || isAnyOperationLoading}> Delete Chapter </button>
+                                        {/* --- END MODIFIED --- */}
                                     </div>
                                </div>
 
@@ -556,7 +591,9 @@ function ProjectDetailPage() {
                                             {(scenes[chapter.id] || []).map(scene => (
                                                 <li key={scene.id} style={{ marginBottom: '0.3rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}>
                                                     <Link to={`/projects/${projectId}/chapters/${chapter.id}/scenes/${scene.id}`}> {scene.order}: {scene.title} </Link>
+                                                    {/* --- MODIFIED: Disable delete scene button during AI operations --- */}
                                                     <button onClick={() => handleDeleteScene(chapter.id, scene.id, scene.title)} style={{ marginLeft: '1rem', fontSize: '0.8em', color: 'orange', cursor: 'pointer' }} disabled={isAnyOperationLoading}> Del Scene </button>
+                                                    {/* --- END MODIFIED --- */}
                                                 </li>
                                             ))}
                                         </ul>
@@ -573,44 +610,57 @@ function ProjectDetailPage() {
                                                 placeholder={`Paste the full text of chapter "${chapter.title}" here...`}
                                                 value={splitInputContent[chapter.id] || ''}
                                                 onChange={(e) => handleSplitInputChange(chapter.id, e.target.value)}
-                                                disabled={isSplittingChapter && splittingChapterId === chapter.id}
+                                                disabled={isThisChapterSplitting || isAnyOperationLoading} // Also disable if other op is running
                                             />
+                                            {/* --- MODIFIED: Split Button --- */}
                                             <button
                                                 onClick={() => handleSplitChapter(chapter.id)}
-                                                style={{ cursor: 'pointer', backgroundColor: '#ffc107', color: '#333' }}
+                                                style={{ cursor: disableSplitButton ? 'not-allowed' : 'pointer', backgroundColor: '#ffc107', color: '#333' }}
                                                 disabled={disableSplitButton}
                                                 title={splitButtonTitle}
                                             >
-                                                {isSplittingChapter && splittingChapterId === chapter.id ? 'Splitting...' : 'Split Chapter (AI)'}
+                                                {isThisChapterSplitting ? 'Splitting...' : 'Split Chapter (AI)'}
                                             </button>
                                             {/* Display Split Error specific to this chapter */}
                                             {splitError && splittingChapterId === chapter.id && <p style={{ color: 'red', fontSize: '0.9em', marginTop:'5px', display: 'inline-block', marginLeft: '10px' }}>Split Error: {splitError}</p>}
+                                            {/* --- END MODIFIED --- */}
                                         </div>
                                     )
                                 )}
 
                                  {/* Add Scene Manually / Generate Scene Area (Always show below scenes/split area) */}
                                  <div style={{marginLeft: '20px', marginTop: '10px', borderTop: '1px dashed #ccc', paddingTop: '10px'}}>
+                                     {/* --- MODIFIED: Disable Add Scene Manually during AI ops --- */}
                                      <button onClick={() => handleCreateScene(chapter.id)} style={{marginRight: '10px'}} disabled={isLoadingScenes[chapter.id] || isAnyOperationLoading}>+ Add Scene Manually</button>
+                                     {/* --- END MODIFIED --- */}
                                      <div style={{ marginTop: '10px', padding:'5px', backgroundColor:'#f0f8ff', borderRadius:'3px' }}>
                                          <label htmlFor={`summary-${chapter.id}`} style={{ fontSize: '0.9em', marginRight: '5px' }}>Optional Prompt/Summary for AI Scene Generation:</label>
                                          <input type="text" id={`summary-${chapter.id}`} value={generationSummaries[chapter.id] || ''} onChange={(e) => handleSummaryChange(chapter.id, e.target.value)} placeholder="e.g., Character meets the informant" disabled={isAnyOperationLoading} style={{ fontSize: '0.9em', marginRight: '5px', minWidth:'250px' }} />
-                                         <button onClick={() => handleGenerateSceneDraft(chapter.id)} disabled={isAnyOperationLoading}> {isGeneratingScene && generatingChapterId === chapter.id ? 'Generating...' : '+ Add Scene using AI'} </button>
-                                         {isGeneratingScene && generatingChapterId === chapter.id && <span style={{ marginLeft:'5px', fontStyle:'italic', fontSize:'0.9em' }}> (AI is working...)</span>}
-                                         {generationError && generatingChapterId === chapter.id && <p style={{ color: 'red', fontSize: '0.9em', marginTop:'5px' }}>Error: {generationError}</p>}
+                                         {/* --- MODIFIED: Generate Button --- */}
+                                         <button onClick={() => handleGenerateSceneDraft(chapter.id)} disabled={disableGenerateButton}>
+                                             {isThisChapterGenerating ? 'Generating...' : '+ Add Scene using AI'}
+                                         </button>
+                                         {isThisChapterGenerating && <span style={{ marginLeft:'5px', fontStyle:'italic', fontSize:'0.9em' }}> (AI is working...)</span>}
+                                         {/* Display Generate Error specific to this chapter */}
+                                         {generationError && generatingChapterId === chapter.id && <p style={{ color: 'red', fontSize: '0.9em', marginTop:'5px' }}>Generate Error: {generationError}</p>}
+                                         {/* --- END MODIFIED --- */}
                                      </div>
                                  </div>
                             </div>
                         )
                     })
                 )}
+                 {/* --- MODIFIED: Disable Add Chapter during AI ops --- */}
                  <form onSubmit={handleCreateChapter} style={{ marginTop: '1rem' }}> <input type="text" value={newChapterTitle} onChange={(e) => setNewChapterTitle(e.target.value)} placeholder="New chapter title" disabled={isLoadingChapters || isAnyOperationLoading} /> <button type="submit" disabled={isLoadingChapters || isAnyOperationLoading}>Add Chapter</button> </form>
+                 {/* --- END MODIFIED --- */}
             </section>
             <hr />
             <section>
                  <h2>Characters</h2>
-                {isLoadingCharacters ? <p>Loading characters...</p> : ( <ul> {characters.map(character => ( <li key={character.id} style={{ marginBottom: '0.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}> <Link to={`/projects/${projectId}/characters/${character.id}`}> {character.name} </Link> <span> <button onClick={() => handleDeleteCharacter(character.id, character.name)} style={{ marginLeft: '1rem', color: 'red', cursor: 'pointer' }} disabled={isLoadingCharacters || isAnyOperationLoading}> Delete </button> </span> </li> ))} {characters.length === 0 && !isLoadingCharacters && <p>No characters yet.</p>} </ul> )}
+                {isLoadingCharacters ? <p>Loading characters...</p> : ( <ul> {characters.map(character => ( <li key={character.id} style={{ marginBottom: '0.5rem', display: 'flex', justifyContent: 'space-between', alignItems: 'center' }}> <Link to={`/projects/${projectId}/characters/${character.id}`}> {character.name} </Link> <span> {/* --- MODIFIED: Disable Delete Character during AI ops --- */} <button onClick={() => handleDeleteCharacter(character.id, character.name)} style={{ marginLeft: '1rem', color: 'red', cursor: 'pointer' }} disabled={isLoadingCharacters || isAnyOperationLoading}> Delete </button> {/* --- END MODIFIED --- */} </span> </li> ))} {characters.length === 0 && !isLoadingCharacters && <p>No characters yet.</p>} </ul> )}
+                {/* --- MODIFIED: Disable Add Character during AI ops --- */}
                 <form onSubmit={handleCreateCharacter} style={{ marginTop: '0.5rem' }}> <input type="text" value={newCharacterName} onChange={(e) => setNewCharacterName(e.target.value)} placeholder="New character name" disabled={isLoadingCharacters || isAnyOperationLoading} /> <button type="submit" disabled={isLoadingCharacters || isAnyOperationLoading}>Add Character</button> </form>
+                {/* --- END MODIFIED --- */}
             </section>
             <hr />
             <section>
