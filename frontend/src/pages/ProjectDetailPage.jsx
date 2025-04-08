@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import React, { useState, useEffect, useCallback } from 'react'; // Added useCallback
+import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import MDEditor from '@uiw/react-md-editor'; // Import MDEditor for potential display
 import {
@@ -23,7 +23,7 @@ import {
     listCharacters, createCharacter, deleteCharacter,
     listScenes, createScene, deleteScene,
     generateSceneDraft,
-    splitChapterIntoScenes // Import the new AI API function
+    splitChapterIntoScenes
 } from '../api/codexApi';
 import QueryInterface from '../components/QueryInterface';
 
@@ -142,7 +142,7 @@ function ProjectDetailPage() {
     const [isLoadingChapters, setIsLoadingChapters] = useState(true);
     const [isLoadingCharacters, setIsLoadingCharacters] = useState(true);
     const [isLoadingScenes, setIsLoadingScenes] = useState({}); // Track loading per chapter: { chapterId: boolean }
-    const [error, setError] = useState(null);
+    const [error, setError] = useState(null); // General page load error
     const [newChapterTitle, setNewChapterTitle] = useState('');
     const [newCharacterName, setNewCharacterName] = useState('');
     const [isEditingName, setIsEditingName] = useState(false);
@@ -155,35 +155,36 @@ function ProjectDetailPage() {
     const [showGeneratedSceneModal, setShowGeneratedSceneModal] = useState(false);
     const [chapterIdForGeneratedScene, setChapterIdForGeneratedScene] = useState(null);
     const [isCreatingSceneFromDraft, setIsCreatingSceneFromDraft] = useState(false);
-    const [createSceneError, setCreateSceneError] = useState(null);
+    const [createSceneError, setCreateSceneError] = useState(null); // Error specific to creating from draft modal
 
     // --- State for Chapter Splitting ---
     const [splitInputContent, setSplitInputContent] = useState({}); // { chapterId: "content..." }
-    const [proposedSplits, setProposedSplits] = useState([]); // Stores [{suggested_title: "", content: ""}, ...]
+    const [proposedSplits, setProposedSplits] = useState([]);
     const [chapterIdForSplits, setChapterIdForSplits] = useState(null);
     const [showSplitModal, setShowSplitModal] = useState(false);
     const [isCreatingScenesFromSplit, setIsCreatingScenesFromSplit] = useState(false);
-    const [createFromSplitError, setCreateFromSplitError] = useState(null);
+    const [createFromSplitError, setCreateFromSplitError] = useState(null); // Error specific to creating from split modal
 
-    // --- NEW: State for AI operation status ---
-    const [isGeneratingScene, setIsGeneratingScene] = useState(false);
-    const [generatingChapterId, setGeneratingChapterId] = useState(null);
-    const [generationError, setGenerationError] = useState(null);
+    // --- NEW: State for AI operation status (per chapter) ---
+    const [isGeneratingScene, setIsGeneratingScene] = useState(false); // Is *any* generation happening?
+    const [generatingChapterId, setGeneratingChapterId] = useState(null); // Which chapter is generating?
+    const [generationError, setGenerationError] = useState(null); // Error message for generation
 
-    const [isSplittingChapter, setIsSplittingChapter] = useState(false);
-    const [splittingChapterId, setSplittingChapterId] = useState(null);
-    const [splitError, setSplitError] = useState(null);
+    const [isSplittingChapter, setIsSplittingChapter] = useState(false); // Is *any* split happening?
+    const [splittingChapterId, setSplittingChapterId] = useState(null); // Which chapter is splitting?
+    const [splitError, setSplitError] = useState(null); // Error message for split
     // --- END NEW STATE ---
 
     // --- useEffect for Data Fetching ---
     const fetchAllData = useCallback(async () => {
         let isMounted = true;
+        // Reset ALL errors on full refresh
         setError(null);
         setSaveNameError(null);
         setSaveNameSuccess('');
-        setGenerationError(null); // Reset AI errors on full refresh
+        setGenerationError(null);
         setCreateSceneError(null);
-        setSplitError(null); // Reset AI errors on full refresh
+        setSplitError(null);
         setCreateFromSplitError(null);
 
         if (!projectId) {
@@ -210,14 +211,14 @@ function ProjectDetailPage() {
             if (isMounted) setCharacters(charactersResponse.data.characters || []);
 
             const initialSceneLoadingState = {};
-            const initialSplitContent = {}; // Initialize split content state
+            const initialSplitContent = {};
             sortedChapters.forEach(ch => {
                 initialSceneLoadingState[ch.id] = true;
-                initialSplitContent[ch.id] = ''; // Default to empty string
+                initialSplitContent[ch.id] = '';
             });
             if (isMounted) {
                 setIsLoadingScenes(initialSceneLoadingState);
-                setSplitInputContent(initialSplitContent); // Set initial state for textareas
+                setSplitInputContent(initialSplitContent);
             }
 
             const scenesData = {};
@@ -251,36 +252,24 @@ function ProjectDetailPage() {
 
     // --- Action Handlers ---
     const refreshChaptersAndScenes = useCallback(async () => {
-         // Start with a clean loading state
          setIsLoadingChapters(true);
          setIsLoadingScenes(prev => {
-             // Mark all current chapters as loading
              const newState = {};
-             // Get chapters from the current state, not from dependency
-             for (const chId in prev) {
-                 newState[chId] = true;
-             }
+             for (const chId in prev) { newState[chId] = true; }
              return newState;
          });
-         
+
          let fetchedChapters = [];
          try {
-             // Fetch chapters first
              const response = await listChapters(projectId);
              fetchedChapters = (response.data.chapters || []).sort((a, b) => a.order - b.order);
-             
-             // Update loading state for the NEW chapter list - critical for test synchronization
+
              const updatedLoadingState = {};
-             fetchedChapters.forEach(ch => {
-                 updatedLoadingState[ch.id] = true;
-             });
-             
-             // Important: Set these states BEFORE starting scene fetching
-             // This ensures UI immediately updates with new chapter list
+             fetchedChapters.forEach(ch => { updatedLoadingState[ch.id] = true; });
+
              setChapters(fetchedChapters);
              setIsLoadingScenes(updatedLoadingState);
-             
-             // Then fetch scenes for all chapters
+
              const scenesData = {};
              await Promise.all(fetchedChapters.map(async (chapter) => {
                  try {
@@ -295,18 +284,15 @@ function ProjectDetailPage() {
                       setIsLoadingScenes(prev => ({ ...prev, [chapter.id]: false }));
                  }
              }));
-             
-             // Set all scenes at once when done
              setScenes(scenesData);
          } catch (err) {
              console.error("Error fetching chapters:", err);
              setError(prev => prev ? `${prev} | Failed to load chapters.` : 'Failed to load chapters.');
-             // Reset loading states on error
              setIsLoadingScenes({});
          } finally {
              setIsLoadingChapters(false);
          }
-     }, [projectId]); // Remove chapters dependency to prevent recreation
+     }, [projectId]);
 
     // --- CRUD Handlers (Create/Delete Chapter/Character/Scene, Edit Name) ---
     // ... (These handlers remain largely unchanged, but ensure disable logic includes new states) ...
@@ -387,11 +373,11 @@ function ProjectDetailPage() {
         // --- MODIFIED: Set loading state ---
         setIsGeneratingScene(true);
         setGeneratingChapterId(chapterId);
-        setGenerationError(null);
+        setGenerationError(null); // Clear previous errors for this action
         // --- END MODIFIED ---
         setGeneratedSceneContent('');
         setShowGeneratedSceneModal(false);
-        setCreateSceneError(null);
+        setCreateSceneError(null); // Clear modal-specific error too
         const currentScenesInChapter = scenes[chapterId] || [];
         const previousSceneOrder = currentScenesInChapter.length > 0 ? Math.max(...currentScenesInChapter.map(s => s.order)) : 0;
         const requestData = { prompt_summary: summary, previous_scene_order: previousSceneOrder };
@@ -404,17 +390,17 @@ function ProjectDetailPage() {
             console.error("Error generating scene draft:", err);
             const errorMsg = err.response?.data?.detail || err.message || 'Failed to generate scene draft.';
             // --- MODIFIED: Set error state ---
-            setGenerationError(errorMsg);
+            setGenerationError(errorMsg); // Set the specific error for this action
             // --- END MODIFIED ---
-            setShowGeneratedSceneModal(false);
+            setShowGeneratedSceneModal(false); // Don't show modal on error
         } finally {
             // --- MODIFIED: Reset loading state ---
             setIsGeneratingScene(false);
-            setGeneratingChapterId(null);
+            setGeneratingChapterId(null); // Clear the ID regardless of success/fail
             // --- END MODIFIED ---
         }
     };
-    // ... (handleCreateSceneFromDraft, handleSummaryChange, copyGeneratedText - unchanged) ...
+
     const handleCreateSceneFromDraft = async () => {
         if (!chapterIdForGeneratedScene || !generatedSceneContent) { setCreateSceneError("Missing chapter ID or generated content."); return; }
         setIsCreatingSceneFromDraft(true); setCreateSceneError(null);
@@ -439,25 +425,27 @@ function ProjectDetailPage() {
 
     // --- Chapter Split Handlers ---
     const handleSplitChapter = async (chapterId) => {
-        const contentToSplit = splitInputContent[chapterId] || ''; // Get content from state
+        const contentToSplit = splitInputContent[chapterId] || '';
+        // --- MODIFIED: Validate content locally first ---
         if (!contentToSplit.trim()) {
             setSplitError("Please paste the chapter content into the text area before splitting.");
             setSplittingChapterId(chapterId); // Set chapterId so error shows in the right place
-            setTimeout(() => { setSplitError(null); setSplittingChapterId(null); }, 4000);
-            return;
+            // Optional: Clear error after a delay
+            // setTimeout(() => { setSplitError(null); setSplittingChapterId(null); }, 4000);
+            return; // Stop execution
         }
+        // --- END MODIFIED ---
 
         // --- MODIFIED: Set loading state ---
         setIsSplittingChapter(true);
         setSplittingChapterId(chapterId);
-        setSplitError(null);
+        setSplitError(null); // Clear previous errors for this action
         // --- END MODIFIED ---
         setProposedSplits([]);
         setShowSplitModal(false);
-        setCreateFromSplitError(null);
+        setCreateFromSplitError(null); // Clear modal-specific error too
 
         try {
-            // Pass content in the request body
             const response = await splitChapterIntoScenes(projectId, chapterId, { chapter_content: contentToSplit });
             setProposedSplits(response.data.proposed_scenes || []);
             setChapterIdForSplits(chapterId);
@@ -466,27 +454,27 @@ function ProjectDetailPage() {
             console.error("Error splitting chapter:", err);
             const errorMsg = err.response?.data?.detail || err.message || 'Failed to split chapter.';
             // --- MODIFIED: Set error state ---
-            setSplitError(errorMsg);
+            setSplitError(errorMsg); // Set the specific error for this action
             // --- END MODIFIED ---
+            setShowSplitModal(false); // Don't show modal on error
         } finally {
             // --- MODIFIED: Reset loading state ---
             setIsSplittingChapter(false);
-            setSplittingChapterId(null); // Clear loading indicator ID regardless of success/fail
+            setSplittingChapterId(null); // Clear the ID regardless of success/fail
             // --- END MODIFIED ---
         }
     };
-    // --- END MODIFIED ---
 
     const handleSplitInputChange = (chapterId, value) => {
         setSplitInputContent(prev => ({ ...prev, [chapterId]: value }));
-        // Clear error if user starts typing after an error
+        // --- MODIFIED: Clear error if user starts typing after an error ---
         if (splitError && splittingChapterId === chapterId) {
             setSplitError(null);
             setSplittingChapterId(null);
         }
+        // --- END MODIFIED ---
     };
 
-    // ... (handleCreateScenesFromSplit unchanged) ...
     const handleCreateScenesFromSplit = async () => {
         if (!chapterIdForSplits || proposedSplits.length === 0) { setCreateFromSplitError("No chapter ID or proposed splits available."); return; }
         setIsCreatingScenesFromSplit(true); setCreateFromSplitError(null);
@@ -507,9 +495,9 @@ function ProjectDetailPage() {
 
 
     // --- Rendering Logic ---
-     const baseLoading = isLoadingProject || isLoadingChapters || isLoadingCharacters; // Base loading
+     const baseLoading = isLoadingProject || isLoadingChapters || isLoadingCharacters;
      if (isLoadingProject && !project && !error) { return <p>Loading project...</p>; }
-     if (error && !baseLoading) { return ( <div> <p style={{ color: 'red' }}>Error: {error}</p> <Link to="/"> &lt; Back to Project List</Link> </div> ); }
+     if (error && !baseLoading) { return ( <div> <p style={{ color: 'red' }}>Error: {error}</p> <Link to="/"> &lt; to Project List</Link> </div> ); }
      if (!isLoadingProject && !project) { return ( <div> <p>Project not found.</p> <Link to="/"> &lt; Back to Project List</Link> </div> ); }
 
     // --- MODIFIED: Determine if any AI or save operation is in progress ---
@@ -522,37 +510,7 @@ function ProjectDetailPage() {
             {showGeneratedSceneModal && ( <div style={modalStyles.overlay}> <div style={modalStyles.content}> <button style={modalStyles.closeButton} onClick={() => setShowGeneratedSceneModal(false)} disabled={isCreatingSceneFromDraft}> × </button> <h3>Generated Scene Draft</h3> <textarea style={modalStyles.textarea} value={generatedSceneContent} readOnly /> {createSceneError && <p style={{ color: 'red', marginTop:'5px', fontSize:'0.9em' }}>Error: {createSceneError}</p>} <button style={modalStyles.createButton} onClick={handleCreateSceneFromDraft} disabled={isCreatingSceneFromDraft || !generatedSceneContent.trim()}> {isCreatingSceneFromDraft ? 'Creating Scene...' : 'Create Scene with this Draft'} </button> <button style={modalStyles.copyButton} onClick={copyGeneratedText} disabled={isCreatingSceneFromDraft}> Copy Text </button> <button onClick={() => setShowGeneratedSceneModal(false)} disabled={isCreatingSceneFromDraft}> Cancel </button> </div> </div> )}
 
             {/* Chapter Split Modal */}
-            {showSplitModal && (
-                <div style={modalStyles.overlay}>
-                    <div style={modalStyles.content}>
-                        <button style={modalStyles.closeButton} onClick={() => setShowSplitModal(false)} disabled={isCreatingScenesFromSplit}> × </button>
-                        <h3>Proposed Scene Splits</h3>
-                        {createFromSplitError && <p style={{ color: 'red', marginTop:'5px', fontSize:'0.9em' }}>Error: {createFromSplitError}</p>}
-                        {proposedSplits.length > 0 ? (
-                            proposedSplits.map((split, index) => (
-                                <div key={index} style={modalStyles.splitSceneItem}>
-                                    <div style={modalStyles.splitSceneTitle}>Proposed Scene {index + 1}: {split.suggested_title}</div>
-                                    <pre style={modalStyles.splitSceneContent}><code>{split.content}</code></pre>
-                                </div>
-                            ))
-                        ) : (
-                            <p>The AI did not propose any splits for this chapter.</p>
-                        )}
-                        <div style={modalStyles.splitModalActions}>
-                            <button
-                                style={modalStyles.splitCreateButton}
-                                onClick={handleCreateScenesFromSplit}
-                                disabled={isCreatingScenesFromSplit || proposedSplits.length === 0}
-                            >
-                                {isCreatingScenesFromSplit ? 'Creating Scenes...' : 'Create Scenes from Splits'}
-                            </button>
-                            <button onClick={() => setShowSplitModal(false)} disabled={isCreatingScenesFromSplit}>
-                                Cancel
-                            </button>
-                        </div>
-                    </div>
-                </div>
-            )}
+            {showSplitModal && ( <div style={modalStyles.overlay}> <div style={modalStyles.content}> <button style={modalStyles.closeButton} onClick={() => setShowSplitModal(false)} disabled={isCreatingScenesFromSplit}> × </button> <h3>Proposed Scene Splits</h3> {createFromSplitError && <p style={{ color: 'red', marginTop:'5px', fontSize:'0.9em' }}>Error: {createFromSplitError}</p>} {proposedSplits.length > 0 ? ( proposedSplits.map((split, index) => ( <div key={index} style={modalStyles.splitSceneItem}> <div style={modalStyles.splitSceneTitle}>Proposed Scene {index + 1}: {split.suggested_title}</div> <pre style={modalStyles.splitSceneContent}><code>{split.content}</code></pre> </div> )) ) : ( <p>The AI did not propose any splits for this chapter.</p> )} <div style={modalStyles.splitModalActions}> <button style={modalStyles.splitCreateButton} onClick={handleCreateScenesFromSplit} disabled={isCreatingScenesFromSplit || proposedSplits.length === 0}> {isCreatingScenesFromSplit ? 'Creating Scenes...' : 'Create Scenes from Splits'} </button> <button onClick={() => setShowSplitModal(false)} disabled={isCreatingScenesFromSplit}> Cancel </button> </div> </div> </div> )}
 
 
             {/* Page Content */}
