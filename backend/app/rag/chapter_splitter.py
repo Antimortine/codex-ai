@@ -39,10 +39,22 @@ def _is_retryable_google_api_error(exception):
     if isinstance(exception, ClientError):
         status_code = None
         try:
-            if hasattr(exception, 'response') and hasattr(exception.response, 'status_code'): status_code = exception.response.status_code
-            elif isinstance(exception.args, (list, tuple)) and len(exception.args) > 0 and isinstance(exception.args[0], int): status_code = int(exception.args[0])
-            elif isinstance(exception.args, (list, tuple)) and len(exception.args) > 0 and isinstance(exception.args[0], str) and '429' in exception.args[0]: return True
-        except (ValueError, TypeError, IndexError, AttributeError): pass
+            # Attempt to extract status code robustly
+            if hasattr(exception, 'response') and hasattr(exception.response, 'status_code'):
+                status_code = exception.response.status_code
+            elif hasattr(exception, 'status_code'): # Sometimes it's directly on the exception
+                 status_code = exception.status_code
+            elif isinstance(exception.args, (list, tuple)) and len(exception.args) > 0:
+                # Check if first arg is int status code
+                if isinstance(exception.args[0], int):
+                    status_code = int(exception.args[0])
+                # Check if first arg is string containing status code (less reliable)
+                elif isinstance(exception.args[0], str) and '429' in exception.args[0]:
+                    logger.warning("Google API rate limit hit (ClientError 429 - string check). Retrying chapter split...")
+                    return True
+        except (ValueError, TypeError, IndexError, AttributeError):
+            pass # Ignore errors during status code extraction
+
         if status_code == 429:
              logger.warning("Google API rate limit hit (ClientError 429). Retrying chapter split...")
              return True
@@ -98,7 +110,10 @@ class ChapterSplitter:
                 return confirmation_message
             except ValidationError as e:
                  logger.error(f"Pydantic validation failed inside tool function: {e}. Data: {proposed_scenes_data}")
-                 return f"Error: Validation failed for proposed scenes data. Details: {e}"
+                 # Provide more specific feedback to the agent
+                 error_details = "; ".join([f"{err['loc'][1]}: {err['msg']}" for err in e.errors()]) if isinstance(e.errors(), list) else str(e)
+                 return f"Error: Validation failed for proposed scenes data. Details: {error_details}. Ensure each scene has 'suggested_title' (string) and 'content' (string)."
+
 
         scene_list_tool = FunctionTool.from_defaults(
             fn=save_proposed_scenes,
@@ -108,12 +123,13 @@ class ChapterSplitter:
         )
 
         # --- Construct the Input for the Agent ---
-        # --- MODIFIED: Use clearer delimiters for chapter content ---
+        # --- MODIFIED: Added language instruction for titles ---
         agent_input = (
             f"Analyze the chapter content provided below (between <<<CHAPTER_START>>> and <<<CHAPTER_END>>>) and split it into distinct scenes. "
             f"The chapter ID is '{chapter_id}'.\n"
             "Identify scene breaks based on significant shifts in time, location, point-of-view character, topic, or the start/end of major dialogue exchanges. "
-            "For each scene identified, provide a concise suggested title (less than 50 characters) and the full Markdown content belonging to that scene.\n\n"
+            "For each scene identified, provide a concise suggested title and the full Markdown content belonging to that scene.\n\n"
+            "**IMPORTANT:** The `suggested_title` for each scene MUST be in the **same language** as the main language used in the provided chapter content.\n\n" # <-- ADDED INSTRUCTION
             "Use the provided Project Plan and Synopsis for context on the overall story.\n\n"
             f"**Project Plan:**\n```markdown\n{explicit_plan or 'Not Available'}\n```\n\n"
             f"**Project Synopsis:**\n```markdown\n{explicit_synopsis or 'Not Available'}\n```\n\n"
@@ -127,7 +143,8 @@ class ChapterSplitter:
         try:
             agent_system_prompt = (
                  "You are an AI assistant specialized in analyzing and structuring narrative text. "
-                 "Your goal is to use the available tools to process the user's request accurately."
+                 "Your goal is to use the available tools to process the user's request accurately. "
+                 "Pay close attention to all instructions, especially regarding output format and language requirements." # Added emphasis
             )
             agent = ReActAgent.from_tools(
                 tools=[scene_list_tool],
@@ -143,8 +160,10 @@ class ChapterSplitter:
                  logger.error("Agent finished but did not successfully store tool results.")
                  error_detail = "Agent failed to execute the tool correctly or store results."
                  if agent_response.response: error_detail += f" Agent response: {agent_response.response[:200]}..."
+                 # Check if the tool function itself returned an error string
                  tool_outputs = [node.raw_output for node in agent_response.source_nodes if hasattr(node, 'raw_output')]
-                 if tool_outputs and isinstance(tool_outputs[0], str) and tool_outputs[0].startswith("Error:"): error_detail = f"Tool execution failed: {tool_outputs[0]}"
+                 if tool_outputs and isinstance(tool_outputs[0], str) and tool_outputs[0].startswith("Error:"):
+                      error_detail = f"Tool execution failed: {tool_outputs[0]}"
                  raise ValueError(error_detail)
 
             proposed_scenes_list = self._tool_result_storage["scenes"]
