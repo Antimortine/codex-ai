@@ -251,19 +251,38 @@ function ProjectDetailPage() {
 
     // --- Action Handlers ---
     const refreshChaptersAndScenes = useCallback(async () => {
+         // Start with a clean loading state
          setIsLoadingChapters(true);
-         const initialSceneLoadingState = {};
-         chapters.forEach(ch => initialSceneLoadingState[ch.id] = true);
-         setIsLoadingScenes(initialSceneLoadingState);
-         setScenes({});
-         let chapterFetchError = false;
+         setIsLoadingScenes(prev => {
+             // Mark all current chapters as loading
+             const newState = {};
+             // Get chapters from the current state, not from dependency
+             for (const chId in prev) {
+                 newState[chId] = true;
+             }
+             return newState;
+         });
+         
+         let fetchedChapters = [];
          try {
+             // Fetch chapters first
              const response = await listChapters(projectId);
-             const sortedChapters = (response.data.chapters || []).sort((a, b) => a.order - b.order);
-             setChapters(sortedChapters);
-
+             fetchedChapters = (response.data.chapters || []).sort((a, b) => a.order - b.order);
+             
+             // Update loading state for the NEW chapter list - critical for test synchronization
+             const updatedLoadingState = {};
+             fetchedChapters.forEach(ch => {
+                 updatedLoadingState[ch.id] = true;
+             });
+             
+             // Important: Set these states BEFORE starting scene fetching
+             // This ensures UI immediately updates with new chapter list
+             setChapters(fetchedChapters);
+             setIsLoadingScenes(updatedLoadingState);
+             
+             // Then fetch scenes for all chapters
              const scenesData = {};
-             await Promise.all(sortedChapters.map(async (chapter) => {
+             await Promise.all(fetchedChapters.map(async (chapter) => {
                  try {
                       const scenesResponse = await listScenes(projectId, chapter.id);
                       const sortedScenes = (scenesResponse.data.scenes || []).sort((a,b) => a.order - b.order);
@@ -276,17 +295,18 @@ function ProjectDetailPage() {
                       setIsLoadingScenes(prev => ({ ...prev, [chapter.id]: false }));
                  }
              }));
+             
+             // Set all scenes at once when done
              setScenes(scenesData);
-
          } catch (err) {
              console.error("Error fetching chapters:", err);
              setError(prev => prev ? `${prev} | Failed to load chapters.` : 'Failed to load chapters.');
-             chapterFetchError = true;
+             // Reset loading states on error
              setIsLoadingScenes({});
          } finally {
              setIsLoadingChapters(false);
          }
-     }, [projectId, chapters]);
+     }, [projectId]); // Remove chapters dependency to prevent recreation
 
     // --- CRUD Handlers (Create/Delete Chapter/Character/Scene, Edit Name) ---
     // ... (These handlers remain largely unchanged, but ensure disable logic includes new states) ...
