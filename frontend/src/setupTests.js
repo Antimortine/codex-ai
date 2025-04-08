@@ -15,14 +15,18 @@
  */
 
 // src/setupTests.js
-import { afterEach } from 'vitest';
+import { afterEach, vi } from 'vitest'; // Import vi for mocking
 import { cleanup } from '@testing-library/react';
 // Import functions to extend Vitest's expect
 import '@testing-library/jest-dom'; // Import the library directly to extend expect
 
 // NOTE: No need for explicit expect.extend(matchers) when importing '@testing-library/jest-dom'
 
+// Mock scrollIntoView for jsdom environment
+window.HTMLElement.prototype.scrollIntoView = vi.fn();
+
 // Runs a cleanup after each test case (e.g., clearing jsdom)
 afterEach(() => {
   cleanup();
+  vi.clearAllMocks(); // Also clear mocks after each test
 });

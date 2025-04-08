@@ -14,78 +14,50 @@
  * limitations under the License.
  */
 
-import React, { useState, useCallback, useEffect, useRef } from 'react'; // Added useEffect, useRef
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import PropTypes from 'prop-types';
 import MDEditor, { commands } from '@uiw/react-md-editor';
 import { rephraseText } from '../api/codexApi';
 
 // --- Suggestion Popup Component ---
-const popupBaseStyles = {
-    position: 'absolute',
-    zIndex: 1010,
-    backgroundColor: 'white',
-    border: '1px solid #ccc',
-    borderRadius: '4px',
-    boxShadow: '0 2px 10px rgba(0,0,0,0.2)',
-    padding: '5px',
-    minWidth: '200px', // Increased minWidth
-    maxWidth: '400px', // Added maxWidth
-    maxHeight: '300px', // Added maxHeight
-    overflowY: 'auto', // Allow scrolling for many suggestions
-    marginTop: '5px',
-    outline: 'none', // Remove default focus outline
-};
+export const SuggestionPopup = ({ suggestions, isLoading, error, onSelect, onClose, top, left }) => {
+    const [highlightedIndex, setHighlightedIndex] = useState(-1);
+    const popupRef = useRef(null);
 
-const suggestionBaseStyles = {
-    cursor: 'pointer',
-    padding: '5px 10px', // Increased padding
-    borderBottom: '1px solid #eee',
-    fontSize: '0.9em',
-    whiteSpace: 'nowrap', // Prevent wrapping
-    overflow: 'hidden',
-    textOverflow: 'ellipsis', // Add ellipsis if too long
-};
-
-const suggestionHighlightedStyles = {
-    ...suggestionBaseStyles,
-    backgroundColor: '#e0e0e0', // Highlight color
-};
-
-const errorStyles = {
-    color: 'red',
-    fontSize: '0.8em',
-    padding: '5px',
-};
-
-const SuggestionPopup = ({ suggestions, isLoading, error, onSelect, onClose, top, left }) => {
-    const [highlightedIndex, setHighlightedIndex] = useState(-1); // -1 means nothing highlighted
-    const popupRef = useRef(null); // Ref for the popup container
-
-    // Focus the popup when it becomes visible to capture key events
     useEffect(() => {
         if (popupRef.current) {
             popupRef.current.focus();
-            setHighlightedIndex(-1); // Reset highlight when popup appears/changes
+            setHighlightedIndex(-1);
         }
-    }, [isLoading, error, suggestions]); // Re-run if loading/error/suggestions change
+    }, [isLoading, error, suggestions]);
 
-    // Reset highlight index if suggestions list changes
      useEffect(() => {
         setHighlightedIndex(-1);
     }, [suggestions]);
 
     const handleKeyDown = useCallback((event) => {
-        if (isLoading || error || !suggestions || suggestions.length === 0) return;
+        // Handle Escape separately, it should always work
+        if (event.key === 'Escape') {
+            event.preventDefault();
+            onClose();
+            return; // Stop further processing for Escape
+        }
 
+        // Prevent other navigation if loading, error, or no suggestions
+        if (isLoading || error || !suggestions || suggestions.length === 0) {
+            return;
+        }
+
+        // Handle other keys only if not loading/error and suggestions exist
         switch (event.key) {
             case 'ArrowDown':
-                event.preventDefault(); // Prevent page scroll
+                event.preventDefault();
                 setHighlightedIndex(prevIndex =>
                     prevIndex === suggestions.length - 1 ? 0 : prevIndex + 1
                 );
                 break;
             case 'ArrowUp':
-                event.preventDefault(); // Prevent page scroll
+                event.preventDefault();
                 setHighlightedIndex(prevIndex =>
                     prevIndex <= 0 ? suggestions.length - 1 : prevIndex - 1
                 );
@@ -96,20 +68,16 @@ const SuggestionPopup = ({ suggestions, isLoading, error, onSelect, onClose, top
                     onSelect(suggestions[highlightedIndex]);
                 }
                 break;
-            case 'Escape':
-                event.preventDefault();
-                onClose();
-                break;
+            // Escape is handled above
             default:
                 break;
         }
-    }, [suggestions, highlightedIndex, isLoading, error, onSelect, onClose]);
+    }, [suggestions, highlightedIndex, isLoading, error, onSelect, onClose]); // Keep dependencies
 
-    // Scroll highlighted item into view
     useEffect(() => {
         if (highlightedIndex !== -1 && popupRef.current) {
             const highlightedElement = popupRef.current.querySelector(`[data-index="${highlightedIndex}"]`);
-            if (highlightedElement) {
+            if (highlightedElement && typeof highlightedElement.scrollIntoView === 'function') { // Check if function exists
                 highlightedElement.scrollIntoView({ block: 'nearest', inline: 'nearest' });
             }
         }
@@ -120,7 +88,46 @@ const SuggestionPopup = ({ suggestions, isLoading, error, onSelect, onClose, top
         return null;
     }
 
-    // Combine base styles with dynamic top/left
+    // --- Styles defined inline for simplicity in this example ---
+    const popupBaseStyles = {
+        position: 'absolute',
+        zIndex: 1010,
+        backgroundColor: 'white',
+        border: '1px solid #ccc',
+        borderRadius: '4px',
+        boxShadow: '0 2px 10px rgba(0,0,0,0.2)',
+        padding: '5px',
+        minWidth: '200px',
+        maxWidth: '400px',
+        maxHeight: '300px',
+        overflowY: 'auto',
+        marginTop: '5px',
+        outline: 'none',
+    };
+
+    const suggestionBaseStyles = {
+        cursor: 'pointer',
+        padding: '5px 10px',
+        borderBottom: '1px solid #eee',
+        fontSize: '0.9em',
+        whiteSpace: 'nowrap',
+        overflow: 'hidden',
+        textOverflow: 'ellipsis',
+    };
+
+    const suggestionHighlightedStyles = {
+        ...suggestionBaseStyles,
+        backgroundColor: '#e0e0e0',
+    };
+
+    const errorStyles = {
+        color: 'red',
+        fontSize: '0.8em',
+        padding: '5px',
+    };
+    // --- End Styles ---
+
+
     const dynamicPopupStyles = {
         ...popupBaseStyles,
         top: `${top}px`,
@@ -128,29 +135,29 @@ const SuggestionPopup = ({ suggestions, isLoading, error, onSelect, onClose, top
     };
 
     return (
-        // Added ref and tabIndex for focus, onKeyDown handler
         <div
             ref={popupRef}
             style={dynamicPopupStyles}
-            tabIndex={-1} // Make it focusable
+            tabIndex={-1}
             onKeyDown={handleKeyDown}
+            data-testid="suggestion-popup"
         >
-             <button onClick={onClose} style={{ float: 'right', border:'none', background:'none', cursor:'pointer', fontSize:'1.1em', padding:'0 5px' }}>×</button>
-             {isLoading && <div>Loading...</div>}
-             {error && <div style={errorStyles}>Error: {error}</div>}
+             <button data-testid="popup-close" onClick={onClose} style={{ float: 'right', border:'none', background:'none', cursor:'pointer', fontSize:'1.1em', padding:'0 5px' }}>×</button>
+             {isLoading && <div data-testid="popup-loading">Loading...</div>}
+             {error && <div data-testid="popup-error" style={errorStyles}>Error: {error}</div>}
              {!isLoading && !error && suggestions && suggestions.length > 0 && (
                  <>
                     <div style={{fontWeight: 'bold', marginBottom: '5px', fontSize:'0.9em'}}>Rephrase Suggestions:</div>
                     {suggestions.map((s, index) => (
                         <div
                             key={index}
-                            data-index={index} // Add data-index for querySelector
+                            data-index={index}
+                            data-testid={`suggestion-${index}`}
                             style={index === highlightedIndex ? suggestionHighlightedStyles : suggestionBaseStyles}
                             className="suggestion-item"
                             onClick={() => onSelect(s)}
-                            onMouseEnter={() => setHighlightedIndex(index)} // Highlight on hover
+                            onMouseEnter={() => setHighlightedIndex(index)}
                             role="button"
-                            // Removed tabIndex and onKeyPress as container handles keys
                         >
                             {s}
                         </div>
@@ -167,8 +174,8 @@ SuggestionPopup.propTypes = {
     error: PropTypes.string,
     onSelect: PropTypes.func.isRequired,
     onClose: PropTypes.func.isRequired,
-    top: PropTypes.number.isRequired, // Position prop
-    left: PropTypes.number.isRequired, // Position prop
+    top: PropTypes.number.isRequired,
+    left: PropTypes.number.isRequired,
 };
 
 
@@ -180,12 +187,11 @@ function AIEditorWrapper({ value, onChange, height = 300, projectId, ...restProp
         suggestions: [],
         isLoading: false,
         error: null,
-        // --- ADDED: Popup position ---
-        top: 50, // Default position
-        left: null, // Default to right alignment later
+        top: 50,
+        left: null,
     });
     const [activeSelection, setActiveSelection] = useState({ start: -1, end: -1, text: '' });
-    const editorRef = useRef(null); // Ref for the editor container div
+    const editorRef = useRef(null);
 
     // --- Custom Rephrase Command ---
     const rephraseCommand = {
@@ -211,17 +217,14 @@ function AIEditorWrapper({ value, onChange, height = 300, projectId, ...restProp
             console.log(`Selected: "${selectedText}", Start: ${selection.start}, End: ${selection.end}`);
             setActiveSelection({ start: selection.start, end: selection.end, text: selectedText });
 
-            // --- Calculate Popup Position ---
-            let popupTop = 50; // Default below toolbar
-            let popupLeft = null; // Default right alignment
+            let popupTop = 50;
+            let popupLeft = null;
             if (editorRef.current) {
                 const editorRect = editorRef.current.getBoundingClientRect();
-                // Position near top-right corner of the editor container
-                popupTop = 45; // Adjust as needed based on toolbar height
-                popupLeft = editorRect.width - 420; // Approx popup width + padding
-                if (popupLeft < 10) popupLeft = 10; // Ensure it doesn't go off-screen left
+                popupTop = 45;
+                popupLeft = editorRect.width - 420;
+                if (popupLeft < 10) popupLeft = 10;
             }
-            // -----------------------------
 
             setPopupState({
                 visible: true,
@@ -291,7 +294,6 @@ function AIEditorWrapper({ value, onChange, height = 300, projectId, ...restProp
 
 
     return (
-        // Added ref to the container
         <div ref={editorRef} style={{ position: 'relative' }}>
             <MDEditor
                 value={value}
@@ -308,9 +310,7 @@ function AIEditorWrapper({ value, onChange, height = 300, projectId, ...restProp
                 {...restProps}
             />
 
-            {/* Render Suggestion Popup Conditionally */}
             {popupState.visible && (
-                 // Pass position props
                  <SuggestionPopup
                     suggestions={popupState.suggestions}
                     isLoading={popupState.isLoading}
