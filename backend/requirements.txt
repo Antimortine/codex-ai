@@ -557,6 +557,7 @@ sympy==1.13.1
     #   torch
 tenacity==9.1.2
     # via
+    #   -r requirements.in
     #   chromadb
     #   llama-index-core
 threadpoolctl==3.6.0

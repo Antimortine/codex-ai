@@ -24,6 +24,7 @@ llama-index-vector-stores-chroma
 
 # --- Other Dependencies ---
 chromadb>=0.4.0
+tenacity>=8.0.0
 
 # --- Testing ---
 pytest

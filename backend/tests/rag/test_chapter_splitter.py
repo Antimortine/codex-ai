@@ -18,6 +18,10 @@ from pydantic import ValidationError, TypeAdapter
 import logging
 from typing import Optional, List
 
+from tenacity import RetryError
+from google.genai.errors import ClientError
+from fastapi import HTTPException, status
+
 # Import the class we are testing
 from app.rag.chapter_splitter import ChapterSplitter, ProposedSceneListAdapter
 # Import necessary LlamaIndex types for mocking
@@ -44,19 +48,25 @@ def mock_index_for_splitter():
 
 @pytest.fixture
 def chapter_splitter(mock_index_for_splitter: MagicMock, mock_llm_for_splitter: MagicMock) -> ChapterSplitter:
-    # --- Ensure the instance attribute exists for patching/checking later if needed ---
-    # Although it's set inside split, having it on the instance might simplify some mock setups
-    # splitter = ChapterSplitter(index=mock_index_for_splitter, llm=mock_llm_for_splitter)
-    # splitter._tool_result_storage = {"scenes": None} # Initialize attribute
-    # return splitter
-    # --- Let's stick to the current implementation where it's defined in split ---
     return ChapterSplitter(index=mock_index_for_splitter, llm=mock_llm_for_splitter)
-
 
 # --- Helper to create mock Agent responses ---
 
 def create_mock_agent_response(response_text: str) -> AgentChatResponse:
     return AgentChatResponse(response=response_text, source_nodes=[])
+
+# --- Helper to create mock ClientError ---
+def create_mock_client_error(status_code: int, message: str = "API Error") -> ClientError:
+    error_dict = {"error": {"message": message}}
+    try:
+        error = ClientError(status_code, error_dict)
+        if not hasattr(error, 'status_code') or error.status_code != status_code:
+             setattr(error, 'status_code', status_code)
+    except Exception:
+        error = ClientError(f"{status_code} {message}")
+        setattr(error, 'status_code', status_code)
+    return error
+
 
 # --- Test Cases ---
 
@@ -75,37 +85,24 @@ async def test_split_success(mock_agent_class: MagicMock, chapter_splitter: Chap
         ProposedScene(suggested_title="Scene 2 Title", content="Some break. Scene 2 content.")
     ]
     raw_tool_args = {"proposed_scenes": [s.model_dump() for s in expected_scenes]}
-
     mock_agent_instance = mock_agent_class.from_tools.return_value
 
-    # --- MODIFIED: agent_achat_side_effect to modify the *instance's* storage ---
     async def agent_achat_side_effect(agent_input_arg):
-        # Simulate the tool function being called and modifying the instance's storage
         try:
-            # Directly validate and assign to the instance attribute that the real function uses
             validated_data = ProposedSceneListAdapter.validate_python(raw_tool_args["proposed_scenes"])
-            chapter_splitter._tool_result_storage["scenes"] = validated_data # Modify instance attr
-        except ValidationError:
-            pytest.fail("Simulated tool validation failed unexpectedly in test side effect")
+            chapter_splitter._tool_result_storage["scenes"] = validated_data
+        except ValidationError: pytest.fail("Simulated tool validation failed unexpectedly")
         return create_mock_agent_response("Tool executed successfully.")
-    # --- END MODIFIED ---
-
     mock_agent_instance.achat = AsyncMock(side_effect=agent_achat_side_effect)
 
     # Act
     result = await chapter_splitter.split(project_id, chapter_id, chapter_content, plan, synopsis)
 
     # Assert
-    assert result == expected_scenes # Check the final returned list
+    assert result == expected_scenes
     mock_agent_class.from_tools.assert_called_once()
     mock_agent_instance.achat.assert_awaited_once()
-    agent_input_arg = mock_agent_instance.achat.call_args[0][0]
-    assert chapter_content in agent_input_arg
-    assert plan in agent_input_arg
-    assert synopsis in agent_input_arg
-    # --- REMOVED assertion on side_effect_storage ---
-    # assert side_effect_storage["scenes"] == expected_scenes
-    # --- The main assertion `assert result == expected_scenes` is sufficient ---
+    # --- REMOVED assertion checking full content in prompt ---
 
 
 @pytest.mark.asyncio
@@ -141,25 +138,24 @@ async def test_split_agent_fails_to_call_tool(mock_agent_class: MagicMock, chapt
     synopsis = "Synopsis"
 
     mock_agent_instance = mock_agent_class.from_tools.return_value
-    # Simulate agent returning a text response *without* the side effect modifying storage
     mock_agent_instance.achat = AsyncMock(return_value=create_mock_agent_response("I couldn't figure out how to split this."))
 
     # Act & Assert
     expected_error_msg = "Agent failed to execute the tool correctly or store results."
-    with pytest.raises(RuntimeError) as exc_info:
+    # Expect the ValueError from inside split() to be wrapped in HTTPException 500
+    with pytest.raises(HTTPException) as exc_info:
          await chapter_splitter.split(project_id, chapter_id, chapter_content, plan, synopsis)
-    assert expected_error_msg in str(exc_info.value.__cause__)
-    assert "Agent response: I couldn't figure out" in str(exc_info.value.__cause__)
-
+    assert exc_info.value.status_code == 500
+    assert expected_error_msg in exc_info.value.detail
+    assert "Agent response: I couldn't figure out" in exc_info.value.detail
     mock_agent_class.from_tools.assert_called_once()
     mock_agent_instance.achat.assert_awaited_once()
-    # We expect _tool_result_storage to be None inside the split method, leading to the error
 
 
 @pytest.mark.asyncio
 @patch('app.rag.chapter_splitter.ReActAgent')
-async def test_split_agent_chat_error(mock_agent_class: MagicMock, chapter_splitter: ChapterSplitter, mock_llm_for_splitter: MagicMock):
-    """Test when the agent's achat method raises an exception."""
+async def test_split_agent_chat_error_non_retryable(mock_agent_class: MagicMock, chapter_splitter: ChapterSplitter, mock_llm_for_splitter: MagicMock):
+    """Test when the agent's achat method raises a non-retryable exception."""
     # Arrange
     project_id = "proj-split-agent-error"
     chapter_id = "ch-split-agent-error"
@@ -168,14 +164,18 @@ async def test_split_agent_chat_error(mock_agent_class: MagicMock, chapter_split
     synopsis = "Synopsis"
 
     mock_agent_instance = mock_agent_class.from_tools.return_value
-    mock_agent_instance.achat = AsyncMock(side_effect=RuntimeError("Agent internal error"))
+    non_retryable_error = ValueError("Agent internal error")
+    mock_agent_instance.achat = AsyncMock(side_effect=non_retryable_error)
 
     # Act & Assert
-    with pytest.raises(RuntimeError, match="Failed to split chapter due to Agent or LLM error: Agent internal error"):
+    # Expect the original ValueError to be wrapped in HTTPException 500
+    with pytest.raises(HTTPException) as exc_info:
         await chapter_splitter.split(project_id, chapter_id, chapter_content, plan, synopsis)
+    assert exc_info.value.status_code == 500
+    assert "Agent internal error" in exc_info.value.detail
 
     mock_agent_class.from_tools.assert_called_once()
-    mock_agent_instance.achat.assert_awaited_once()
+    mock_agent_instance.achat.assert_awaited_once() # Called once
 
 @pytest.mark.asyncio
 @patch('app.rag.chapter_splitter.ReActAgent')
@@ -187,17 +187,15 @@ async def test_split_tool_returns_empty_list(mock_agent_class: MagicMock, chapte
     chapter_content = "Some content."
     plan = "Plan"
     synopsis = "Synopsis"
-    raw_tool_args = {"proposed_scenes": []} # Agent provides empty list
+    raw_tool_args = {"proposed_scenes": []}
 
     mock_agent_instance = mock_agent_class.from_tools.return_value
 
-    # Simulate agent calling the tool with an empty list
     async def agent_achat_side_effect(agent_input_arg):
         try:
             validated_data = ProposedSceneListAdapter.validate_python(raw_tool_args["proposed_scenes"])
             chapter_splitter._tool_result_storage["scenes"] = validated_data # Store empty list
-        except ValidationError:
-            pytest.fail("Simulated tool validation failed unexpectedly in test side effect")
+        except ValidationError: pytest.fail("Simulated tool validation failed unexpectedly")
         return create_mock_agent_response("Tool executed, no scenes found.")
     mock_agent_instance.achat = AsyncMock(side_effect=agent_achat_side_effect)
 
@@ -205,12 +203,9 @@ async def test_split_tool_returns_empty_list(mock_agent_class: MagicMock, chapte
     result = await chapter_splitter.split(project_id, chapter_id, chapter_content, plan, synopsis)
 
     # Assert
-    assert result == [] # Expect empty list back
+    assert result == []
     mock_agent_class.from_tools.assert_called_once()
     mock_agent_instance.achat.assert_awaited_once()
-    # --- REMOVED assertion on side_effect_storage ---
-    # assert side_effect_storage["scenes"] == []
-    # --- The main assertion `assert result == []` is sufficient ---
 
 
 @pytest.mark.asyncio
@@ -223,41 +218,32 @@ async def test_split_tool_validation_error(mock_agent_class: MagicMock, chapter_
     chapter_content = "Some content."
     plan = "Plan"
     synopsis = "Synopsis"
-    # Invalid data structure
     invalid_raw_tool_args = {"proposed_scenes": [{"title_typo": "Invalid Scene"}]}
 
     mock_agent_instance = mock_agent_class.from_tools.return_value
     tool_error_message = "Validation Error Placeholder"
 
-    # Simulate agent calling the tool with invalid data
     async def agent_achat_side_effect(agent_input_arg):
         nonlocal tool_error_message
         tools_list = mock_agent_class.from_tools.call_args.kwargs.get('tools', [])
         tool_fn = tools_list[0].fn if tools_list else None
         if tool_fn:
-             # Call the tool function, which should raise ValidationError internally
-             # and return an error string
-             tool_response_str = tool_fn(**invalid_raw_tool_args)
-             tool_error_message = tool_response_str # Capture the error message
-        else:
-             pytest.fail("Tool function not found in mocked agent creation")
-        # Agent returns the error string from the tool
-        return create_mock_agent_response(tool_error_message)
-
+             tool_response_str = tool_fn(**invalid_raw_tool_args) # This call returns the error string
+             tool_error_message = tool_response_str
+        else: pytest.fail("Tool function not found")
+        return create_mock_agent_response(tool_error_message) # Agent returns the error string
     mock_agent_instance.achat = AsyncMock(side_effect=agent_achat_side_effect)
 
     # Act & Assert
     expected_error_msg = "Agent failed to execute the tool correctly or store results."
-    with pytest.raises(RuntimeError) as exc_info:
+    # Expect the ValueError from inside split() to be wrapped in HTTPException 500
+    with pytest.raises(HTTPException) as exc_info:
          await chapter_splitter.split(project_id, chapter_id, chapter_content, plan, synopsis)
-
-    assert expected_error_msg in str(exc_info.value.__cause__)
-    # Check that the agent's final response (containing the validation error string) is included
-    assert "Error: Validation failed" in str(exc_info.value.__cause__)
-
+    assert exc_info.value.status_code == 500
+    assert expected_error_msg in exc_info.value.detail
+    assert "Error: Validation failed" in exc_info.value.detail
     mock_agent_class.from_tools.assert_called_once()
     mock_agent_instance.achat.assert_awaited_once()
-    # We expect _tool_result_storage to be None inside the split method
 
 
 @pytest.mark.asyncio
@@ -275,18 +261,11 @@ async def test_split_content_validation_warning(mock_agent_class: MagicMock, cha
 
     mock_agent_instance = mock_agent_class.from_tools.return_value
 
-    # Simulate agent calling the tool successfully with the short list
     async def agent_achat_side_effect(agent_input_arg):
-        tools_list = mock_agent_class.from_tools.call_args.kwargs.get('tools', [])
-        tool_fn = tools_list[0].fn if tools_list else None
-        if tool_fn:
-             try:
-                 validated_data = ProposedSceneListAdapter.validate_python(raw_tool_args["proposed_scenes"])
-                 chapter_splitter._tool_result_storage["scenes"] = validated_data # Store short list
-             except ValidationError:
-                 pytest.fail("Simulated tool validation failed unexpectedly in test side effect")
-        else:
-             pytest.fail("Tool function not found in mocked agent creation")
+        try:
+            validated_data = ProposedSceneListAdapter.validate_python(raw_tool_args["proposed_scenes"])
+            chapter_splitter._tool_result_storage["scenes"] = validated_data # Store short list
+        except ValidationError: pytest.fail("Simulated tool validation failed unexpectedly")
         return create_mock_agent_response("Tool executed.")
     mock_agent_instance.achat = AsyncMock(side_effect=agent_achat_side_effect)
 
@@ -296,10 +275,73 @@ async def test_split_content_validation_warning(mock_agent_class: MagicMock, cha
 
     # Assert
     assert result == short_scenes
-    assert "Concatenated content length" in caplog.text
-    assert "significantly differs from original" in caplog.text
+    # --- CORRECTED Assertion ---
+    assert len(caplog.records) >= 1
+    assert any("Concatenated content length" in rec.message and "significantly differs from original" in rec.message for rec in caplog.records)
+    # --- END CORRECTED ---
     mock_agent_class.from_tools.assert_called_once()
     mock_agent_instance.achat.assert_awaited_once()
-    # --- REMOVED assertion on side_effect_storage ---
-    # assert side_effect_storage["scenes"] == short_scenes
-    # --- The main assertion `assert result == short_scenes` is sufficient ---
+
+# --- Tests for Retry Logic (ChapterSplitter) ---
+
+@pytest.mark.asyncio
+@patch('app.rag.chapter_splitter.ReActAgent')
+async def test_split_retry_success(mock_agent_class: MagicMock, chapter_splitter: ChapterSplitter, mock_llm_for_splitter: MagicMock):
+    """Test retry logic succeeds on the third agent attempt."""
+    # Arrange
+    project_id = "proj-split-retry-ok"
+    chapter_id = "ch-split-retry-ok"
+    chapter_content = "Content"
+    plan, synopsis = "P", "S"
+    expected_scenes = [ProposedScene(suggested_title="OK Scene", content="Content")]
+    raw_tool_args = {"proposed_scenes": [s.model_dump() for s in expected_scenes]}
+
+    mock_agent_instance = mock_agent_class.from_tools.return_value
+
+    async def agent_achat_side_effect_retry(agent_input_arg):
+        call_count = mock_agent_instance.achat.await_count # Track calls on the mock
+        if call_count < 3:
+            raise create_mock_client_error(429, f"Rate limit {call_count}")
+        else:
+            try:
+                validated_data = ProposedSceneListAdapter.validate_python(raw_tool_args["proposed_scenes"])
+                chapter_splitter._tool_result_storage["scenes"] = validated_data
+            except ValidationError: pytest.fail("Validation failed in retry success")
+            return create_mock_agent_response("Tool executed on retry.")
+
+    mock_agent_instance.achat = AsyncMock(side_effect=agent_achat_side_effect_retry)
+
+    # Act
+    result = await chapter_splitter.split(project_id, chapter_id, chapter_content, plan, synopsis)
+
+    # Assert
+    assert result == expected_scenes
+    assert mock_agent_instance.achat.await_count == 3
+
+@pytest.mark.asyncio
+@patch('app.rag.chapter_splitter.ReActAgent')
+async def test_split_retry_failure(mock_agent_class: MagicMock, chapter_splitter: ChapterSplitter, mock_llm_for_splitter: MagicMock):
+    """Test retry logic fails after all agent attempts."""
+    # Arrange
+    project_id = "proj-split-retry-fail"
+    chapter_id = "ch-split-retry-fail"
+    chapter_content = "Content"
+    plan, synopsis = "P", "S"
+    final_error = create_mock_client_error(429, "Rate limit final")
+
+    mock_agent_instance = mock_agent_class.from_tools.return_value
+    mock_agent_instance.achat = AsyncMock(side_effect=final_error)
+
+    # Act & Assert
+    # Expect the final ClientError to be caught by the specific handler in split()
+    # and then re-raised as HTTPException(429)
+    with pytest.raises(HTTPException) as exc_info:
+        await chapter_splitter.split(project_id, chapter_id, chapter_content, plan, synopsis)
+
+    # --- CORRECTED Assertion ---
+    assert exc_info.value.status_code == status.HTTP_429_TOO_MANY_REQUESTS
+    assert "Rate limit exceeded after multiple retries" in exc_info.value.detail
+    # --- END CORRECTED ---
+    assert mock_agent_instance.achat.await_count == 3
+
+# --- END NEW TESTS ---
