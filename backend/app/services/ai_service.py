@@ -26,8 +26,8 @@ from typing import List, Tuple, Optional, Dict # Import Optional, Dict
 
 # Import FileService to load explicit context
 from app.services.file_service import file_service
-# Import ChapterService to get chapter content
-from app.services.chapter_service import chapter_service
+# --- REMOVED: chapter_service import no longer needed here ---
+# from app.services.chapter_service import chapter_service
 from app.core.config import settings # Import settings for PREVIOUS_SCENE_COUNT
 
 # --- Import the new ChapterSplitter ---
@@ -53,11 +53,9 @@ class AIService:
         self.file_service = file_service
 
         # --- Instantiate ChapterSplitter ---
-        # It needs the LLM from the engine/index_manager
         if not hasattr(rag_engine, 'llm') or not rag_engine.llm:
              logger.critical("RagEngine's LLM is not initialized! AIService cannot initialize ChapterSplitter.")
              raise RuntimeError("AIService cannot initialize ChapterSplitter without a valid LLM.")
-        # Pass index too, although splitter might not use it initially
         if not hasattr(rag_engine, 'index') or not rag_engine.index:
              logger.critical("RagEngine's index is not initialized! AIService cannot initialize ChapterSplitter.")
              raise RuntimeError("AIService cannot initialize ChapterSplitter without a valid index.")
@@ -78,7 +76,6 @@ class AIService:
         """
         logger.info(f"AIService: Processing query for project {project_id}")
 
-        # --- MODIFIED: Load Plan and Synopsis independently ---
         explicit_plan = "Not Available"
         explicit_synopsis = "Not Available"
         logger.debug(f"AIService: Loading explicit context for query (Plan, Synopsis)...")
@@ -90,13 +87,13 @@ class AIService:
         except HTTPException as e:
             if e.status_code == 404:
                 logger.warning("AIService (Query): plan.md not found.")
-                explicit_plan = "" # Use empty string if not found
+                explicit_plan = ""
             else:
                 logger.error(f"AIService (Query): HTTP error loading plan.md for project {project_id}: {e.detail}", exc_info=True)
-                explicit_plan = "Error loading plan." # Indicate error but continue
+                explicit_plan = "Error loading plan."
         except Exception as e:
             logger.error(f"AIService (Query): Unexpected error loading plan.md for project {project_id}: {e}", exc_info=True)
-            explicit_plan = "Error loading plan." # Indicate error but continue
+            explicit_plan = "Error loading plan."
 
         # Load Synopsis
         try:
@@ -105,16 +102,14 @@ class AIService:
         except HTTPException as e:
             if e.status_code == 404:
                 logger.warning("AIService (Query): synopsis.md not found.")
-                explicit_synopsis = "" # Use empty string if not found
+                explicit_synopsis = ""
             else:
                 logger.error(f"AIService (Query): HTTP error loading synopsis.md for project {project_id}: {e.detail}", exc_info=True)
-                explicit_synopsis = "Error loading synopsis." # Indicate error but continue
+                explicit_synopsis = "Error loading synopsis."
         except Exception as e:
             logger.error(f"AIService (Query): Unexpected error loading synopsis.md for project {project_id}: {e}", exc_info=True)
-            explicit_synopsis = "Error loading synopsis." # Indicate error but continue
-        # --- END MODIFIED ---
+            explicit_synopsis = "Error loading synopsis."
 
-        # Pass potentially modified context to rag_engine.query
         answer, source_nodes = await self.rag_engine.query(
             project_id=project_id,
             query_text=query_text,
@@ -131,7 +126,6 @@ class AIService:
         """
         logger.info(f"AIService: Processing scene generation request for project {project_id}, chapter {chapter_id}, previous order: {request_data.previous_scene_order}")
 
-        # --- MODIFIED: Load context independently (similar pattern to query) ---
         explicit_plan = "Not Available"
         explicit_synopsis = "Not Available"
         explicit_previous_scenes: List[Tuple[int, str]] = []
@@ -143,32 +137,20 @@ class AIService:
             explicit_plan = self.file_service.read_content_block_file(project_id, "plan.md")
             logger.debug(f"AIService (Gen): Loaded plan.md (Length: {len(explicit_plan)})")
         except HTTPException as e:
-            if e.status_code == 404:
-                logger.warning("AIService (Gen): plan.md not found.")
-                explicit_plan = ""
-            else:
-                logger.error(f"AIService (Gen): HTTP error loading plan.md: {e.detail}", exc_info=True)
-                explicit_plan = "Error loading plan."
-        except Exception as e:
-            logger.error(f"AIService (Gen): Unexpected error loading plan.md: {e}", exc_info=True)
-            explicit_plan = "Error loading plan."
+            if e.status_code == 404: logger.warning("AIService (Gen): plan.md not found."); explicit_plan = ""
+            else: logger.error(f"AIService (Gen): HTTP error loading plan.md: {e.detail}", exc_info=True); explicit_plan = "Error loading plan."
+        except Exception as e: logger.error(f"AIService (Gen): Unexpected error loading plan.md: {e}", exc_info=True); explicit_plan = "Error loading plan."
 
         # Load Synopsis
         try:
             explicit_synopsis = self.file_service.read_content_block_file(project_id, "synopsis.md")
             logger.debug(f"AIService (Gen): Loaded synopsis.md (Length: {len(explicit_synopsis)})")
         except HTTPException as e:
-            if e.status_code == 404:
-                logger.warning("AIService (Gen): synopsis.md not found.")
-                explicit_synopsis = ""
-            else:
-                logger.error(f"AIService (Gen): HTTP error loading synopsis.md: {e.detail}", exc_info=True)
-                explicit_synopsis = "Error loading synopsis."
-        except Exception as e:
-            logger.error(f"AIService (Gen): Unexpected error loading synopsis.md: {e}", exc_info=True)
-            explicit_synopsis = "Error loading synopsis."
+            if e.status_code == 404: logger.warning("AIService (Gen): synopsis.md not found."); explicit_synopsis = ""
+            else: logger.error(f"AIService (Gen): HTTP error loading synopsis.md: {e.detail}", exc_info=True); explicit_synopsis = "Error loading synopsis."
+        except Exception as e: logger.error(f"AIService (Gen): Unexpected error loading synopsis.md: {e}", exc_info=True); explicit_synopsis = "Error loading synopsis."
 
-        # Load Previous Scene(s) - Keep existing try/except structure for this part
+        # Load Previous Scene(s)
         previous_scene_order = request_data.previous_scene_order
         if previous_scene_order is not None and previous_scene_order > 0 and PREVIOUS_SCENE_COUNT > 0:
             logger.debug(f"AIService (Gen): Attempting to load up to {PREVIOUS_SCENE_COUNT} previous scene(s) ending at order {previous_scene_order}")
@@ -179,7 +161,6 @@ class AIService:
                      for scene_id, data in chapter_metadata.get('scenes', {}).items()
                      if data.get('order') is not None and isinstance(data.get('order'), int)
                 }
-
                 loaded_count = 0
                 for target_order in range(previous_scene_order, 0, -1):
                     if loaded_count >= PREVIOUS_SCENE_COUNT: break
@@ -195,26 +176,17 @@ class AIService:
                             if scene_load_err.status_code == 404: logger.warning(f"AIService (Gen): Scene file not found for order {target_order} (ID: {scene_id_to_load}), skipping.")
                             else: logger.error(f"AIService (Gen): Error loading scene file order {target_order}: {scene_load_err.detail}")
                     else: logger.debug(f"AIService (Gen): No scene found with order {target_order} in metadata.")
-
-                explicit_previous_scenes.reverse() # Ensure chronological order
-
+                explicit_previous_scenes.reverse()
             except HTTPException as e:
-                # Log chapter metadata errors but don't stop the whole process
                 if e.status_code == 404: logger.warning(f"AIService (Gen): Chapter metadata not found for {chapter_id} while loading previous scenes: {e.detail}")
                 else: logger.error(f"AIService (Gen): HTTP error loading chapter metadata for previous scenes: {e.detail}", exc_info=True)
-            except Exception as general_err:
-                 logger.error(f"AIService (Gen): Unexpected error loading previous scenes: {general_err}", exc_info=True)
-        # --- END MODIFIED ---
+            except Exception as general_err: logger.error(f"AIService (Gen): Unexpected error loading previous scenes: {general_err}", exc_info=True)
 
-        # Debug Logging Before Delegation
         logger.debug("AIService (Gen): Context prepared for SceneGenerator:")
-        logger.debug(f"  - Explicit Plan: '{explicit_plan[:50]}...'") # Log start of content
+        logger.debug(f"  - Explicit Plan: '{explicit_plan[:50]}...'")
         logger.debug(f"  - Explicit Synopsis: '{explicit_synopsis[:50]}...'")
         logger.debug(f"  - Explicit Previous Scenes Count: {len(explicit_previous_scenes)}")
-        # for order, content in explicit_previous_scenes: # Keep this if needed
-        #      logger.debug(f"    - Scene Order {order} Length: {len(content)}")
 
-        # Delegate to RagEngine
         try:
             generated_content = await self.rag_engine.generate_scene(
                 project_id=project_id,
@@ -225,26 +197,16 @@ class AIService:
                 explicit_synopsis=explicit_synopsis,
                 explicit_previous_scenes=explicit_previous_scenes
             )
-
-            # Check for error string from engine
             if isinstance(generated_content, str) and generated_content.startswith("Error:"):
                  logger.error(f"Scene generation failed: {generated_content}")
-                 raise HTTPException(
-                     status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                     detail=generated_content
-                 )
-
+                 raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=generated_content)
             return generated_content
-
         except HTTPException as http_exc:
              logger.error(f"HTTP Exception during scene generation delegation: {http_exc.detail}", exc_info=True)
-             raise http_exc # Re-raise HTTP exceptions from engine/processors
+             raise http_exc
         except Exception as e:
              logger.error(f"Unexpected error during scene generation delegation: {e}", exc_info=True)
-             raise HTTPException(
-                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                 detail="An unexpected error occurred during AI scene generation."
-             )
+             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred during AI scene generation.")
 
 
     async def rephrase_text(self, project_id: str, request_data: AIRephraseRequest) -> List[str]:
@@ -260,91 +222,42 @@ class AIService:
                 context_before=request_data.context_before,
                 context_after=request_data.context_after
             )
-
-            # Check for error message from engine
             if suggestions and isinstance(suggestions[0], str) and suggestions[0].startswith("Error:"):
                 logger.error(f"Rephrasing failed: {suggestions[0]}")
-                raise HTTPException(
-                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                    detail=suggestions[0]
-                )
-
+                raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=suggestions[0])
             return suggestions
         except HTTPException as http_exc:
              logger.error(f"HTTP Exception during rephrase delegation: {http_exc.detail}", exc_info=True)
              raise http_exc
         except Exception as e:
              logger.error(f"Unexpected error during rephrase delegation: {e}", exc_info=True)
-             raise HTTPException(
-                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-                 detail="An unexpected error occurred during AI rephrasing."
-             )
+             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred during AI rephrasing.")
 
-    # --- NEW: Chapter Splitting Method ---
+    # --- Chapter Splitting Method ---
     async def split_chapter_into_scenes(
         self,
         project_id: str,
         chapter_id: str,
-        request_data: AIChapterSplitRequest # Currently empty, might add hints later
+        request_data: AIChapterSplitRequest # Contains chapter_content
         ) -> List[ProposedScene]:
         """
         Handles the business logic for splitting a chapter into scenes.
-        Loads chapter content, plan, synopsis and delegates to ChapterSplitter.
+        Loads plan, synopsis and uses chapter content from request, then delegates to ChapterSplitter.
         """
         logger.info(f"AIService: Processing chapter split request for project {project_id}, chapter {chapter_id}")
 
-        # --- Load Required Context ---
+        # --- Get chapter content from request data ---
+        chapter_content = request_data.chapter_content
+        if not chapter_content or not chapter_content.strip():
+             logger.warning(f"AIService (Split): Received empty chapter content for chapter {chapter_id}. Returning empty split.")
+             return []
+        logger.debug(f"AIService (Split): Received chapter content (Length: {len(chapter_content)})")
+        # --- End getting chapter content ---
+
+        # --- Load Plan/Synopsis Context ---
         explicit_plan = "Not Available"
         explicit_synopsis = "Not Available"
-        chapter_content = "Not Available"
-
-        logger.debug("AIService (Split): Loading context (Chapter, Plan, Synopsis)...")
-
-        # Load Chapter Content (Crucial for splitting)
-        try:
-            # Need a way to get the chapter content. Assuming chapter_service has get_by_id
-            # that returns an object with a 'content' field, or we need a dedicated method.
-            # Let's assume chapter_service.get_by_id returns enough info, including content path implicitly.
-            # We need the actual content string. Let's add a hypothetical method to file_service
-            # or assume chapter_service can provide it.
-            # FOR NOW: Let's assume we need to read *all* scene files for the chapter and concatenate.
-            # This is inefficient but demonstrates the need. A better approach would be if chapters
-            # were single files or chapter_service could provide the full content.
-            # --- TEMPORARY: Concatenate scenes ---
-            temp_content_parts = []
-            try:
-                # Use chapter_service to get scene metadata (title, order)
-                chapter_meta = self.file_service.read_chapter_metadata(project_id, chapter_id)
-                scenes_in_order = sorted(
-                    chapter_meta.get('scenes', {}).items(),
-                    key=lambda item: item[1].get('order', float('inf'))
-                )
-                for scene_id, scene_meta in scenes_in_order:
-                    try:
-                        scene_path = self.file_service._get_scene_path(project_id, chapter_id, scene_id)
-                        scene_content = self.file_service.read_text_file(scene_path)
-                        # Add a simple separator or header
-                        temp_content_parts.append(f"## {scene_meta.get('title', 'Scene')} (Order: {scene_meta.get('order', '?')})\n\n{scene_content}")
-                    except HTTPException as e:
-                        if e.status_code == 404:
-                            logger.warning(f"AIService (Split): Scene file for {scene_id} not found, skipping for concatenation.")
-                        else: raise e # Re-raise other errors
-                if not temp_content_parts:
-                     logger.warning(f"AIService (Split): No scene content found for chapter {chapter_id}.")
-                     chapter_content = "" # Treat as empty if no scenes found/readable
-                else:
-                     chapter_content = "\n\n---\n\n".join(temp_content_parts) # Join with separator
-                logger.debug(f"AIService (Split): Loaded chapter content by concatenating scenes (Length: {len(chapter_content)})")
-
-            except HTTPException as e:
-                 logger.error(f"AIService (Split): Failed to load chapter metadata or scene files for splitting: {e.detail}", exc_info=True)
-                 raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to load chapter content for splitting.")
-            # --- END TEMPORARY ---
-
-        except Exception as e:
-            logger.error(f"AIService (Split): Unexpected error loading chapter content for project {project_id}, chapter {chapter_id}: {e}", exc_info=True)
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to load chapter content for splitting.")
-
+        logger.debug("AIService (Split): Loading context (Plan, Synopsis)...")
 
         # Load Plan
         try:
@@ -369,18 +282,15 @@ class AIService:
         except Exception as e:
             logger.error(f"AIService (Split): Unexpected error loading synopsis.md: {e}", exc_info=True)
             explicit_synopsis = "Error loading synopsis."
+        # --- End Loading Plan/Synopsis ---
 
         # --- Delegate to ChapterSplitter ---
         try:
-            if not chapter_content.strip():
-                 logger.warning(f"AIService (Split): Chapter content for {chapter_id} is empty. Returning empty split.")
-                 return []
-
             logger.debug("AIService (Split): Delegating to ChapterSplitter...")
             proposed_scenes = await self.chapter_splitter.split(
                 project_id=project_id,
                 chapter_id=chapter_id,
-                chapter_content=chapter_content,
+                chapter_content=chapter_content, # Pass content from request
                 explicit_plan=explicit_plan,
                 explicit_synopsis=explicit_synopsis
                 # Pass request_data.hint here if implemented
@@ -396,16 +306,14 @@ class AIService:
                  status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                  detail="An unexpected error occurred during AI chapter splitting."
              )
-    # --- END NEW METHOD ---
+    # --- END Chapter Splitting Method ---
 
 
     # --- Add other methods later ---
 
 # --- Create a singleton instance ---
-# Keep singleton creation as is, tests will use manual instantiation
 try:
     ai_service = AIService()
 except Exception as e:
      logger.critical(f"Failed to create AIService instance on startup: {e}", exc_info=True)
-     # Make sure this error propagates during startup
      raise RuntimeError(f"Failed to initialize AIService: {e}") from e

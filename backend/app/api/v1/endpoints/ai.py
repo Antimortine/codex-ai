@@ -204,37 +204,40 @@ async def rephrase_text_endpoint(
     # --- END MODIFIED EXCEPTION HANDLING ---
 
 
-# --- NEW: Chapter Splitting Endpoint ---
+# --- Chapter Splitting Endpoint ---
 @router.post(
     "/split/chapter/{project_id}/{chapter_id}",
     response_model=AIChapterSplitResponse,
     status_code=status.HTTP_200_OK,
     summary="Split Chapter into Scenes (AI)",
-    description="Uses AI to analyze chapter content and propose a split into distinct scenes with suggested titles."
+    description="Uses AI to analyze chapter content provided in the request body and propose a split into distinct scenes with suggested titles." # Updated description
 )
 async def split_chapter_into_scenes(
-    request_data: AIChapterSplitRequest = Body(...), # Body might be empty for now
+    # --- MODIFIED: Accept AIChapterSplitRequest in the body ---
+    request_data: AIChapterSplitRequest = Body(...),
+    # --- END MODIFIED ---
     ids: tuple[str, str] = Depends(get_chapter_dependency) # Ensures project & chapter exist
 ):
     """
-    Analyzes a chapter's content and proposes a split into scenes.
+    Analyzes chapter content provided in the request body and proposes a split into scenes.
 
     - **project_id**: The UUID of the parent project (in path).
-    - **chapter_id**: The UUID of the chapter to split (in path).
-    - **request_data**: Optional parameters to guide splitting (currently empty).
+    - **chapter_id**: The UUID of the chapter to associate the split with (in path).
+    - **request_data**: Contains the full `chapter_content` to be split.
     """
     project_id, chapter_id = ids
-    logger.info(f"Received AI chapter split request for project {project_id}, chapter {chapter_id}.")
+    # --- MODIFIED: Log length instead of content ---
+    logger.info(f"Received AI chapter split request for project {project_id}, chapter {chapter_id}. Content length: {len(request_data.chapter_content)}")
+    # --- END MODIFIED ---
 
     try:
-        # Call the new service method (to be implemented)
+        # Call the service method, passing the request data which now includes the content
         proposed_scenes = await ai_service.split_chapter_into_scenes(
             project_id=project_id,
             chapter_id=chapter_id,
-            request_data=request_data
+            request_data=request_data # Pass the whole request object
         )
 
-        # AIService method should raise HTTPException on failure or return the list
         logger.info(f"Successfully proposed {len(proposed_scenes)} scenes for chapter {chapter_id}.")
         return AIChapterSplitResponse(proposed_scenes=proposed_scenes)
 
@@ -247,7 +250,7 @@ async def split_chapter_into_scenes(
             status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
             detail=f"Failed to process AI chapter split for project {project_id}, chapter {chapter_id} due to an internal error."
         )
-# --- END NEW ENDPOINT ---
+# --- END Chapter Splitting Endpoint ---
 
 
 # --- Add other AI editing endpoints later ---

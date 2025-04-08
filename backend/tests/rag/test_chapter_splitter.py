@@ -13,58 +13,57 @@
 # limitations under the License.
 
 import pytest
-from unittest.mock import MagicMock, AsyncMock, patch, ANY
-from pydantic import ValidationError
-import logging # Import logging for caplog test
+from unittest.mock import MagicMock, AsyncMock, patch, ANY, call
+from pydantic import ValidationError, TypeAdapter
+import logging
+from typing import Optional, List
 
 # Import the class we are testing
-from app.rag.chapter_splitter import ChapterSplitter
+from app.rag.chapter_splitter import ChapterSplitter, ProposedSceneListAdapter
 # Import necessary LlamaIndex types for mocking
-from llama_index.core.llms import LLM, ChatResponse, ChatMessage, MessageRole
-from llama_index.core.base.llms.types import CompletionResponse # For older mock style if needed
-# Import ToolCall instead of ToolOutput
-from llama_index.core.indices.vector_store import VectorStoreIndex # For init
+from llama_index.core.llms import LLM
+from llama_index.core.agent import ReActAgent, AgentChatResponse
+from llama_index.core.tools import FunctionTool, ToolMetadata
+from llama_index.core.schema import NodeWithScore, TextNode, Node
+from llama_index.core.indices.vector_store import VectorStoreIndex
 # Import models used
 from app.models.ai import ProposedScene, ProposedSceneList
 
 # --- Fixtures ---
 
-# Use the shared mock_llm fixture from tests/rag/conftest.py
-# Use the shared mock_index fixture from tests/rag/conftest.py
+@pytest.fixture
+def mock_llm_for_splitter():
+    llm = MagicMock(spec=LLM)
+    llm.chat = AsyncMock()
+    llm.complete = AsyncMock()
+    return llm
 
 @pytest.fixture
-def chapter_splitter(mock_index: MagicMock, mock_llm: MagicMock) -> ChapterSplitter:
-    """Fixture to create a ChapterSplitter instance with mocked dependencies."""
-    # --- Ensure chat is an AsyncMock within the fixture ---
-    if not isinstance(mock_llm.chat, AsyncMock):
-         mock_llm.chat = AsyncMock()
-    # --- Reset mock before use in test ---
-    mock_llm.chat.reset_mock() # Explicitly reset before test runs
-    return ChapterSplitter(index=mock_index, llm=mock_llm)
+def mock_index_for_splitter():
+    return MagicMock(spec=VectorStoreIndex)
 
-# --- Helper to create mock LLM responses ---
+@pytest.fixture
+def chapter_splitter(mock_index_for_splitter: MagicMock, mock_llm_for_splitter: MagicMock) -> ChapterSplitter:
+    # --- Ensure the instance attribute exists for patching/checking later if needed ---
+    # Although it's set inside split, having it on the instance might simplify some mock setups
+    # splitter = ChapterSplitter(index=mock_index_for_splitter, llm=mock_llm_for_splitter)
+    # splitter._tool_result_storage = {"scenes": None} # Initialize attribute
+    # return splitter
+    # --- Let's stick to the current implementation where it's defined in split ---
+    return ChapterSplitter(index=mock_index_for_splitter, llm=mock_llm_for_splitter)
 
-def create_mock_chat_response(tool_calls: list = None, content: str = None) -> ChatResponse:
-    """Creates a mock ChatResponse object."""
-    mock_message = ChatMessage(role=MessageRole.ASSISTANT, content=content)
-    if tool_calls:
-        # Store tool calls in additional_kwargs, which is the standard place
-        mock_message.additional_kwargs = {"tool_calls": tool_calls}
-    return ChatResponse(message=mock_message)
 
-def create_mock_tool_call(tool_name: str, arguments: dict) -> MagicMock:
-     """Creates a mock object representing a tool call structure."""
-     mock_call = MagicMock()
-     mock_call.tool_name = tool_name
-     mock_call.tool_arguments = arguments # Store the raw arguments dict
-     mock_call.id = "mock_tool_call_id_" + tool_name
-     return mock_call
+# --- Helper to create mock Agent responses ---
+
+def create_mock_agent_response(response_text: str) -> AgentChatResponse:
+    return AgentChatResponse(response=response_text, source_nodes=[])
 
 # --- Test Cases ---
 
 @pytest.mark.asyncio
-async def test_split_success(chapter_splitter: ChapterSplitter, mock_llm: MagicMock):
-    """Test successful chapter splitting with valid tool call."""
+@patch('app.rag.chapter_splitter.ReActAgent')
+async def test_split_success(mock_agent_class: MagicMock, chapter_splitter: ChapterSplitter, mock_llm_for_splitter: MagicMock):
+    """Test successful chapter splitting using the Agent."""
     # Arrange
     project_id = "proj-split-1"
     chapter_id = "ch-split-1"
@@ -75,155 +74,221 @@ async def test_split_success(chapter_splitter: ChapterSplitter, mock_llm: MagicM
         ProposedScene(suggested_title="Scene 1 Title", content="Scene 1 content."),
         ProposedScene(suggested_title="Scene 2 Title", content="Some break. Scene 2 content.")
     ]
-    tool_arguments_dict = {"proposed_scenes": [s.model_dump() for s in expected_scenes]}
-    mock_tool_call = create_mock_tool_call("save_proposed_scenes", tool_arguments_dict)
-    mock_response = create_mock_chat_response(tool_calls=[mock_tool_call])
-    mock_llm.chat = AsyncMock(return_value=mock_response) # Re-assign mock specific to this test
+    raw_tool_args = {"proposed_scenes": [s.model_dump() for s in expected_scenes]}
+
+    mock_agent_instance = mock_agent_class.from_tools.return_value
+
+    # --- MODIFIED: agent_achat_side_effect to modify the *instance's* storage ---
+    async def agent_achat_side_effect(agent_input_arg):
+        # Simulate the tool function being called and modifying the instance's storage
+        try:
+            # Directly validate and assign to the instance attribute that the real function uses
+            validated_data = ProposedSceneListAdapter.validate_python(raw_tool_args["proposed_scenes"])
+            chapter_splitter._tool_result_storage["scenes"] = validated_data # Modify instance attr
+        except ValidationError:
+            pytest.fail("Simulated tool validation failed unexpectedly in test side effect")
+        return create_mock_agent_response("Tool executed successfully.")
+    # --- END MODIFIED ---
+
+    mock_agent_instance.achat = AsyncMock(side_effect=agent_achat_side_effect)
 
     # Act
     result = await chapter_splitter.split(project_id, chapter_id, chapter_content, plan, synopsis)
 
     # Assert
-    assert result == expected_scenes
-    mock_llm.chat.assert_awaited_once()
-    call_args, call_kwargs = mock_llm.chat.call_args
-    messages = call_kwargs.get('messages', [])
-    assert any(chapter_content in msg.content for msg in messages if msg.role == MessageRole.USER)
-    assert any(plan in msg.content for msg in messages if msg.role == MessageRole.USER)
-    assert any(synopsis in msg.content for msg in messages if msg.role == MessageRole.USER)
-    assert call_kwargs.get('tool_choice') is not None
+    assert result == expected_scenes # Check the final returned list
+    mock_agent_class.from_tools.assert_called_once()
+    mock_agent_instance.achat.assert_awaited_once()
+    agent_input_arg = mock_agent_instance.achat.call_args[0][0]
+    assert chapter_content in agent_input_arg
+    assert plan in agent_input_arg
+    assert synopsis in agent_input_arg
+    # --- REMOVED assertion on side_effect_storage ---
+    # assert side_effect_storage["scenes"] == expected_scenes
+    # --- The main assertion `assert result == expected_scenes` is sufficient ---
+
 
 @pytest.mark.asyncio
-async def test_split_empty_content(chapter_splitter: ChapterSplitter, mock_llm: MagicMock):
+@patch('app.rag.chapter_splitter.ReActAgent')
+async def test_split_empty_content(mock_agent_class: MagicMock, chapter_splitter: ChapterSplitter, mock_llm_for_splitter: MagicMock):
     """Test splitting with empty chapter content."""
     # Arrange
     project_id = "proj-split-empty"
     chapter_id = "ch-split-empty"
-    chapter_content = "   " # Whitespace only
+    chapter_content = "   "
     plan = "Plan"
     synopsis = "Synopsis"
+    mock_agent_instance = mock_agent_class.from_tools.return_value
+    mock_agent_instance.achat = AsyncMock()
 
     # Act
     result = await chapter_splitter.split(project_id, chapter_id, chapter_content, plan, synopsis)
 
     # Assert
     assert result == []
-    # --- MODIFIED Assertion ---
-    # Use assert_not_awaited() which is the canonical way for AsyncMock
-    mock_llm.chat.assert_not_awaited()
-    # --- END MODIFIED ---
+    mock_agent_class.from_tools.assert_not_called()
+    mock_agent_instance.achat.assert_not_awaited()
 
 @pytest.mark.asyncio
-async def test_split_no_tool_call(chapter_splitter: ChapterSplitter, mock_llm: MagicMock):
-    """Test when the LLM responds but doesn't make the expected tool call."""
+@patch('app.rag.chapter_splitter.ReActAgent')
+async def test_split_agent_fails_to_call_tool(mock_agent_class: MagicMock, chapter_splitter: ChapterSplitter, mock_llm_for_splitter: MagicMock):
+    """Test when the agent finishes but doesn't simulate calling the tool."""
     # Arrange
-    project_id = "proj-split-notool"
-    chapter_id = "ch-split-notool"
+    project_id = "proj-split-agent-notool"
+    chapter_id = "ch-split-agent-notool"
     chapter_content = "Some content."
     plan = "Plan"
     synopsis = "Synopsis"
-    mock_response = create_mock_chat_response(content="I analyzed the text but couldn't split it.")
-    mock_llm.chat = AsyncMock(return_value=mock_response) # Re-assign mock specific to this test
+
+    mock_agent_instance = mock_agent_class.from_tools.return_value
+    # Simulate agent returning a text response *without* the side effect modifying storage
+    mock_agent_instance.achat = AsyncMock(return_value=create_mock_agent_response("I couldn't figure out how to split this."))
 
     # Act & Assert
-    expected_error_msg = "Failed to split chapter due to LLM or processing error: LLM failed to call the required tool to save proposed scenes."
-    with pytest.raises(RuntimeError, match=expected_error_msg):
-        await chapter_splitter.split(project_id, chapter_id, chapter_content, plan, synopsis)
-    mock_llm.chat.assert_awaited_once()
-
-@pytest.mark.asyncio
-async def test_split_wrong_tool_call(chapter_splitter: ChapterSplitter, mock_llm: MagicMock):
-    """Test when the LLM calls an unexpected tool."""
-    # Arrange
-    project_id = "proj-split-wrongtool"
-    chapter_id = "ch-split-wrongtool"
-    chapter_content = "Some content."
-    plan = "Plan"
-    synopsis = "Synopsis"
-    mock_tool_call = create_mock_tool_call("some_other_tool", {"arg": "value"})
-    mock_response = create_mock_chat_response(tool_calls=[mock_tool_call])
-    mock_llm.chat = AsyncMock(return_value=mock_response) # Re-assign mock specific to this test
-
-    # Act & Assert
-    expected_error_msg = "Failed to split chapter due to LLM or processing error: LLM called unexpected tool: some_other_tool"
-    with pytest.raises(RuntimeError, match=expected_error_msg):
-        await chapter_splitter.split(project_id, chapter_id, chapter_content, plan, synopsis)
-    mock_llm.chat.assert_awaited_once()
-
-@pytest.mark.asyncio
-async def test_split_invalid_tool_arguments(chapter_splitter: ChapterSplitter, mock_llm: MagicMock):
-    """Test when tool arguments fail Pydantic validation."""
-    # Arrange
-    project_id = "proj-split-invalidargs"
-    chapter_id = "ch-split-invalidargs"
-    chapter_content = "Some content."
-    plan = "Plan"
-    synopsis = "Synopsis"
-    invalid_tool_arguments = {"proposed_scenes": [{"title_typo": "Scene 1", "content": "..."}]}
-    mock_tool_call = create_mock_tool_call("save_proposed_scenes", invalid_tool_arguments)
-    mock_response = create_mock_chat_response(tool_calls=[mock_tool_call])
-    mock_llm.chat = AsyncMock(return_value=mock_response) # Re-assign mock specific to this test
-
-    # Act & Assert
+    expected_error_msg = "Agent failed to execute the tool correctly or store results."
     with pytest.raises(RuntimeError) as exc_info:
-        await chapter_splitter.split(project_id, chapter_id, chapter_content, plan, synopsis)
-    assert "Failed to split chapter due to LLM or processing error" in str(exc_info.value)
-    assert "LLM returned data in an unexpected format" in str(exc_info.value)
-    mock_llm.chat.assert_awaited_once()
+         await chapter_splitter.split(project_id, chapter_id, chapter_content, plan, synopsis)
+    assert expected_error_msg in str(exc_info.value.__cause__)
+    assert "Agent response: I couldn't figure out" in str(exc_info.value.__cause__)
+
+    mock_agent_class.from_tools.assert_called_once()
+    mock_agent_instance.achat.assert_awaited_once()
+    # We expect _tool_result_storage to be None inside the split method, leading to the error
+
 
 @pytest.mark.asyncio
-async def test_split_empty_scene_list_in_args(chapter_splitter: ChapterSplitter, mock_llm: MagicMock):
-    """Test when tool arguments are valid but the proposed_scenes list is empty."""
+@patch('app.rag.chapter_splitter.ReActAgent')
+async def test_split_agent_chat_error(mock_agent_class: MagicMock, chapter_splitter: ChapterSplitter, mock_llm_for_splitter: MagicMock):
+    """Test when the agent's achat method raises an exception."""
     # Arrange
-    project_id = "proj-split-emptyargs"
-    chapter_id = "ch-split-emptyargs"
+    project_id = "proj-split-agent-error"
+    chapter_id = "ch-split-agent-error"
     chapter_content = "Some content."
     plan = "Plan"
     synopsis = "Synopsis"
-    empty_tool_arguments = {"proposed_scenes": []}
-    mock_tool_call = create_mock_tool_call("save_proposed_scenes", empty_tool_arguments)
-    mock_response = create_mock_chat_response(tool_calls=[mock_tool_call])
-    mock_llm.chat = AsyncMock(return_value=mock_response) # Re-assign mock specific to this test
+
+    mock_agent_instance = mock_agent_class.from_tools.return_value
+    mock_agent_instance.achat = AsyncMock(side_effect=RuntimeError("Agent internal error"))
+
+    # Act & Assert
+    with pytest.raises(RuntimeError, match="Failed to split chapter due to Agent or LLM error: Agent internal error"):
+        await chapter_splitter.split(project_id, chapter_id, chapter_content, plan, synopsis)
+
+    mock_agent_class.from_tools.assert_called_once()
+    mock_agent_instance.achat.assert_awaited_once()
+
+@pytest.mark.asyncio
+@patch('app.rag.chapter_splitter.ReActAgent')
+async def test_split_tool_returns_empty_list(mock_agent_class: MagicMock, chapter_splitter: ChapterSplitter, mock_llm_for_splitter: MagicMock):
+    """Test when the tool call succeeds but returns an empty list."""
+    # Arrange
+    project_id = "proj-split-tool-empty"
+    chapter_id = "ch-split-tool-empty"
+    chapter_content = "Some content."
+    plan = "Plan"
+    synopsis = "Synopsis"
+    raw_tool_args = {"proposed_scenes": []} # Agent provides empty list
+
+    mock_agent_instance = mock_agent_class.from_tools.return_value
+
+    # Simulate agent calling the tool with an empty list
+    async def agent_achat_side_effect(agent_input_arg):
+        try:
+            validated_data = ProposedSceneListAdapter.validate_python(raw_tool_args["proposed_scenes"])
+            chapter_splitter._tool_result_storage["scenes"] = validated_data # Store empty list
+        except ValidationError:
+            pytest.fail("Simulated tool validation failed unexpectedly in test side effect")
+        return create_mock_agent_response("Tool executed, no scenes found.")
+    mock_agent_instance.achat = AsyncMock(side_effect=agent_achat_side_effect)
 
     # Act
     result = await chapter_splitter.split(project_id, chapter_id, chapter_content, plan, synopsis)
 
     # Assert
-    assert result == []
-    mock_llm.chat.assert_awaited_once()
+    assert result == [] # Expect empty list back
+    mock_agent_class.from_tools.assert_called_once()
+    mock_agent_instance.achat.assert_awaited_once()
+    # --- REMOVED assertion on side_effect_storage ---
+    # assert side_effect_storage["scenes"] == []
+    # --- The main assertion `assert result == []` is sufficient ---
+
 
 @pytest.mark.asyncio
-async def test_split_llm_chat_error(chapter_splitter: ChapterSplitter, mock_llm: MagicMock):
-    """Test when the llm.chat call itself raises an exception."""
+@patch('app.rag.chapter_splitter.ReActAgent')
+async def test_split_tool_validation_error(mock_agent_class: MagicMock, chapter_splitter: ChapterSplitter, mock_llm_for_splitter: MagicMock):
+    """Test when the data passed to the tool fails validation inside the tool."""
     # Arrange
-    project_id = "proj-split-llmerror"
-    chapter_id = "ch-split-llmerror"
+    project_id = "proj-split-tool-invalid"
+    chapter_id = "ch-split-tool-invalid"
     chapter_content = "Some content."
     plan = "Plan"
     synopsis = "Synopsis"
-    mock_llm.chat = AsyncMock(side_effect=RuntimeError("LLM API connection failed")) # Re-assign mock specific to this test
+    # Invalid data structure
+    invalid_raw_tool_args = {"proposed_scenes": [{"title_typo": "Invalid Scene"}]}
+
+    mock_agent_instance = mock_agent_class.from_tools.return_value
+    tool_error_message = "Validation Error Placeholder"
+
+    # Simulate agent calling the tool with invalid data
+    async def agent_achat_side_effect(agent_input_arg):
+        nonlocal tool_error_message
+        tools_list = mock_agent_class.from_tools.call_args.kwargs.get('tools', [])
+        tool_fn = tools_list[0].fn if tools_list else None
+        if tool_fn:
+             # Call the tool function, which should raise ValidationError internally
+             # and return an error string
+             tool_response_str = tool_fn(**invalid_raw_tool_args)
+             tool_error_message = tool_response_str # Capture the error message
+        else:
+             pytest.fail("Tool function not found in mocked agent creation")
+        # Agent returns the error string from the tool
+        return create_mock_agent_response(tool_error_message)
+
+    mock_agent_instance.achat = AsyncMock(side_effect=agent_achat_side_effect)
 
     # Act & Assert
-    with pytest.raises(RuntimeError, match="Failed to split chapter due to LLM or processing error: LLM API connection failed"):
-        await chapter_splitter.split(project_id, chapter_id, chapter_content, plan, synopsis)
-    mock_llm.chat.assert_awaited_once()
+    expected_error_msg = "Agent failed to execute the tool correctly or store results."
+    with pytest.raises(RuntimeError) as exc_info:
+         await chapter_splitter.split(project_id, chapter_id, chapter_content, plan, synopsis)
+
+    assert expected_error_msg in str(exc_info.value.__cause__)
+    # Check that the agent's final response (containing the validation error string) is included
+    assert "Error: Validation failed" in str(exc_info.value.__cause__)
+
+    mock_agent_class.from_tools.assert_called_once()
+    mock_agent_instance.achat.assert_awaited_once()
+    # We expect _tool_result_storage to be None inside the split method
+
 
 @pytest.mark.asyncio
-async def test_split_content_validation_warning(chapter_splitter: ChapterSplitter, mock_llm: MagicMock, caplog):
-    """Test the optional content length validation warning."""
+@patch('app.rag.chapter_splitter.ReActAgent')
+async def test_split_content_validation_warning(mock_agent_class: MagicMock, chapter_splitter: ChapterSplitter, mock_llm_for_splitter: MagicMock, caplog):
+    """Test the optional content length validation warning with Agent."""
     # Arrange
-    project_id = "proj-split-contentloss"
-    chapter_id = "ch-split-contentloss"
+    project_id = "proj-split-contentloss-agent"
+    chapter_id = "ch-split-contentloss-agent"
     chapter_content = "This is the original long content that should be mostly preserved."
     plan = "Plan"
     synopsis = "Synopsis"
-    short_scenes = [
-        ProposedScene(suggested_title="Short Scene", content="Short.")
-    ]
-    tool_arguments_dict = {"proposed_scenes": [s.model_dump() for s in short_scenes]}
-    mock_tool_call = create_mock_tool_call("save_proposed_scenes", tool_arguments_dict)
-    mock_response = create_mock_chat_response(tool_calls=[mock_tool_call])
-    mock_llm.chat = AsyncMock(return_value=mock_response) # Re-assign mock specific to this test
+    short_scenes = [ProposedScene(suggested_title="Short Scene", content="Short.")]
+    raw_tool_args = {"proposed_scenes": [s.model_dump() for s in short_scenes]}
+
+    mock_agent_instance = mock_agent_class.from_tools.return_value
+
+    # Simulate agent calling the tool successfully with the short list
+    async def agent_achat_side_effect(agent_input_arg):
+        tools_list = mock_agent_class.from_tools.call_args.kwargs.get('tools', [])
+        tool_fn = tools_list[0].fn if tools_list else None
+        if tool_fn:
+             try:
+                 validated_data = ProposedSceneListAdapter.validate_python(raw_tool_args["proposed_scenes"])
+                 chapter_splitter._tool_result_storage["scenes"] = validated_data # Store short list
+             except ValidationError:
+                 pytest.fail("Simulated tool validation failed unexpectedly in test side effect")
+        else:
+             pytest.fail("Tool function not found in mocked agent creation")
+        return create_mock_agent_response("Tool executed.")
+    mock_agent_instance.achat = AsyncMock(side_effect=agent_achat_side_effect)
 
     # Act
     with caplog.at_level(logging.WARNING):
@@ -233,4 +298,8 @@ async def test_split_content_validation_warning(chapter_splitter: ChapterSplitte
     assert result == short_scenes
     assert "Concatenated content length" in caplog.text
     assert "significantly differs from original" in caplog.text
-    mock_llm.chat.assert_awaited_once()
+    mock_agent_class.from_tools.assert_called_once()
+    mock_agent_instance.achat.assert_awaited_once()
+    # --- REMOVED assertion on side_effect_storage ---
+    # assert side_effect_storage["scenes"] == short_scenes
+    # --- The main assertion `assert result == short_scenes` is sufficient ---
