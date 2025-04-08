@@ -28,5 +28,8 @@ export default defineConfig({
     testTimeout: 15000, // Increase default timeout to 15 seconds for flaky tests
     // Optional: Enable CSS processing if your components rely on CSS modules/imports
     // css: true,
+    coverage: {
+      provider: 'v8',
+    },
   },
 });

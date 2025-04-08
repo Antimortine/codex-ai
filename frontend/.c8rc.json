@@ -1,0 +1,14 @@
+{
+  "include": [
+    "src/**/*.{js,jsx}"
+  ],
+  "exclude": [
+    "**/*.{test,spec}.{js,jsx}",
+    "src/setupTests.js",
+    "src/mocks/**"
+  ],
+  "reporter": ["text", "html", "lcov"],
+  "reportsDirectory": "./coverage",
+  "all": true,
+  "clean": true
+}
