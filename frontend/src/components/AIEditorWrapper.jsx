@@ -20,6 +20,7 @@ import MDEditor, { commands } from '@uiw/react-md-editor';
 import { rephraseText } from '../api/codexApi';
 
 // --- Suggestion Popup Component ---
+// (SuggestionPopup component code remains unchanged)
 export const SuggestionPopup = ({ suggestions, isLoading, error, onSelect, onClose, top, left }) => {
     const [highlightedIndex, setHighlightedIndex] = useState(-1);
     const popupRef = useRef(null);
@@ -204,28 +205,29 @@ function AIEditorWrapper({ value, onChange, height = 300, projectId, ...restProp
             </svg>
         ),
         execute: async (state, api) => {
-            console.log("Rephrase command executed.");
+            console.log("[AIEditorWrapper] Rephrase command executed.");
             const selection = state?.selection;
             const selectedText = selection ? state.text.substring(selection.start, selection.end) : '';
 
             if (!selectedText || selectedText.trim().length === 0 || !selection) {
-                console.log("No text selected for rephrasing.");
+                console.log("[AIEditorWrapper] No text selected for rephrasing.");
                 setPopupState(prev => ({ ...prev, visible: false }));
                 return;
             }
 
-            console.log(`Selected: "${selectedText}", Start: ${selection.start}, End: ${selection.end}`);
+            console.log(`[AIEditorWrapper] Selected: "${selectedText}", Start: ${selection.start}, End: ${selection.end}`);
             setActiveSelection({ start: selection.start, end: selection.end, text: selectedText });
 
             let popupTop = 50;
             let popupLeft = null;
             if (editorRef.current) {
                 const editorRect = editorRef.current.getBoundingClientRect();
-                popupTop = 45;
-                popupLeft = editorRect.width - 420;
-                if (popupLeft < 10) popupLeft = 10;
+                popupTop = 45; // Position below toolbar
+                // Try to position towards the right, but not off-screen
+                popupLeft = Math.max(10, editorRect.width - 420); // 400 width + padding/margin
             }
 
+            // Reset state before API call
             setPopupState({
                 visible: true,
                 isLoading: true,
@@ -245,19 +247,42 @@ function AIEditorWrapper({ value, onChange, height = 300, projectId, ...restProp
             };
 
             try {
-                console.log("Sending rephrase request:", requestData);
+                console.log("[AIEditorWrapper] Sending rephrase request:", requestData);
                 const response = await rephraseText(projectId, requestData);
-                console.log("Rephrase suggestions received:", response.data.suggestions);
+                console.log("[AIEditorWrapper] Rephrase response received:", response.data);
 
-                if (response.data.suggestions && response.data.suggestions[0]?.startsWith("Error:")) {
-                     setPopupState(prev => ({ ...prev, isLoading: false, error: response.data.suggestions[0] }));
+                const suggestionsData = response.data?.suggestions;
+
+                // --- ADDED: Check if the first suggestion is an error message ---
+                if (Array.isArray(suggestionsData) && suggestionsData.length > 0 && typeof suggestionsData[0] === 'string' && suggestionsData[0].trim().startsWith("Error:")) {
+                    const errorMessage = suggestionsData[0];
+                    console.warn(`[AIEditorWrapper] Rephrase API returned an error message: ${errorMessage}`);
+                    setPopupState(prev => ({
+                        ...prev,
+                        isLoading: false,
+                        error: errorMessage, // Display the error from the suggestions
+                        suggestions: []      // Clear suggestions
+                    }));
                 } else {
-                     setPopupState(prev => ({ ...prev, isLoading: false, suggestions: response.data.suggestions || [] }));
+                // --- END ADDED ---
+                    // Original success path
+                    console.log("[AIEditorWrapper] Rephrase successful, setting suggestions.");
+                    setPopupState(prev => ({
+                        ...prev,
+                        isLoading: false,
+                        error: null, // Clear error on success
+                        suggestions: suggestionsData || [] // Use suggestions or empty array
+                    }));
                 }
             } catch (err) {
-                console.error("Error calling rephrase API:", err);
+                console.error("[AIEditorWrapper] Error calling rephrase API:", err);
                 const errorMsg = err.response?.data?.detail || err.message || 'Failed to get suggestions.';
-                setPopupState(prev => ({ ...prev, isLoading: false, error: errorMsg }));
+                setPopupState(prev => ({
+                    ...prev,
+                    isLoading: false,
+                    error: errorMsg, // Set error from catch block
+                    suggestions: []   // Clear suggestions on API error
+                }));
             }
         },
     };
@@ -273,11 +298,11 @@ function AIEditorWrapper({ value, onChange, height = 300, projectId, ...restProp
                 value.substring(activeSelection.end);
             onChange(newValue);
         } else {
-            console.error("Cannot apply suggestion, stored selection indices are invalid.");
+            console.error("[AIEditorWrapper] Cannot apply suggestion, stored selection indices are invalid.");
              navigator.clipboard.writeText(suggestion)
                 .then(() => setPopupState(prev => ({...prev, error:"Could not apply suggestion. Copied."})))
                 .catch(err => {
-                    console.error("Clipboard write failed:", err);
+                    console.error("[AIEditorWrapper] Clipboard write failed:", err);
                     setPopupState(prev => ({...prev, error:"Could not apply suggestion or copy."}));
                 });
              return;
