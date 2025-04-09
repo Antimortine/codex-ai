@@ -88,7 +88,7 @@ function ProjectDetailPage() {
     const [createSceneError, setCreateSceneError] = useState(null);
     const [isGeneratingScene, setIsGeneratingScene] = useState(false);
     const [generatingChapterId, setGeneratingChapterId] = useState(null);
-    const [generationError, setGenerationError] = useState(null);
+    const [generationError, setGenerationError] = useState(null); // Stores errors for specific chapters
     const [splitInputContent, setSplitInputContent] = useState({});
     const [proposedSplits, setProposedSplits] = useState([]);
     const [chapterIdForSplits, setChapterIdForSplits] = useState(null);
@@ -97,7 +97,7 @@ function ProjectDetailPage() {
     const [createFromSplitError, setCreateFromSplitError] = useState(null);
     const [isSplittingChapter, setIsSplittingChapter] = useState(false);
     const [splittingChapterId, setSplittingChapterId] = useState(null);
-    const [splitError, setSplitError] = useState(null);
+    const [splitError, setSplitError] = useState(null); // Stores errors for specific chapters
 
 
     // --- Data Fetching (Unchanged) ---
@@ -264,13 +264,49 @@ function ProjectDetailPage() {
 
     // --- AI Handlers ---
     const handleGenerateSceneDraft = useCallback(async (chapterId, summary) => {
-        setIsGeneratingScene(true); setGeneratingChapterId(chapterId); setGenerationError(null);
-        setGeneratedSceneContent(''); setShowGeneratedSceneModal(false); setCreateSceneError(null);
-        const currentScenes = scenes[chapterId] || []; const prevOrder = currentScenes.length > 0 ? Math.max(...currentScenes.map(s => s.order)) : 0;
-        try { const r = await generateSceneDraft(projectId, chapterId, { prompt_summary: summary, previous_scene_order: prevOrder }); setGeneratedSceneContent(r.data.generated_content || "AI returned empty content."); setChapterIdForGeneratedScene(chapterId); setShowGeneratedSceneModal(true); }
-        catch (err) { const msg = err.response?.data?.detail || err.message || 'Failed to generate scene draft.'; setGeneratingChapterId(chapterId); setGenerationError(msg); setShowGeneratedSceneModal(false); }
-        finally { setIsGeneratingScene(false); }
-    }, [scenes, projectId]);
+        console.log(`[ProjectDetail] handleGenerateSceneDraft called for chapter ${chapterId}`);
+        setIsGeneratingScene(true);
+        setGeneratingChapterId(chapterId);
+        setGenerationError(null); // Clear previous error for this chapter
+        setGeneratedSceneContent('');
+        setShowGeneratedSceneModal(false);
+        setCreateSceneError(null);
+
+        const currentScenes = scenes[chapterId] || [];
+        const prevOrder = currentScenes.length > 0 ? Math.max(...currentScenes.map(s => s.order)) : 0;
+
+        try {
+            const response = await generateSceneDraft(projectId, chapterId, { prompt_summary: summary, previous_scene_order: prevOrder });
+            const generatedText = response.data?.generated_content;
+            console.log(`[ProjectDetail] Received generation response. Content starts with: "${generatedText?.substring(0, 50)}..."`);
+
+            // --- ADDED: Check if the returned content is an error message ---
+            if (typeof generatedText === 'string' && generatedText.trim().startsWith("Error:")) {
+                console.warn(`[ProjectDetail] Scene generation returned an error message: ${generatedText}`);
+                setGenerationError(generatedText); // Set the error state for this chapter
+                setShowGeneratedSceneModal(false); // Ensure modal doesn't show
+            } else {
+                // --- END ADDED ---
+                console.log("[ProjectDetail] Scene generation successful, showing modal.");
+                setGeneratedSceneContent(generatedText || "AI returned empty content.");
+                setChapterIdForGeneratedScene(chapterId);
+                setShowGeneratedSceneModal(true);
+                setGenerationError(null); // Clear error on success
+            }
+        } catch (err) {
+            console.error("[ProjectDetail] Error calling generateSceneDraft API:", err);
+            const msg = err.response?.data?.detail || err.message || 'Failed to generate scene draft.';
+            setGenerationError(msg); // Set error state for this chapter
+            setShowGeneratedSceneModal(false);
+        } finally {
+            console.log("[ProjectDetail] Finished handleGenerateSceneDraft.");
+            setIsGeneratingScene(false);
+            // Keep generatingChapterId set if there was an error, otherwise it's cleared implicitly by success/modal close
+            // If we clear it here unconditionally, the error message might disappear too soon.
+            // Let's clear it only if successful or modal is closed.
+            // We'll clear it when the modal closes or a new generation starts.
+        }
+    }, [scenes, projectId]); // Added scenes and projectId dependencies
 
     const handleCreateSceneFromDraft = useCallback(async () => {
         if (!chapterIdForGeneratedScene || !generatedSceneContent) { setCreateSceneError("Missing chapter ID or generated content."); return; }
@@ -282,29 +318,75 @@ function ProjectDetailPage() {
             const currentScenes = scenes[chapterIdForGeneratedScene] || []; const nextOrder = currentScenes.length > 0 ? Math.max(...currentScenes.map(s => s.order)) + 1 : 1;
             const r = await createScene(projectId, chapterIdForGeneratedScene, { title: title, order: nextOrder, content: generatedSceneContent });
             setScenes(p => ({ ...p, [chapterIdForGeneratedScene]: [...(p[chapterIdForGeneratedScene] || []), r.data].sort((a, b) => a.order - b.order) }));
-            setShowGeneratedSceneModal(false); setGeneratedSceneContent(''); setChapterIdForGeneratedScene(null); refreshData();
+            setShowGeneratedSceneModal(false); setGeneratedSceneContent(''); setChapterIdForGeneratedScene(null); setGeneratingChapterId(null); // Clear generating ID on success
+            refreshData();
         } catch (err) { const msg = err.response?.data?.detail || err.message || 'Failed to create scene from draft.'; setCreateSceneError(msg); }
         finally { setIsCreatingSceneFromDraft(false); }
     }, [chapterIdForGeneratedScene, generatedSceneContent, scenes, projectId, refreshData]);
 
-    const handleSummaryChange = useCallback((chapterId, value) => { setGenerationSummaries(prev => ({ ...prev, [chapterId]: value })); if (generationError && generatingChapterId === chapterId) { setGenerationError(null); setGeneratingChapterId(null); } }, [generationError, generatingChapterId]);
+    const handleSummaryChange = useCallback((chapterId, value) => {
+        setGenerationSummaries(prev => ({ ...prev, [chapterId]: value }));
+        // Clear error for this specific chapter if user starts typing a new summary
+        if (generationError && generatingChapterId === chapterId) {
+            setGenerationError(null);
+            setGeneratingChapterId(null);
+        }
+     }, [generationError, generatingChapterId]); // Added dependencies
+
     const copyGeneratedText = useCallback(() => { navigator.clipboard.writeText(generatedSceneContent).catch(err => console.error('Failed to copy text: ', err)); }, [generatedSceneContent]);
 
     // --- Split Chapter Handlers ---
     const handleSplitInputChange = useCallback((chapterId, value) => {
         setSplitInputContent(prev => ({ ...prev, [chapterId]: value }));
-        if (splitError && splittingChapterId === chapterId) { setSplitError(null); setSplittingChapterId(null); }
-    }, [splitError, splittingChapterId]);
+        // Clear error for this specific chapter if user starts typing new content
+        if (splitError && splittingChapterId === chapterId) {
+            setSplitError(null);
+            setSplittingChapterId(null);
+        }
+    }, [splitError, splittingChapterId]); // Added dependencies
 
     const handleSplitChapter = useCallback(async (chapterId) => {
         const contentToSplit = splitInputContent[chapterId] || '';
-        if (!contentToSplit.trim()) { setSplitError("Please paste the chapter content..."); setSplittingChapterId(chapterId); return; }
-        setIsSplittingChapter(true); setSplittingChapterId(chapterId); setSplitError(null);
-        setProposedSplits([]); setShowSplitModal(false); setCreateFromSplitError(null);
-        try { const r = await splitChapterIntoScenes(projectId, chapterId, { chapter_content: contentToSplit }); setProposedSplits(r.data.proposed_scenes || []); setChapterIdForSplits(chapterId); setShowSplitModal(true); }
-        catch (err) { const msg = err.response?.data?.detail || err.message || 'Failed to split chapter.'; setSplittingChapterId(chapterId); setSplitError(msg); setShowSplitModal(false); }
-        finally { setIsSplittingChapter(false); /* Keep splittingChapterId if error */ }
-    }, [splitInputContent, projectId]);
+        if (!contentToSplit.trim()) {
+            setSplitError("Please paste the chapter content...");
+            setSplittingChapterId(chapterId);
+            return;
+        }
+        setIsSplittingChapter(true);
+        setSplittingChapterId(chapterId);
+        setSplitError(null); // Clear previous error for this chapter
+        setProposedSplits([]);
+        setShowSplitModal(false);
+        setCreateFromSplitError(null);
+
+        try {
+            const response = await splitChapterIntoScenes(projectId, chapterId, { chapter_content: contentToSplit });
+            // --- ADDED: Check for error message in response (though less likely here) ---
+            // Assuming the backend raises HTTPException for errors, this might not be needed,
+            // but added for robustness in case it returns an error structure differently.
+            if (response.data?.error) { // Check for a potential 'error' field
+                 console.error(`[ProjectDetail] Split chapter returned an error: ${response.data.error}`);
+                 setSplitError(response.data.error);
+                 setShowSplitModal(false);
+            } else {
+            // --- END ADDED ---
+                 setProposedSplits(response.data.proposed_scenes || []);
+                 setChapterIdForSplits(chapterId);
+                 setShowSplitModal(true);
+                 setSplitError(null); // Clear error on success
+            }
+        } catch (err) {
+            console.error("[ProjectDetail] Error calling splitChapterIntoScenes API:", err);
+            const msg = err.response?.data?.detail || err.message || 'Failed to split chapter.';
+            setSplitError(msg); // Set error state for this chapter
+            setShowSplitModal(false);
+        } finally {
+            console.log("[ProjectDetail] Finished handleSplitChapter.");
+            setIsSplittingChapter(false);
+            // Keep splittingChapterId set if there was an error
+            // Clear it only on success or modal close
+        }
+    }, [splitInputContent, projectId]); // Added dependencies
 
     const handleCreateScenesFromSplit = useCallback(async () => {
         if (!chapterIdForSplits || proposedSplits.length === 0) { setCreateFromSplitError("No chapter ID or proposed splits available."); return; }
@@ -319,14 +401,31 @@ function ProjectDetailPage() {
         if (createdScenes.length > 0) { setScenes(p => ({ ...p, [chapterIdForSplits]: [...(p[chapterIdForSplits] || []), ...createdScenes].sort((a, b) => a.order - b.order) })); }
         setIsCreatingScenesFromSplit(false);
         if (errors.length > 0) { setCreateFromSplitError(errors.join(' | ')); }
-        else { setShowSplitModal(false); setProposedSplits([]); setChapterIdForSplits(null); }
+        else { setShowSplitModal(false); setProposedSplits([]); setChapterIdForSplits(null); setSplittingChapterId(null); } // Clear splitting ID on success
         refreshData();
     }, [chapterIdForSplits, proposedSplits, scenes, projectId, refreshData]);
 
     const handleCloseSplitModal = useCallback(() => {
         setShowSplitModal(false); setProposedSplits([]); setChapterIdForSplits(null); setCreateFromSplitError(null);
-        if (splitError && chapterIdForSplits === splittingChapterId) { setSplitError(null); setSplittingChapterId(null); }
-    }, [splitError, chapterIdForSplits, splittingChapterId]);
+        // Clear the specific chapter's split error if the modal is closed
+        if (splitError && chapterIdForSplits === splittingChapterId) {
+            setSplitError(null);
+            setSplittingChapterId(null);
+        }
+    }, [splitError, chapterIdForSplits, splittingChapterId]); // Added dependencies
+
+    // --- Callback for closing the generated scene modal ---
+    const handleCloseGeneratedSceneModal = useCallback(() => {
+        setShowGeneratedSceneModal(false);
+        setGeneratedSceneContent('');
+        setChapterIdForGeneratedScene(null);
+        setCreateSceneError(null);
+        // Clear the specific chapter's generation error if the modal is closed
+        if (generationError && chapterIdForGeneratedScene === generatingChapterId) {
+            setGenerationError(null);
+            setGeneratingChapterId(null);
+        }
+    }, [generationError, chapterIdForGeneratedScene, generatingChapterId]); // Added dependencies
 
 
     // --- Combined Loading State ---
@@ -348,7 +447,8 @@ function ProjectDetailPage() {
             {showGeneratedSceneModal && (
                 <div data-testid="generated-scene-modal" style={modalStyles.overlay}>
                      <div style={modalStyles.content}>
-                        <button onClick={() => setShowGeneratedSceneModal(false)} style={modalStyles.closeButton}>×</button>
+                        {/* Use the specific close handler */}
+                        <button onClick={handleCloseGeneratedSceneModal} style={modalStyles.closeButton}>×</button>
                         <h3>Generated Scene Draft</h3>
                         {createSceneError && <p style={{ color: 'red', marginBottom: '10px' }}>Error: {createSceneError}</p>}
                         <textarea readOnly value={generatedSceneContent} style={modalStyles.textarea} />
@@ -421,6 +521,7 @@ function ProjectDetailPage() {
                                     editedChapterTitleForInput={editedChapterTitle}
                                     isSavingThisChapter={isSavingChapter && editingChapterId === chapter.id}
                                     saveChapterError={editingChapterId === chapter.id ? saveChapterError : null}
+                                    // Pass down the specific error for this chapter's generation
                                     isGeneratingSceneForThisChapter={isGeneratingScene && generatingChapterId === chapter.id}
                                     generationErrorForThisChapter={generatingChapterId === chapter.id ? generationError : null}
                                     generationSummaryForInput={generationSummaries[chapter.id] || ''}
@@ -438,6 +539,7 @@ function ProjectDetailPage() {
                                     // Pass split props
                                     splitInputContentForThisChapter={splitInputContent[chapter.id] || ''}
                                     isSplittingThisChapter={isSplittingChapter && splittingChapterId === chapter.id}
+                                    // Pass down the specific error for this chapter's split
                                     splitErrorForThisChapter={splittingChapterId === chapter.id ? splitError : null}
                                     onSplitInputChange={handleSplitInputChange}
                                     onSplitChapter={handleSplitChapter}
