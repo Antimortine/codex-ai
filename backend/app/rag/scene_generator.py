@@ -22,12 +22,47 @@ from llama_index.core.indices.vector_store import VectorStoreIndex
 from llama_index.core.llms import LLM
 from typing import List, Tuple, Optional, Dict # Keep Dict for type hint clarity
 
+# --- ADDED: Import tenacity and ClientError for retry logic ---
+from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception, RetryError
+from google.genai.errors import ClientError
+# --- END ADDED ---
+
 from app.core.config import settings
 # Removed file_service import
 
 logger = logging.getLogger(__name__)
 
 # PREVIOUS_SCENE_COUNT is now only used by AIService to decide how many scenes to load
+
+# --- ADDED: Retry predicate function ---
+def _is_retryable_google_api_error(exception):
+    """Return True if the exception is a Google API 429 error."""
+    if isinstance(exception, ClientError):
+        status_code = None
+        try:
+            # Attempt to extract status code robustly
+            if hasattr(exception, 'response') and hasattr(exception.response, 'status_code'):
+                status_code = exception.response.status_code
+            elif hasattr(exception, 'status_code'): # Sometimes it's directly on the exception
+                 status_code = exception.status_code
+            elif isinstance(exception.args, (list, tuple)) and len(exception.args) > 0:
+                # Check if first arg is int status code
+                if isinstance(exception.args[0], int):
+                    status_code = int(exception.args[0])
+                # Check if first arg is string containing status code (less reliable)
+                elif isinstance(exception.args[0], str) and '429' in exception.args[0]:
+                    logger.warning("Google API rate limit hit (ClientError 429 - string check). Retrying scene generation...")
+                    return True
+        except (ValueError, TypeError, IndexError, AttributeError):
+            pass # Ignore errors during status code extraction
+
+        if status_code == 429:
+             logger.warning("Google API rate limit hit (ClientError 429). Retrying scene generation...")
+             return True
+    logger.debug(f"Non-retryable error encountered during scene generation: {type(exception)}")
+    return False
+# --- END ADDED ---
+
 
 class SceneGenerator:
     """Handles RAG scene generation logic, given explicit and retrieved context."""
@@ -47,6 +82,19 @@ class SceneGenerator:
         self.index = index
         self.llm = llm
         logger.info("SceneGenerator initialized.")
+
+    # --- ADDED: Retry decorator and helper method ---
+    @retry(
+        stop=stop_after_attempt(3),
+        wait=wait_exponential(multiplier=1, min=5, max=30),
+        retry=retry_if_exception(_is_retryable_google_api_error),
+        reraise=True # Re-raise the exception if retries fail
+    )
+    async def _execute_llm_complete(self, prompt: str):
+        """Helper function to isolate the LLM call for retry logic."""
+        logger.info("Calling LLM for scene generation...")
+        return await self.llm.acomplete(prompt)
+    # --- END ADDED ---
 
     async def generate_scene(
         self,
@@ -76,10 +124,10 @@ class SceneGenerator:
             The generated scene content as a Markdown string or an error message.
         """
         logger.info(f"SceneGenerator: Generating scene for project '{project_id}', chapter '{chapter_id}'. Previous order: {previous_scene_order}. Summary: '{prompt_summary}'")
+        retrieved_nodes: List[NodeWithScore] = [] # Initialize here
 
         try:
             # --- 1. Retrieve RAG Context --- (Explicit context is now passed in)
-            # Retrieval query can still benefit from knowing the intended position
             retrieval_query = f"Context relevant for writing a new scene after scene order {previous_scene_order} in chapter {chapter_id}."
             if prompt_summary:
                 retrieval_query += f" Scene focus: {prompt_summary}"
@@ -93,7 +141,7 @@ class SceneGenerator:
                     filters=[ExactMatchFilter(key="project_id", value=project_id)]
                 ),
             )
-            retrieved_nodes: List[NodeWithScore] = await retriever.aretrieve(retrieval_query)
+            retrieved_nodes = await retriever.aretrieve(retrieval_query) # Assign to variable
             logger.info(f"Retrieved {len(retrieved_nodes)} nodes for RAG context.")
 
             rag_context_list = []
@@ -117,10 +165,8 @@ class SceneGenerator:
             # Construct Previous Scenes part of the prompt using the passed data
             previous_scenes_prompt_part = ""
             if explicit_previous_scenes:
-                 # Find the highest order number among the provided previous scenes
                  actual_previous_order = max(order for order, _ in explicit_previous_scenes) if explicit_previous_scenes else None
-                 for order, content in explicit_previous_scenes: # Assumes already sorted chronologically
-                      # Use the actual highest order found in the list for the "Immediately Previous" label
+                 for order, content in explicit_previous_scenes:
                       label = f"Immediately Previous Scene (Order: {order})" if order == actual_previous_order else f"Previous Scene (Order: {order})"
                       previous_scenes_prompt_part += f"**{label}:**\n```markdown\n{content}\n```\n\n"
             else:
@@ -135,7 +181,6 @@ class SceneGenerator:
 
             user_message_content = (
                 f"{main_instruction}"
-                # Use the passed explicit context strings
                 f"**Project Plan:**\n```markdown\n{explicit_plan}\n```\n\n"
                 f"**Project Synopsis:**\n```markdown\n{explicit_synopsis}\n```\n\n"
                 f"{previous_scenes_prompt_part}"
@@ -156,21 +201,38 @@ class SceneGenerator:
 
             full_prompt = f"{system_prompt}\n\nUser: {user_message_content}\n\nAssistant:"
 
-            # Log the full prompt for debugging
-            # logger.debug(f"SceneGenerator: Full prompt being sent to LLM (length: {len(full_prompt)}):\n--- PROMPT START ---\n{full_prompt}\n--- PROMPT END ---")
-            logger.info("Calling LLM for enhanced scene generation...")
-            llm_response = await self.llm.acomplete(full_prompt)
+            # --- 3. Call LLM via Retry Helper ---
+            logger.debug(f"SceneGenerator: Calling _execute_llm_complete...")
+            llm_response = await self._execute_llm_complete(full_prompt)
+            # --- END MODIFIED ---
 
             generated_text = llm_response.text if llm_response else ""
 
             if not generated_text.strip():
                  logger.warning("LLM returned an empty response for scene generation.")
+                 # --- MODIFIED: Add "Error: " prefix ---
                  return "Error: The AI failed to generate a scene draft. Please try again."
+                 # --- END MODIFIED ---
 
             logger.info(f"Enhanced scene generation successful for project '{project_id}', chapter '{chapter_id}'.")
             return generated_text.strip()
 
+        # --- ADDED: Specific handling for ClientError after retries ---
+        except ClientError as e:
+             if _is_retryable_google_api_error(e): # Check if it's the 429 error that persisted
+                  logger.error(f"Rate limit error persisted after retries for scene generation: {e}", exc_info=False)
+                  # --- MODIFIED: Add "Error: " prefix ---
+                  return f"Error: Rate limit exceeded after multiple retries. Please wait and try again."
+                  # --- END MODIFIED ---
+             else:
+                  # Handle other non-retryable ClientErrors
+                  logger.error(f"Non-retryable ClientError during scene generation for project '{project_id}', chapter '{chapter_id}': {e}", exc_info=True)
+                  # --- MODIFIED: Add "Error: " prefix ---
+                  return f"Error: An unexpected error occurred while communicating with the AI service. Details: {e}"
+                  # --- END MODIFIED ---
+        # --- END ADDED ---
         except Exception as e:
             logger.error(f"Error during scene generation processing for project '{project_id}', chapter '{chapter_id}': {e}", exc_info=True)
-            # Return a specific error message that can be shown to the user
+            # --- MODIFIED: Add "Error: " prefix ---
             return f"Error: An unexpected error occurred during scene generation. Please check logs."
+            # --- END MODIFIED ---

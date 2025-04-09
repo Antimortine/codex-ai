@@ -122,18 +122,22 @@ class QueryProcessor:
              # Catch ClientError specifically (which tenacity re-raises if it was the cause)
              if _is_retryable_google_api_error(e): # Check if it's the 429 error
                   logger.error(f"Rate limit error persisted after retries for query: {e}", exc_info=False)
-                  # --- ADDED Return statement for rate limit error ---
-                  error_message = f"Rate limit exceeded for query after multiple retries. Please wait and try again."
+                  # --- MODIFIED: Add "Error: " prefix ---
+                  error_message = f"Error: Rate limit exceeded for query after multiple retries. Please wait and try again."
+                  # --- END MODIFIED ---
                   return error_message, retrieved_nodes # Return nodes retrieved before failure
-                  # --- END ADDED ---
              else:
                   # Handle other non-retryable ClientErrors
                   logger.error(f"Non-retryable ClientError during query for project '{project_id}': {e}", exc_info=True)
-                  error_message = f"Sorry, an error occurred while communicating with the AI service for project '{project_id}'. Details: {e}"
+                  # --- MODIFIED: Add "Error: " prefix ---
+                  error_message = f"Error: Sorry, an error occurred while communicating with the AI service for project '{project_id}'. Details: {e}"
+                  # --- END MODIFIED ---
                   return error_message, [] # Return empty nodes
         except Exception as e:
              # Catch other errors (like retriever errors, prompt errors, etc.)
              logger.error(f"Error during RAG query for project '{project_id}': {e}", exc_info=True)
-             error_message = f"Sorry, an internal error occurred processing the query. Please check logs."
+             # --- MODIFIED: Add "Error: " prefix ---
+             error_message = f"Error: Sorry, an internal error occurred processing the query. Please check logs."
+             # --- END MODIFIED ---
              return error_message, []
         # --- END CORRECTED ---

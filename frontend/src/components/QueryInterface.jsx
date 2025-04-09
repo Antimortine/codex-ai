@@ -83,6 +83,7 @@ const styles = {
     error: {
         color: 'red',
         marginTop: '10px',
+        fontWeight: 'bold', // Make error more prominent
     },
     loading: {
         marginTop: '10px',
@@ -103,19 +104,40 @@ function QueryInterface({ projectId }) {
 
         setIsLoading(true);
         setError(null);
-        setResponse(null); // Clear previous response
+        setResponse(null); // Clear previous response and error
 
         try {
             console.log(`Sending query for project ${projectId}: "${query}"`);
             const apiResponse = await queryProjectContext(projectId, { query: query });
-            console.log("API Response received:", apiResponse.data);
-            setResponse(apiResponse.data); // Expecting { answer: "...", source_nodes: [...] }
+            console.log("[QueryInterface] Raw API Response:", apiResponse); // Log raw response
+
+            const answerText = apiResponse.data?.answer;
+            console.log(`[QueryInterface] Extracted answerText: "${answerText}" (Type: ${typeof answerText})`); // Log extracted answer
+
+            // --- Check if the answer itself is an error message ---
+            const isString = typeof answerText === 'string';
+            const startsWithError = isString && answerText.trim().startsWith("Error:");
+            console.log(`[QueryInterface] isString: ${isString}, startsWithError: ${startsWithError}`); // Log check results
+
+            if (isString && startsWithError) {
+                console.warn(`[QueryInterface] Query returned an error message in the answer field. Setting error state.`);
+                setError(answerText); // Set the error state with the message from the answer
+                setResponse(null);    // Clear response state
+            } else {
+                console.log(`[QueryInterface] Setting response state.`);
+                setResponse(apiResponse.data); // Set response state
+                setError(null);             // Clear error state
+            }
+
         } catch (err) {
-            console.error("Error querying project context:", err);
+            console.error("[QueryInterface] Error in API call catch block:", err);
+            // Extract error message more robustly
             const errorMsg = err.response?.data?.detail || err.message || 'Failed to get response from AI.';
+            console.log(`[QueryInterface] Setting error state from catch block: "${errorMsg}"`);
             setError(errorMsg);
             setResponse(null);
         } finally {
+            console.log("[QueryInterface] Setting isLoading to false.");
             setIsLoading(false);
         }
     };
@@ -123,9 +145,11 @@ function QueryInterface({ projectId }) {
     // Helper to extract filename from path
     const getFilename = (filePath) => {
         if (!filePath) return 'Unknown Source';
-        // Basic filename extraction, handles both / and \
         return filePath.split(/[\\/]/).pop();
     }
+
+    // Log state just before rendering
+    console.log(`[QueryInterface] Rendering - isLoading: ${isLoading}, error: "${error}", response: ${response ? JSON.stringify(response).substring(0,100)+'...' : 'null'}`);
 
     return (
         <div style={styles.container}>
@@ -137,7 +161,7 @@ function QueryInterface({ projectId }) {
                     onChange={(e) => setQuery(e.target.value)}
                     placeholder="Ask a question about your project plan, characters, scenes..."
                     disabled={isLoading}
-                    rows={3} // Start with 3 rows
+                    rows={3}
                 />
                 <br />
                 <button
@@ -150,10 +174,12 @@ function QueryInterface({ projectId }) {
             </form>
 
             {isLoading && <p style={styles.loading}>Waiting for AI response...</p>}
-            {error && <p style={styles.error}>Error: {error}</p>}
+            {/* Display error state prominently */}
+            {error && <p style={styles.error} data-testid="query-error">{error}</p>}
 
-            {response && (
-                <div style={styles.responseArea}>
+            {/* Only display response area if there's a valid response AND no error */}
+            {response && !error && (
+                <div style={styles.responseArea} data-testid="query-response">
                     <h4>AI Answer:</h4>
                     <p>{response.answer}</p>
 

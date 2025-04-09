@@ -112,7 +112,9 @@ class ChapterSplitter:
                  logger.error(f"Pydantic validation failed inside tool function: {e}. Data: {proposed_scenes_data}")
                  # Provide more specific feedback to the agent
                  error_details = "; ".join([f"{err['loc'][1]}: {err['msg']}" for err in e.errors()]) if isinstance(e.errors(), list) else str(e)
+                 # --- MODIFIED: Add "Error: " prefix ---
                  return f"Error: Validation failed for proposed scenes data. Details: {error_details}. Ensure each scene has 'suggested_title' (string) and 'content' (string)."
+                 # --- END MODIFIED ---
 
 
         scene_list_tool = FunctionTool.from_defaults(
@@ -161,10 +163,12 @@ class ChapterSplitter:
                  error_detail = "Agent failed to execute the tool correctly or store results."
                  if agent_response.response: error_detail += f" Agent response: {agent_response.response[:200]}..."
                  # Check if the tool function itself returned an error string
-                 tool_outputs = [node.raw_output for node in agent_response.source_nodes if hasattr(node, 'raw_output')]
+                 tool_outputs = [node.raw_output for node in agent_response.source_nodes if hasattr(node, 'raw_output')] if agent_response.source_nodes else [] # Check if source_nodes exists
                  if tool_outputs and isinstance(tool_outputs[0], str) and tool_outputs[0].startswith("Error:"):
                       error_detail = f"Tool execution failed: {tool_outputs[0]}"
-                 raise ValueError(error_detail)
+                 # --- MODIFIED: Raise HTTPException instead of ValueError ---
+                 raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error: {error_detail}")
+                 # --- END MODIFIED ---
 
             proposed_scenes_list = self._tool_result_storage["scenes"]
 
@@ -181,12 +185,24 @@ class ChapterSplitter:
         except ClientError as e:
              if _is_retryable_google_api_error(e):
                   logger.error(f"Rate limit error persisted after retries for chapter '{chapter_id}': {e}", exc_info=False)
-                  raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=f"Rate limit exceeded after multiple retries: {e}") from e
+                  # --- MODIFIED: Add "Error: " prefix ---
+                  raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=f"Error: Rate limit exceeded after multiple retries: {e}") from e
+                  # --- END MODIFIED ---
              else:
                   logger.error(f"Non-retryable ClientError during chapter splitting for chapter '{chapter_id}': {e}", exc_info=True)
-                  raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to split chapter due to Google API error: {e}") from e
+                  # --- MODIFIED: Add "Error: " prefix ---
+                  raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error: Failed to split chapter due to Google API error: {e}") from e
+                  # --- END MODIFIED ---
         except Exception as e:
              logger.error(f"Error during chapter splitting via ReActAgent for chapter '{chapter_id}': {e}", exc_info=True)
-             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to split chapter due to internal processing error: {e}") from e
+             # --- MODIFIED: Add "Error: " prefix ---
+             # Re-raise other exceptions as HTTP 500, ensuring the prefix
+             if isinstance(e, HTTPException): # If it's already an HTTPException, ensure prefix
+                 if not e.detail.startswith("Error: "):
+                     e.detail = f"Error: {e.detail}"
+                 raise e
+             else: # Wrap other exceptions
+                 raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error: Failed to split chapter due to internal processing error: {e}") from e
+             # --- END MODIFIED ---
         finally:
              self._tool_result_storage = {"scenes": None}

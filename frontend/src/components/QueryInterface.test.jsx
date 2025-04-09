@@ -15,7 +15,9 @@
  */
 
 import React from 'react';
-import { render, screen, waitFor } from '@testing-library/react';
+// --- ADDED: Import within ---
+import { render, screen, waitFor, within } from '@testing-library/react';
+// --- END ADDED ---
 import userEvent from '@testing-library/user-event';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
@@ -97,10 +99,11 @@ describe('QueryInterface', () => {
     await user.click(submitButton);
 
     // Wait for the answer to appear
-    expect(await screen.findByText(answerText)).toBeInTheDocument();
-    expect(screen.getByRole('heading', { name: /ai answer/i })).toBeInTheDocument();
+    const responseArea = await screen.findByTestId('query-response');
+    expect(within(responseArea).getByText(answerText)).toBeInTheDocument(); // Check within response area
+    expect(within(responseArea).getByRole('heading', { name: /ai answer/i })).toBeInTheDocument();
     expect(screen.queryByText(/waiting for AI response.../i)).not.toBeInTheDocument();
-    expect(screen.queryByText(/error:/i)).not.toBeInTheDocument();
+    expect(screen.queryByTestId('query-error')).not.toBeInTheDocument(); // No error displayed
   });
 
   it('displays source nodes when API call succeeds and returns nodes', async () => {
@@ -121,20 +124,21 @@ describe('QueryInterface', () => {
     await user.click(submitButton);
 
     // Wait for answer
-    await screen.findByText(answerText);
+    const responseArea = await screen.findByTestId('query-response');
+    expect(within(responseArea).getByText(answerText)).toBeInTheDocument();
 
-    // Check sources heading
-    expect(screen.getByRole('heading', { name: /sources used/i })).toBeInTheDocument();
+    // Check sources heading within response area
+    expect(within(responseArea).getByRole('heading', { name: /sources used/i })).toBeInTheDocument();
 
-    // Check individual source nodes
-    expect(screen.getByText('plan.md (Score: 0.950)')).toBeInTheDocument();
-    expect(screen.getByText('Source snippet one.')).toBeInTheDocument();
+    // Check individual source nodes within response area
+    expect(within(responseArea).getByText('plan.md (Score: 0.950)')).toBeInTheDocument();
+    expect(within(responseArea).getByText('Source snippet one.')).toBeInTheDocument();
 
-    expect(screen.getByText('scene1.md (Score: 0.880)')).toBeInTheDocument();
-    expect(screen.getByText('Source snippet two.')).toBeInTheDocument();
+    expect(within(responseArea).getByText('scene1.md (Score: 0.880)')).toBeInTheDocument();
+    expect(within(responseArea).getByText('Source snippet two.')).toBeInTheDocument();
 
-    expect(screen.getByText('file.txt (Score: N/A)')).toBeInTheDocument(); // Check null score handling
-    expect(screen.getByText('Source snippet three.')).toBeInTheDocument();
+    expect(within(responseArea).getByText('file.txt (Score: N/A)')).toBeInTheDocument(); // Check null score handling
+    expect(within(responseArea).getByText('Source snippet three.')).toBeInTheDocument();
   });
 
    it('displays specific message when API call succeeds but returns no source nodes', async () => {
@@ -150,11 +154,12 @@ describe('QueryInterface', () => {
     await user.click(submitButton);
 
     // Wait for answer
-    await screen.findByText(answerText);
+    const responseArea = await screen.findByTestId('query-response');
+    expect(within(responseArea).getByText(answerText)).toBeInTheDocument();
 
-    // Check for the specific message
-    expect(screen.getByText('(No specific sources retrieved for this answer)')).toBeInTheDocument();
-    expect(screen.queryByRole('heading', { name: /sources used/i })).not.toBeInTheDocument();
+    // Check for the specific message within response area
+    expect(within(responseArea).getByText('(No specific sources retrieved for this answer)')).toBeInTheDocument();
+    expect(within(responseArea).queryByRole('heading', { name: /sources used/i })).not.toBeInTheDocument();
   });
 
   it('displays an error message if API call fails', async () => {
@@ -170,9 +175,14 @@ describe('QueryInterface', () => {
     await user.type(queryInput, queryText);
     await user.click(submitButton);
 
-    // Wait for error message
-    expect(await screen.findByText(`Error: ${errorMessage}`)).toBeInTheDocument();
-    expect(screen.queryByRole('heading', { name: /ai answer/i })).not.toBeInTheDocument();
+    // --- FIXED ASSERTION ---
+    // Wait for error message using data-testid
+    const errorElement = await screen.findByTestId('query-error');
+    expect(errorElement).toBeInTheDocument();
+    expect(errorElement).toHaveTextContent(errorMessage); // Check the content without "Error: " prefix
+    // --- END FIXED ASSERTION ---
+
+    expect(screen.queryByTestId('query-response')).not.toBeInTheDocument(); // No response area
     expect(screen.queryByText(/waiting for AI response.../i)).not.toBeInTheDocument();
   });
 
@@ -189,9 +199,42 @@ describe('QueryInterface', () => {
     await user.type(queryInput, queryText);
     await user.click(submitButton);
 
-    // Wait for generic error message
-    expect(await screen.findByText(`Error: ${genericErrorMessage}`)).toBeInTheDocument();
-    expect(screen.queryByRole('heading', { name: /ai answer/i })).not.toBeInTheDocument();
+    // --- FIXED ASSERTION ---
+    // Wait for generic error message using data-testid
+    const errorElement = await screen.findByTestId('query-error');
+    expect(errorElement).toBeInTheDocument();
+    expect(errorElement).toHaveTextContent(genericErrorMessage); // Check the content without "Error: " prefix
+    // --- END FIXED ASSERTION ---
+
+    expect(screen.queryByTestId('query-response')).not.toBeInTheDocument(); // No response area
   });
+
+  // --- NEW TEST CASE ---
+  it('displays an error message if API returns answer starting with "Error:"', async () => {
+    const queryText = 'Query that returns error in answer';
+    const errorMessageInAnswer = 'Error: Rate limit exceeded after multiple retries. Please wait and try again.';
+    // Simulate successful API call but with error message in the answer field
+    queryProjectContext.mockResolvedValue({
+      data: { answer: errorMessageInAnswer, source_nodes: [] },
+    });
+
+    render(<QueryInterface projectId={TEST_PROJECT_ID} />);
+    const submitButton = screen.getByRole('button', { name: /submit query/i });
+    const queryInput = screen.getByPlaceholderText(/ask a question about your project/i);
+
+    await user.type(queryInput, queryText);
+    await user.click(submitButton);
+
+    // Wait for error message using data-testid
+    const errorElement = await screen.findByTestId('query-error');
+    expect(errorElement).toBeInTheDocument();
+    // Check that the full error message from the answer field is displayed
+    expect(errorElement).toHaveTextContent(errorMessageInAnswer);
+
+    // Ensure the response area is NOT displayed
+    expect(screen.queryByTestId('query-response')).not.toBeInTheDocument();
+    expect(screen.queryByText(/waiting for AI response.../i)).not.toBeInTheDocument();
+  });
+  // --- END NEW TEST CASE ---
 
 });

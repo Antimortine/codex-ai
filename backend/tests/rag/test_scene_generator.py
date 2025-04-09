@@ -13,11 +13,16 @@
 # limitations under the License.
 
 import pytest
-from unittest.mock import MagicMock, AsyncMock, patch, ANY
+from unittest.mock import MagicMock, AsyncMock, patch, ANY, call
 from llama_index.core.indices.vector_store import VectorStoreIndex
 from llama_index.core.llms import LLM, CompletionResponse
 from llama_index.core.retrievers import VectorIndexRetriever
 from llama_index.core.schema import NodeWithScore, TextNode
+
+# --- ADDED: Import tenacity and ClientError ---
+from tenacity import RetryError
+from google.genai.errors import ClientError, APIError # Import APIError for type checking if needed
+# --- END ADDED ---
 
 # Import the class we are testing
 from app.rag.scene_generator import SceneGenerator
@@ -25,6 +30,40 @@ from app.core.config import settings # For RAG_GENERATION_SIMILARITY_TOP_K
 
 # --- Fixtures are now defined in tests/rag/conftest.py ---
 # Removed mock_llm, mock_retriever, mock_index definitions
+
+# --- CORRECTED Helper to create mock ClientError ---
+def create_mock_client_error(status_code: int, message: str = "API Error") -> ClientError:
+    """Creates a mock ClientError, attempting different initializations."""
+    error_dict = {"error": {"message": message, "code": status_code}} # Include code in json
+    response_json = error_dict # Use the error dict as the minimal response_json
+
+    # Try common initialization patterns, providing response_json
+    try:
+        # Attempt initialization that might expect a response object
+        mock_response = MagicMock()
+        mock_response.status_code = status_code
+        mock_response.json.return_value = response_json # Mock the json() method
+        error = ClientError(message, response=mock_response, response_json=response_json)
+    except TypeError:
+        try:
+            # Attempt initialization with just message and response_json
+            error = ClientError(message, response_json=response_json)
+        except TypeError:
+            # Fallback: Basic initialization if others fail, still providing response_json
+            # This might still fail if the base APIError requires more, but it's the most likely fallback
+            try:
+                error = ClientError(f"{status_code} {message}", response_json=response_json)
+            except Exception as final_fallback_error:
+                 # If even the basic init fails, raise a more informative error for debugging the test itself
+                 pytest.fail(f"Could not initialize ClientError mock. Last error: {final_fallback_error}")
+
+
+    # Ensure status_code attribute exists if needed by the predicate
+    if not hasattr(error, 'status_code') or error.status_code != status_code:
+         setattr(error, 'status_code', status_code) # Manually set attribute if missing
+
+    return error
+# --- END CORRECTED ---
 
 
 # --- Test SceneGenerator ---
@@ -219,7 +258,7 @@ async def test_generate_scene_llm_error(
     mock_llm: MagicMock,             # Injected from conftest.py
     mock_index: MagicMock            # Injected from conftest.py
 ):
-    """Test generation when the LLM call fails."""
+    """Test generation when the LLM call fails with a non-retryable error."""
     # Arrange
     project_id = "proj-sg-5"
     chapter_id = "ch-sg-5"
@@ -232,7 +271,8 @@ async def test_generate_scene_llm_error(
 
     mock_retriever_instance = mock_retriever_class.return_value
     mock_retriever_instance.aretrieve = AsyncMock(return_value=retrieved_nodes)
-    mock_llm.acomplete = AsyncMock(side_effect=RuntimeError("LLM failed"))
+    # Simulate a non-retryable error
+    mock_llm.acomplete = AsyncMock(side_effect=ValueError("LLM failed validation"))
 
     # Instantiate and Act
     generator = SceneGenerator(index=mock_index, llm=mock_llm)
@@ -244,7 +284,7 @@ async def test_generate_scene_llm_error(
     # Assert
     assert "Error: An unexpected error occurred during scene generation." in generated_text
     mock_retriever_instance.aretrieve.assert_awaited_once()
-    mock_llm.acomplete.assert_awaited_once() # LLM was called
+    mock_llm.acomplete.assert_awaited_once() # LLM was called (once, no retry)
 
 @pytest.mark.asyncio
 @patch('app.rag.scene_generator.VectorIndexRetriever', autospec=True)
@@ -279,3 +319,44 @@ async def test_generate_scene_llm_empty_response(
     assert "Error: The AI failed to generate a scene draft." in generated_text
     mock_retriever_instance.aretrieve.assert_awaited_once()
     mock_llm.acomplete.assert_awaited_once()
+
+# --- NEW TEST FOR RATE LIMIT HANDLING ---
+@pytest.mark.asyncio
+@patch('app.rag.scene_generator.VectorIndexRetriever', autospec=True)
+async def test_generate_scene_handles_retry_failure_gracefully(
+    mock_retriever_class: MagicMock,
+    mock_llm: MagicMock,             # Injected from conftest.py
+    mock_index: MagicMock            # Injected from conftest.py
+):
+    """Test that generate_scene returns a specific error after rate limit retries fail."""
+    # Arrange
+    project_id = "proj-sg-retry-fail"
+    chapter_id = "ch-sg-retry-fail"
+    prompt_summary = "Summary"
+    previous_scene_order = 1
+    plan = "Plan"
+    synopsis = "Synopsis"
+    explicit_previous_scenes = [(1, "Previous")]
+    retrieved_nodes = []
+
+    mock_retriever_instance = mock_retriever_class.return_value
+    mock_retriever_instance.aretrieve = AsyncMock(return_value=retrieved_nodes)
+
+    # Simulate LLM always raising 429 via the helper method
+    # The SceneGenerator's _execute_llm_complete method will be called by generate_scene
+    # We mock the base llm.acomplete which _execute_llm_complete calls
+    mock_llm.acomplete.side_effect = create_mock_client_error(429, "Rate limit")
+
+    # Instantiate and Act
+    generator = SceneGenerator(index=mock_index, llm=mock_llm)
+    generated_text = await generator.generate_scene(
+        project_id, chapter_id, prompt_summary, previous_scene_order,
+        plan, synopsis, explicit_previous_scenes
+    )
+
+    # Assert
+    assert "Error: Rate limit exceeded after multiple retries." in generated_text
+    # Verify the LLM was called multiple times due to retry
+    assert mock_llm.acomplete.await_count == 3 # Based on stop_after_attempt(3)
+    mock_retriever_instance.aretrieve.assert_awaited_once() # Retriever called once
+# --- END NEW TEST ---

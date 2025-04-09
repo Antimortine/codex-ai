@@ -134,7 +134,9 @@ class Rephraser:
 
             if not generated_text:
                  logger.warning("LLM returned an empty response for rephrase.")
+                 # --- MODIFIED: Add "Error: " prefix ---
                  return ["Error: The AI failed to generate suggestions. Please try again."]
+                 # --- END MODIFIED ---
 
             # 4. Parse the Numbered List Response
             # ... (parsing logic) ...
@@ -142,9 +144,12 @@ class Rephraser:
             suggestions = re.findall(r"^\s*\d+\.\s*(.*)", generated_text, re.MULTILINE)
             if not suggestions:
                 logger.warning(f"Could not parse numbered list from LLM response. Response was:\n{generated_text}")
+                # --- MODIFIED: Add "Error: " prefix ---
+                # Try splitting by lines as fallback, but still return error if that fails
                 suggestions = [line.strip() for line in generated_text.splitlines() if line.strip()]
                 if not suggestions: return [f"Error: Could not parse suggestions. Raw response: {generated_text}"]
                 logger.warning(f"Fallback parsing used (split by newline), got {len(suggestions)} potential suggestions.")
+                # --- END MODIFIED ---
             suggestions = [s.strip() for s in suggestions if s.strip()][:REPHRASE_SUGGESTION_COUNT]
 
 
@@ -156,15 +161,19 @@ class Rephraser:
              # Catch ClientError specifically (which tenacity re-raises if it was the cause)
              if _is_retryable_google_api_error(e): # Check if it's the 429 error
                   logger.error(f"Rate limit error persisted after retries for rephrase: {e}", exc_info=False)
-                  # --- ADDED Return statement for rate limit error ---
+                  # --- MODIFIED: Add "Error: " prefix ---
                   return [f"Error: Rate limit exceeded after multiple retries. Please wait and try again."]
-                  # --- END ADDED ---
+                  # --- END MODIFIED ---
              else:
                   # Handle other non-retryable ClientErrors
                   logger.error(f"Non-retryable ClientError during rephrase for project '{project_id}': {e}", exc_info=True)
+                  # --- MODIFIED: Add "Error: " prefix ---
                   return [f"Error: An unexpected error occurred while communicating with the AI service. Details: {e}"]
+                  # --- END MODIFIED ---
         except Exception as e:
              # Catch other errors
              logger.error(f"Error during rephrase for project '{project_id}': {e}", exc_info=True)
+             # --- MODIFIED: Add "Error: " prefix ---
              return [f"Error: An unexpected internal error occurred while rephrasing."]
+             # --- END MODIFIED ---
         # --- END CORRECTED ---
