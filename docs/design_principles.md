@@ -12,6 +12,7 @@ Based on the structure and implementation choices made for Codex AI, here are th
             *   `QueryProcessor`: Handles RAG queries, including prompt construction with explicit context.
             *   `SceneGenerator`: Handles scene generation, including prompt construction with explicit context.
             *   `Rephraser`: Handles rephrasing logic and prompt construction.
+            *   `ChapterSplitter`: Handles chapter splitting logic using an Agent. *(New!)*
             *   `RagEngine`: Facade simplifying access to the RAG processors from `AIService`.
         *   **Utility/Data Access Layer (`FileService`):** Centralizes file system interactions (Markdown content, JSON metadata) and triggers indexing via `IndexManager`.
     *   **Modular Routers (FastAPI):** API endpoints organized by feature (projects, chapters, ai, etc.).
@@ -23,10 +24,10 @@ Based on the structure and implementation choices made for Codex AI, here are th
     *   FastAPI manages dependencies for API endpoints (like `get_project_dependency`), promoting testability and decoupling. Manual singleton management is used for services/engines currently.
 
 4.  **Modularity and Extensibility (via LlamaIndex Abstractions):**
-    *   Using LlamaIndex's `LLM`, `VectorStore`, `BaseEmbedding` interfaces allows swapping core AI components (e.g., different LLMs, vector stores, or embedding models like the switch from Google to HuggingFace) primarily by changing configuration/adapters in `IndexManager` with relatively minimal impact on the RAG processors or `AIService`. This embodies the **Strategy Pattern** or **Adapter Pattern**.
+    *   Using LlamaIndex's `LLM`, `VectorStore`, `BaseEmbedding` interfaces allows swapping core AI components (e.g., different LLMs, vector stores, or embedding models) primarily by changing configuration/adapters in `IndexManager` with relatively minimal impact on the RAG processors or `AIService`. The current implementation uses Google Gemini as the LLM and `sentence-transformers/paraphrase-multilingual-mpnet-base-v2` as the embedding model. This embodies the **Strategy Pattern** or **Adapter Pattern**.
 
 5.  **Single Responsibility Principle (SRP) (Applied to Modules/Classes):**
-    *   Each module/class aims for a focused responsibility (e.g., `projects.py` for project API, `project_service.py` for project logic, `FileService` for file ops, `IndexManager` for index CUD, specific RAG processors for specific AI tasks). The refactoring of RAG logic into specific processors strengthened this.
+    *   Each module/class aims for a focused responsibility (e.g., `projects.py` for project API, `project_service.py` for project logic, `FileService` for file ops, `IndexManager` for index CUD, specific RAG processors like `QueryProcessor`, `SceneGenerator`, `Rephraser`, and `ChapterSplitter` for specific AI tasks). The refactoring of RAG logic into specific processors strengthened this.
 
 6.  **Don't Repeat Yourself (DRY):**
     *   Centralizing file system access and metadata I/O (`project_meta.json`, `chapter_meta.json`) within `FileService` reduces duplication across CRUD services.
@@ -44,13 +45,13 @@ Based on the structure and implementation choices made for Codex AI, here are th
     *   `.env` files and `app/core/config.py` (using Pydantic `BaseSettings`) manage settings and secrets, separating configuration from code.
 
 9.  **Clear Data Contracts (Pydantic):**
-    *   Models define API request/response structures, providing validation and documentation. Includes models for AI requests/responses (`AIQueryRequest`, `AISceneGenerationRequest`, `AIRephraseRequest`, etc.).
+    *   Models define API request/response structures, providing validation and documentation. Includes models for AI requests/responses (`AIQueryRequest`, `AISceneGenerationRequest`, `AIRephraseRequest`, `AIChapterSplitRequest`, etc.).
 
 10. **Reproducible Dependencies (`pip-tools`):**
     *   Using `requirements.in` to define direct dependencies and `pip-compile` to generate a locked `requirements.txt` ensures reproducible backend environments.
 
 11. **Testability:**
-    *   Initial tests using `pytest` and `TestClient` have been added for basic API validation (mocking services) and `FileService` operations (using temporary directories). Mocking is used to isolate units.
+    *   Tests using `pytest` and `TestClient` exist for API validation (mocking services) and `FileService` operations (using temporary directories). Frontend tests use `vitest` and `@testing-library/react`. Mocking is used to isolate units.
 
 **Principles We Should Keep in Mind Going Forward:**
 
@@ -59,6 +60,6 @@ Based on the structure and implementation choices made for Codex AI, here are th
 *   **Testability:** Continue expanding test coverage (services, RAG components with mocking, frontend tests).
 *   **Prompt Engineering:** Recognize that prompt design is crucial for RAG quality and requires dedicated effort and iteration.
 *   **Scalability:** Consider potential bottlenecks (e.g., LLM API calls, vector DB performance, embedding generation time) as the application grows. FastAPI's async nature helps.
-*   **Maintainability:** Refactor as needed (e.g., address deprecation warnings like FastAPI lifespan events, consider `PromptBuilder`).
+*   **Maintainability:** Refactor as needed (e.g., address deprecation warnings like FastAPI lifespan events, consider `PromptBuilder`). The refactoring of `ProjectDetailPage` into `ChapterSection` has improved frontend maintainability. *(Updated!)*
 
-Overall, the project follows standard practices for modern web applications, emphasizing separation, clear interfaces, and leveraging framework features. Recent refactoring (RAG processors, explicit context loading) and the introduction of testing and robust dependency management have strengthened the foundation.
+Overall, the project follows standard practices for modern web applications, emphasizing separation, clear interfaces, and leveraging framework features. Recent refactoring (RAG processors, explicit context loading, frontend component extraction) and the introduction of testing and robust dependency management have strengthened the foundation.

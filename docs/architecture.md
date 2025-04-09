@@ -1,3 +1,4 @@
+
 # Codex AI - System Architecture
 
 This document outlines the architecture of the Codex AI application.
@@ -31,6 +32,7 @@ graph LR
         QP["QueryProcessor"]
         SG["SceneGenerator"]
         RP["Rephraser"]
+        CS["ChapterSplitter"]
     end
 
     subgraph "External AI Services"
@@ -43,59 +45,35 @@ graph LR
         direction TB
         VDB["Vector DB (ChromaDB)"]
         STORE["File System (user_projects/, chroma_db/)"]
-        VDB -- Persists --> STORE
+        VDB --> STORE
     end
 
-    %% Define Connections
-    User -- HTTP Requests --> Frontend
-    Frontend -- REST API Calls --> API
+    %% Define Connections (Simplified Arrows)
+    User --> Frontend
+    Frontend --> API
 
-    Services -- Uses --> QP
-    Services -- Uses --> SG
-    Services -- Uses --> RP
-    Services -- Triggers/Uses --> IM
+    Services --> QP
+    Services --> SG
+    Services --> RP
+    Services --> CS
+    Services --> IM
 
-    FS -- Reads/Writes --> STORE
+    FS --> STORE
 
-    IM -- Uses --> EMB
-    IM -- Loads/Saves --> VDB
+    IM --> EMB
+    IM --> VDB
 
-    QP -- Retrieves From --> VDB
-    QP -- Uses --> LLM
+    QP --> VDB
+    QP --> LLM
 
-    SG -- Retrieves From --> VDB
-    SG -- Uses --> LLM
+    SG --> VDB
+    SG --> LLM
 
-    RP -- Retrieves From --> VDB
-    RP -- Uses --> LLM
+    RP --> VDB
+    RP --> LLM
 
-    %% Workflow Notes (as comments, Mermaid doesn't render these in the diagram itself)
-    %% --- Indexing Flow ---
-    %% 1. Frontend -> API -> Services -> FS (Write MD/JSON) -> STORE
-    %% 2. FS -> IM (Trigger Index)
-    %% 3. IM -> EMB (Generate Embeddings)
-    %% 4. IM -> VDB (Delete Old/Insert New Nodes)
-
-    %% --- Query Flow ---
-    %% 1. Frontend -> API -> Services
-    %% 2. Services -> FS (Load Plan/Synopsis) -> STORE
-    %% 3. Services -> QP (Pass Query + Explicit Context)
-    %% 4. QP -> VDB (Retrieve Nodes)
-    %% 5. QP -> LLM (Build Prompt + Call)
-    %% 6. LLM -> QP (Return Answer)
-    %% 7. QP -> Services (Return Answer + Sources)
-    %% 8. Services -> API -> Frontend (Return Formatted Response)
-
-    %% --- Scene Generation Flow ---
-    %% 1. Frontend -> API -> Services
-    %% 2. Services -> FS (Load Plan/Synopsis/Prev Scenes) -> STORE
-    %% 3. Services -> SG (Pass Prompt + Explicit Context)
-    %% 4. SG -> VDB (Retrieve Nodes)
-    %% 5. SG -> LLM (Build Prompt + Call)
-    %% 6. LLM -> SG (Return Draft)
-    %% 7. SG -> Services -> API -> Frontend (Return Draft)
+    CS --> LLM
 ```
-
 
 **Flow Description:**
 
@@ -111,13 +89,13 @@ graph LR
         
     -   FileService triggers the IndexManager (part of the **RAG Subsystem**) upon saving relevant content (.md files).
         
-    -   For AI tasks (Query, Generate, Rephrase), AIService loads necessary explicit context (like Plan, Synopsis, previous scenes) using FileService and then delegates the core AI logic to specific processors (QueryProcessor, SceneGenerator, Rephraser) within the **RAG Subsystem**, passing both explicit and retrieved context as needed.
+    -   For AI tasks (Query, Generate, Rephrase, Split), AIService loads necessary explicit context (like Plan, Synopsis, previous scenes) using FileService and then delegates the core AI logic to specific processors (QueryProcessor, SceneGenerator, Rephraser, ChapterSplitter) within the **RAG Subsystem**, passing both explicit and retrieved context as needed.
         
 5.  **RAG Subsystem:**
     
     -   IndexManager: Handles LlamaIndex setup, loads/updates/deletes documents in the **Vector DB (ChromaDB)**, generates embeddings via the **Embedding Model (HuggingFace)**, and injects project_id and other metadata.
         
-    -   QueryProcessor, SceneGenerator, Rephraser: Use components initialized by IndexManager. They perform RAG retrieval (querying the **Vector DB** with project_id filters), construct prompts using retrieved context and any explicit context passed from AIService, call the **LLM API (Google Gemini)**, and process the response.
+    -   QueryProcessor, SceneGenerator, Rephraser, ChapterSplitter: Use components initialized by IndexManager. They perform RAG retrieval (querying the **Vector DB** with project_id filters), construct prompts using retrieved context and any explicit context passed from AIService, call the **LLM API (Google Gemini)** (directly or via an Agent for ChapterSplitter), and process the response.
         
 6.  Responses flow back through the layers to the user.
     
@@ -126,7 +104,7 @@ graph LR
 
 ### 3.1. Frontend (React)
 
--   **Technology:** React, JavaScript/JSX, CSS, Axios, react-router-dom, @uiw/react-md-editor.
+-   **Technology:** React, Vite, JavaScript/JSX, CSS, Axios, react-router-dom, @uiw/react-md-editor.
     
 -   **UI Components:** Standard React components, AIEditorWrapper for Markdown editing with AI features.
     
@@ -160,7 +138,9 @@ graph LR
         
     -   **Rephraser:** Provides rephrasing suggestions using selected text, surrounding text, and retrieved RAG context.
         
-    -   **(Future)**  PromptBuilder (potential abstraction for prompt logic).
+    -   **ChapterSplitter:** Analyzes chapter content using an LLM Agent to propose scene splits. (New!)
+        
+    -   **(Future)** PromptBuilder (potential abstraction for prompt logic).
         
 -   **Abstraction:** Leverages LlamaIndex interfaces (LLM, VectorStore, BaseEmbedding) for potential future component swapping.
     
@@ -297,13 +277,40 @@ graph LR
 5.  Frontend displays the draft in a modal.
     
 
+### 4.4. AI Chapter Splitting (New!)
+
+1.  User pastes chapter content and clicks "Split Chapter (AI)" on Frontend -> Backend API (/ai/split/chapter/...) -> AIService.
+    
+2.  AIService.split_chapter_into_scenes:
+    
+    -   Calls FileService to load explicit Plan and Synopsis content.
+        
+    -   Calls ChapterSplitter.split(...), passing the chapter content from the request and the loaded explicit context.
+        
+3.  ChapterSplitter:
+    
+    -   Constructs a prompt including the chapter content, explicit Plan/Synopsis, and instructions for splitting.
+        
+    -   Initializes a ReActAgent with an LLM and a tool (save_proposed_scenes) for structured output.
+        
+    -   Calls the Agent with the prompt. The Agent interacts with the LLM and calls the tool.
+        
+    -   The tool validates and stores the proposed scene list (title, content).
+        
+    -   Returns the validated list of proposed scenes to AIService.
+        
+4.  AIService returns the proposed scenes in AIChapterSplitResponse to the Frontend.
+    
+5.  Frontend displays the proposed splits in a modal.
+    
+
 ## 5. Design Decisions & Principles
 
 -   **API-First:** Decoupled Frontend/Backend.
     
 -   **Layered Architecture:** Clear separation (API -> Service -> RAG/Utilities).
     
--   **Separation of Concerns (RAG):**  IndexManager handles index lifecycle/setup, specific processors (QueryProcessor, SceneGenerator, Rephraser) handle different AI tasks. AIService orchestrates and loads explicit context.
+-   **Separation of Concerns (RAG):** IndexManager handles index lifecycle/setup, specific processors (QueryProcessor, SceneGenerator, Rephraser, ChapterSplitter) handle different AI tasks. AIService orchestrates and loads explicit context.
     
 -   **Explicit Context Management:** Project isolation achieved via mandatory project_id metadata injection and filtering during retrieval. Explicit Plan/Synopsis/Scenes passed when necessary.
     
@@ -313,11 +320,11 @@ graph LR
     
 -   **Markdown as Source of Truth:** User content remains portable.
     
--   **Centralized File I/O:**  FileService manages all disk access and triggers indexing.
+-   **Centralized File I/O:** FileService manages all disk access and triggers indexing.
     
 -   **DRY:** Metadata I/O centralized in FileService.
     
--   **Reproducible Dependencies:**  pip-tools (requirements.in, requirements.txt) used for backend dependency locking.
+-   **Reproducible Dependencies:** pip-tools (requirements.in, requirements.txt) used for backend dependency locking.
     
 
 ## 6. Data Storage Summary
@@ -326,10 +333,11 @@ graph LR
     
 -   **Vector Embeddings & Index:** Managed by ChromaDB, persisted in chroma_db/. **Excluded from Git.**
     
--   **Application Configuration:**  .env file (excluded from Git).
+-   **Application Configuration:** .env file (excluded from Git).
     
--   **Dependency Lock Files:**  backend/requirements.txt (generated, committed to Git), frontend/package-lock.json (or yarn.lock, committed to Git).
+-   **Dependency Lock Files:** backend/requirements.txt (generated, committed to Git), frontend/package-lock.json (or yarn.lock, committed to Git).
     
 
 ## 7. Deployment (Future Consideration)
+
 Maybe Docker
