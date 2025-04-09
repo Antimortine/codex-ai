@@ -38,71 +38,72 @@ vi.mock('../api/codexApi', async (importOriginal) => {
     createCharacter: vi.fn(),
     createScene: vi.fn(),
     generateSceneDraft: vi.fn(),
-    splitChapterIntoScenes: vi.fn(), // Keep mock even if unused by component now
+    splitChapterIntoScenes: vi.fn(), // Keep mock
     updateChapter: vi.fn(),
   };
 });
 
-// Mock the ChapterSection component
+// Mock the ChapterSection component - ACCURATE MOCK
 vi.mock('../components/ChapterSection', () => ({
-    default: (props) => (
-        <div data-testid={`chapter-section-${props.chapter.id}`}>
-            {/* Simulate essential elements for testing interactions */}
-            {/* Display title based on edit mode */}
-            {!props.isEditingThisChapter && (
-                 <strong data-testid={`chapter-title-${props.chapter.id}`}>{props.chapter.order}: {props.chapter.title}</strong>
-            )}
-            {props.isEditingThisChapter && (
+    default: (props) => {
+        // Determine if scenes exist for conditional rendering
+        const hasScenes = props.scenesForChapter && props.scenesForChapter.length > 0;
+
+        return (
+            <div data-testid={`chapter-section-${props.chapter.id}`}>
+                {/* Title/Edit */}
+                {!props.isEditingThisChapter && (
+                    <strong data-testid={`chapter-title-${props.chapter.id}`}>{props.chapter.order}: {props.chapter.title}</strong>
+                )}
+                {props.isEditingThisChapter && (
+                    <div>
+                        <input type="text" aria-label="Chapter Title" value={props.editedChapterTitleForInput} onChange={props.onTitleInputChange} disabled={props.isSavingThisChapter} />
+                        <button onClick={() => props.onSaveChapter(props.chapter.id, props.editedChapterTitleForInput)} disabled={props.isSavingThisChapter || !props.editedChapterTitleForInput?.trim()}>Save</button>
+                        <button onClick={props.onCancelEditChapter} disabled={props.isSavingThisChapter}>Cancel</button>
+                        {props.saveChapterError && <span data-testid={`chapter-save-error-${props.chapter.id}`}>Save Error: {props.saveChapterError}</span>}
+                    </div>
+                )}
+                {!props.isEditingThisChapter && ( <button onClick={() => props.onEditChapter(props.chapter)} disabled={props.isAnyOperationLoading}>Edit Title</button> )}
+                <button onClick={() => props.onDeleteChapter(props.chapter.id, props.chapter.title)} disabled={props.isAnyOperationLoading}>Delete Chapter</button>
+
+                {/* Scene List OR Split UI - Correct Conditional Logic */}
+                {props.isLoadingChapterScenes ? <p>Loading scenes...</p> : (
+                    hasScenes ? ( // Use the calculated boolean
+                        // Simulate Scene List if scenes exist
+                        <ul>
+                            {props.scenesForChapter.map(scene => (
+                                <li key={scene.id}>
+                                    <a href={`/projects/${props.projectId}/chapters/${props.chapter.id}/scenes/${scene.id}`}>{scene.order}: {scene.title}</a>
+                                    <button onClick={() => props.onDeleteScene(props.chapter.id, scene.id, scene.title)} disabled={props.isAnyOperationLoading}>Del Scene</button>
+                                </li>
+                            ))}
+                        </ul>
+                    ) : (
+                        // Simulate Split UI if no scenes
+                        <div>
+                            <label htmlFor={`split-input-${props.chapter.id}`}>Paste Full Chapter Content Here to Split:</label>
+                            <textarea id={`split-input-${props.chapter.id}`} aria-label="Chapter content to split" value={props.splitInputContentForThisChapter || ''} onChange={(e) => props.onSplitInputChange(props.chapter.id, e.target.value)} disabled={props.isSplittingThisChapter || props.isAnyOperationLoading} />
+                            <button onClick={() => props.onSplitChapter(props.chapter.id)} disabled={props.isAnyOperationLoading || props.isLoadingChapterScenes || hasScenes || !props.splitInputContentForThisChapter?.trim() || props.isSplittingThisChapter}>
+                                {props.isSplittingThisChapter ? 'Splitting...' : 'Split Chapter (AI)'}
+                            </button>
+                            {props.splitErrorForThisChapter && <p data-testid={`split-error-${props.chapter.id}`}>Split Error: {props.splitErrorForThisChapter}</p>}
+                        </div>
+                    )
+                )}
+
+                {/* Add/Generate Scene Area */}
+                <button onClick={() => props.onCreateScene(props.chapter.id)} disabled={props.isLoadingChapterScenes || props.isAnyOperationLoading}>+ Add Scene Manually</button>
                 <div>
-                    <input
-                        type="text"
-                        aria-label="Chapter Title"
-                        value={props.editedChapterTitleForInput}
-                        onChange={props.onTitleInputChange} // Use the passed handler
-                        disabled={props.isSavingThisChapter}
-                    />
-                    <button onClick={() => props.onSaveChapter(props.chapter.id, props.editedChapterTitleForInput)} disabled={props.isSavingThisChapter || !props.editedChapterTitleForInput?.trim()}>Save</button>
-                    <button onClick={props.onCancelEditChapter} disabled={props.isSavingThisChapter}>Cancel</button>
-                    {props.saveChapterError && <span data-testid={`chapter-save-error-${props.chapter.id}`}>Save Error: {props.saveChapterError}</span>}
+                    <label htmlFor={`summary-${props.chapter.id}`}>Optional Prompt/Summary for AI Scene Generation:</label>
+                    <input type="text" id={`summary-${props.chapter.id}`} value={props.generationSummaryForInput} onChange={(e) => props.onSummaryChange(props.chapter.id, e.target.value)} disabled={props.isAnyOperationLoading || props.isGeneratingSceneForThisChapter} placeholder="e.g., Character meets the informant" />
+                    <button onClick={() => props.onGenerateScene(props.chapter.id, props.generationSummaryForInput)} disabled={props.isAnyOperationLoading || props.isLoadingChapterScenes || props.isGeneratingSceneForThisChapter}>
+                        {props.isGeneratingSceneForThisChapter ? 'Generating...' : '+ Add Scene using AI'}
+                    </button>
+                    {props.generationErrorForThisChapter && <span data-testid={`chapter-gen-error-${props.chapter.id}`}>Generate Error: {props.generationErrorForThisChapter}</span>}
                 </div>
-            )}
-             {!props.isEditingThisChapter && (
-                 <button onClick={() => props.onEditChapter(props.chapter)} disabled={props.isAnyOperationLoading}>Edit Title</button>
-            )}
-            <button onClick={() => props.onDeleteChapter(props.chapter.id, props.chapter.title)} disabled={props.isAnyOperationLoading}>Delete Chapter</button>
-            {props.isLoadingChapterScenes ? <p>Loading scenes...</p> : (
-                props.scenesForChapter.length > 0 ? (
-                    <ul>
-                        {props.scenesForChapter.map(scene => (
-                            <li key={scene.id}>
-                                <a href={`/projects/${props.projectId}/chapters/${props.chapter.id}/scenes/${scene.id}`}>
-                                    {scene.order}: {scene.title}
-                                </a>
-                                <button onClick={() => props.onDeleteScene(props.chapter.id, scene.id, scene.title)} disabled={props.isAnyOperationLoading}>Del Scene</button>
-                            </li>
-                        ))}
-                    </ul>
-                ) : <p>No scenes in this chapter yet.</p>
-            )}
-            <button onClick={() => props.onCreateScene(props.chapter.id)} disabled={props.isLoadingChapterScenes || props.isAnyOperationLoading}>+ Add Scene Manually</button>
-            <div>
-                <label htmlFor={`summary-${props.chapter.id}`}>Optional Prompt/Summary for AI Scene Generation:</label>
-                <input
-                    type="text"
-                    id={`summary-${props.chapter.id}`}
-                    value={props.generationSummaryForInput}
-                    onChange={(e) => props.onSummaryChange(props.chapter.id, e.target.value)}
-                    disabled={props.isAnyOperationLoading}
-                    placeholder="e.g., Character meets the informant" // Added placeholder for clarity
-                />
-                <button onClick={() => props.onGenerateScene(props.chapter.id, props.generationSummaryForInput)} disabled={props.isAnyOperationLoading || props.isGeneratingSceneForThisChapter}>
-                    {props.isGeneratingSceneForThisChapter ? 'Generating...' : '+ Add Scene using AI'}
-                </button>
-                {props.generationErrorForThisChapter && <span data-testid={`chapter-gen-error-${props.chapter.id}`}>Generate Error: {props.generationErrorForThisChapter}</span>}
             </div>
-            {/* Split Chapter UI is intentionally omitted */}
-        </div>
-    )
+        );
+    }
 }));
 
 
@@ -579,7 +580,8 @@ describe('ProjectDetailPage', () => {
     expect(listScenes).toHaveBeenCalledTimes(1);
   });
 
-  // --- Split Chapter Tests are Removed ---
+  // --- REMOVE Split Chapter Tests ---
+
 
   it('handles error during AI scene generation', async () => {
     const user = userEvent.setup();

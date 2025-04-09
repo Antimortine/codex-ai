@@ -14,12 +14,6 @@
  * limitations under the License.
  */
 
-// No changes needed in this file based on the latest analysis.
-// The disabled logic for Add Chapter/Character buttons is correct.
-// The finally blocks correctly reset loading states.
-// The state update for saveNameError is correct.
-// The issue lies within the test implementations.
-
 import React, { useState, useEffect, useCallback } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import {
@@ -28,11 +22,12 @@ import {
     listCharacters, createCharacter, deleteCharacter,
     listScenes, createScene, deleteScene,
     generateSceneDraft,
+    splitChapterIntoScenes // Import the split API function
 } from '../api/codexApi';
 import QueryInterface from '../components/QueryInterface';
 import ChapterSection from '../components/ChapterSection';
 
-// Basic Modal Styling
+// Basic Modal Styling (Add back split styles)
 const modalStyles = {
     overlay: {
         position: 'fixed', top: 0, left: 0, right: 0, bottom: 0,
@@ -51,6 +46,12 @@ const modalStyles = {
     textarea: { width: '98%', minHeight: '200px', marginTop: '10px', fontFamily: 'monospace', fontSize: '0.9em' },
     copyButton: { marginTop: '10px', marginRight: '10px' },
     createButton: { marginTop: '10px', marginRight: '10px', backgroundColor: '#28a745', color: 'white' },
+    // Split scene styles
+    splitSceneItem: { border: '1px solid #ddd', borderRadius: '4px', marginBottom: '15px', padding: '10px' },
+    splitSceneTitle: { fontWeight: 'bold', marginBottom: '5px', borderBottom: '1px solid #eee', paddingBottom: '5px' },
+    splitSceneContent: { maxHeight: '150px', overflowY: 'auto', backgroundColor: '#f8f8f8', padding: '8px', borderRadius: '3px', fontSize: '0.9em', whiteSpace: 'pre-wrap', wordWrap: 'break-word' },
+    splitModalActions: { marginTop: '20px', paddingTop: '10px', borderTop: '1px solid #ccc', textAlign: 'right' },
+    splitCreateButton: { backgroundColor: '#28a745', color: 'white', marginRight: '10px' },
 };
 
 
@@ -88,6 +89,15 @@ function ProjectDetailPage() {
     const [isGeneratingScene, setIsGeneratingScene] = useState(false);
     const [generatingChapterId, setGeneratingChapterId] = useState(null);
     const [generationError, setGenerationError] = useState(null);
+    const [splitInputContent, setSplitInputContent] = useState({});
+    const [proposedSplits, setProposedSplits] = useState([]);
+    const [chapterIdForSplits, setChapterIdForSplits] = useState(null);
+    const [showSplitModal, setShowSplitModal] = useState(false);
+    const [isCreatingScenesFromSplit, setIsCreatingScenesFromSplit] = useState(false);
+    const [createFromSplitError, setCreateFromSplitError] = useState(null);
+    const [isSplittingChapter, setIsSplittingChapter] = useState(false);
+    const [splittingChapterId, setSplittingChapterId] = useState(null);
+    const [splitError, setSplitError] = useState(null);
 
 
     // --- Data Fetching (Unchanged) ---
@@ -114,7 +124,9 @@ function ProjectDetailPage() {
                     if (results[0].status === 'fulfilled') {
                         const sortedChapters = (results[0].value.data.chapters || []).sort((a, b) => a.order - b.order);
                         setChapters(sortedChapters);
-                        const initialSummaries = {}; sortedChapters.forEach(ch => { initialSummaries[ch.id] = ''; }); setGenerationSummaries(initialSummaries);
+                        const initialSummaries = {}; const initialSplitContent = {};
+                        sortedChapters.forEach(ch => { initialSummaries[ch.id] = ''; initialSplitContent[ch.id] = ''; });
+                        setGenerationSummaries(initialSummaries); setSplitInputContent(initialSplitContent);
                     } else { setError(prev => prev ? `${prev} | Failed to load chapters.` : 'Failed to load chapters.'); }
                     if (results[1].status === 'fulfilled') { setCharacters(results[1].value.data.characters || []); }
                     else { setError(prev => prev ? `${prev} | Failed to load characters.` : 'Failed to load characters.'); }
@@ -153,7 +165,7 @@ function ProjectDetailPage() {
     }, [chapters, projectId, isLoadingChapters]);
 
 
-    // --- Action Handlers (Wrapped with useCallback, ensure finally blocks reset state) ---
+    // --- Action Handlers ---
 
     const refreshData = useCallback(async () => {
         let isMounted = true;
@@ -256,11 +268,58 @@ function ProjectDetailPage() {
     const handleSummaryChange = useCallback((chapterId, value) => { setGenerationSummaries(prev => ({ ...prev, [chapterId]: value })); if (generationError && generatingChapterId === chapterId) { setGenerationError(null); setGeneratingChapterId(null); } }, [generationError, generatingChapterId]);
     const copyGeneratedText = useCallback(() => { navigator.clipboard.writeText(generatedSceneContent).catch(err => console.error('Failed to copy text: ', err)); }, [generatedSceneContent]);
 
-    // --- Combined Loading State ---
-    const isAnyOperationLoading = isSavingName || isSavingChapter || isGeneratingScene || isCreatingSceneFromDraft;
+    // --- Split Chapter Handlers ---
+    const handleSplitInputChange = useCallback((chapterId, value) => {
+        setSplitInputContent(prev => ({ ...prev, [chapterId]: value }));
+        if (splitError && splittingChapterId === chapterId) { setSplitError(null); setSplittingChapterId(null); }
+    }, [splitError, splittingChapterId]);
 
-    // --- DEBUG LOGGING REMOVED ---
-    // useEffect(() => { ... });
+    const handleSplitChapter = useCallback(async (chapterId) => {
+        const contentToSplit = splitInputContent[chapterId] || '';
+        if (!contentToSplit.trim()) { setSplitError("Please paste the chapter content..."); setSplittingChapterId(chapterId); return; }
+        setIsSplittingChapter(true); setSplittingChapterId(chapterId); setSplitError(null);
+        setProposedSplits([]); setShowSplitModal(false); setCreateFromSplitError(null);
+        try { const r = await splitChapterIntoScenes(projectId, chapterId, { chapter_content: contentToSplit }); setProposedSplits(r.data.proposed_scenes || []); setChapterIdForSplits(chapterId); setShowSplitModal(true); }
+        catch (err) { const msg = err.response?.data?.detail || err.message || 'Failed to split chapter.'; setSplittingChapterId(chapterId); setSplitError(msg); setShowSplitModal(false); }
+        finally { setIsSplittingChapter(false); /* Keep splittingChapterId if error */ }
+    }, [splitInputContent, projectId]); // Removed splitError dependency, error is handled internally
+
+    const handleCreateScenesFromSplit = useCallback(async () => {
+        if (!chapterIdForSplits || proposedSplits.length === 0) { setCreateFromSplitError("No chapter ID or proposed splits available."); return; }
+        setIsCreatingScenesFromSplit(true); setCreateFromSplitError(null);
+        const existingScenes = scenes[chapterIdForSplits] || []; let currentMaxOrder = existingScenes.length > 0 ? Math.max(...existingScenes.map(s => s.order)) : 0;
+        const errors = []; const createdScenes = [];
+        for (const proposedScene of proposedSplits) {
+            currentMaxOrder++; const newSceneData = { title: proposedScene.suggested_title || `Scene ${currentMaxOrder}`, order: currentMaxOrder, content: proposedScene.content || "" };
+            try { const result = await createScene(projectId, chapterIdForSplits, newSceneData); createdScenes.push(result.data); }
+            catch (err) { const msg = err.response?.data?.detail || err.message || `Failed to create scene for "${newSceneData.title}".`; errors.push(msg); }
+        }
+        if (createdScenes.length > 0) { setScenes(p => ({ ...p, [chapterIdForSplits]: [...(p[chapterIdForSplits] || []), ...createdScenes].sort((a, b) => a.order - b.order) })); }
+        setIsCreatingScenesFromSplit(false);
+        if (errors.length > 0) { setCreateFromSplitError(errors.join(' | ')); }
+        else { setShowSplitModal(false); setProposedSplits([]); setChapterIdForSplits(null); }
+        refreshData();
+    }, [chapterIdForSplits, proposedSplits, scenes, projectId, refreshData]);
+
+    const handleCloseSplitModal = useCallback(() => {
+        setShowSplitModal(false); setProposedSplits([]); setChapterIdForSplits(null); setCreateFromSplitError(null);
+        if (splitError && chapterIdForSplits === splittingChapterId) { setSplitError(null); setSplittingChapterId(null); }
+    }, [splitError, chapterIdForSplits, splittingChapterId]);
+
+
+    // --- Combined Loading State ---
+    const isAnyOperationLoading = isSavingName || isSavingChapter || isGeneratingScene || isCreatingSceneFromDraft || isSplittingChapter || isCreatingScenesFromSplit;
+
+    // --- DEBUG LOGGING ---
+    useEffect(() => {
+        console.log("LOADING STATE CHECK:", {
+            isSavingName, isSavingChapter, isGeneratingScene, isCreatingSceneFromDraft,
+            isSplittingChapter, isCreatingScenesFromSplit, // Added split states
+            isAnyOperationLoading,
+            isLoadingProject, isLoadingChapters, isLoadingCharacters
+        });
+    }, [isSavingName, isSavingChapter, isGeneratingScene, isCreatingSceneFromDraft, isSplittingChapter, isCreatingScenesFromSplit, isAnyOperationLoading, isLoadingProject, isLoadingChapters, isLoadingCharacters]);
+    // --- END DEBUG LOGGING ---
 
     // --- Rendering Logic ---
      if (isLoadingProject) { return <p>Loading project...</p>; }
@@ -277,15 +336,41 @@ function ProjectDetailPage() {
                      <div style={modalStyles.content}>
                         <button onClick={() => setShowGeneratedSceneModal(false)} style={modalStyles.closeButton}>×</button>
                         <h3>Generated Scene Draft</h3>
-                        {createSceneError &&
-                            <p style={{ color: 'red', marginBottom: '10px' }}>Error: {createSceneError}</p>
-                        }
+                        {createSceneError && <p style={{ color: 'red', marginBottom: '10px' }}>Error: {createSceneError}</p>}
                         <textarea readOnly value={generatedSceneContent} style={modalStyles.textarea} />
                         <div>
                             <button onClick={copyGeneratedText} style={modalStyles.copyButton}> Copy Draft </button>
                             <button onClick={handleCreateSceneFromDraft} style={modalStyles.createButton} disabled={isCreatingSceneFromDraft}>
                                 {isCreatingSceneFromDraft ? 'Creating...' : 'Create Scene from Draft'}
                             </button>
+                        </div>
+                    </div>
+                </div>
+            )}
+            {showSplitModal && (
+                <div data-testid="split-chapter-modal" style={modalStyles.overlay}>
+                    <div style={modalStyles.content}>
+                        <button onClick={handleCloseSplitModal} style={modalStyles.closeButton}>×</button>
+                        <h3>Proposed Scene Splits</h3>
+                        {createFromSplitError && (
+                            <div style={{ color: 'red', marginBottom: '10px' }}>
+                                <div data-testid="split-error-general">Errors occurred during scene creation:</div>
+                                <div data-testid="split-error-specific">{createFromSplitError}</div>
+                            </div>
+                        )}
+                        <div>
+                            {proposedSplits.map((split, index) => (
+                                <div key={index} style={modalStyles.splitSceneItem}>
+                                    <div style={modalStyles.splitSceneTitle}>{index + 1}. {split.suggested_title}</div>
+                                    <div style={modalStyles.splitSceneContent}>{split.content}</div>
+                                </div>
+                            ))}
+                        </div>
+                        <div style={modalStyles.splitModalActions}>
+                            <button onClick={handleCreateScenesFromSplit} style={modalStyles.splitCreateButton} disabled={isCreatingScenesFromSplit}>
+                                {isCreatingScenesFromSplit ? 'Creating...' : 'Create Scenes'}
+                            </button>
+                            <button onClick={handleCloseSplitModal}> Cancel </button>
                         </div>
                     </div>
                 </div>
@@ -336,6 +421,12 @@ function ProjectDetailPage() {
                                     onGenerateScene={handleGenerateSceneDraft}
                                     onSummaryChange={handleSummaryChange}
                                     onTitleInputChange={handleChapterTitleChange}
+                                    // Pass split props
+                                    splitInputContentForThisChapter={splitInputContent[chapter.id] || ''}
+                                    isSplittingThisChapter={isSplittingChapter && splittingChapterId === chapter.id}
+                                    splitErrorForThisChapter={splittingChapterId === chapter.id ? splitError : null}
+                                    onSplitInputChange={handleSplitInputChange}
+                                    onSplitChapter={handleSplitChapter}
                                 />
                             ))
                         )}
@@ -347,7 +438,6 @@ function ProjectDetailPage() {
                                 placeholder="New chapter title"
                                 disabled={isAnyOperationLoading} // Use the master flag
                             />
-                            {/* Restore trim check */}
                             <button type="submit" disabled={isAnyOperationLoading || !newChapterTitle.trim()}>
                                 Add Chapter
                             </button>
@@ -383,7 +473,6 @@ function ProjectDetailPage() {
                                 placeholder="New character name"
                                 disabled={isAnyOperationLoading} // Use the master flag
                             />
-                             {/* Restore trim check */}
                             <button type="submit" disabled={isAnyOperationLoading || !newCharacterName.trim()}>
                                 Add Character
                             </button>

@@ -97,7 +97,7 @@ const styles = {
     inlineErrorText: {
         color: 'red',
         fontSize: '0.9em',
-        marginTop: '5px',
+        marginTop:'5px',
         display: 'inline-block',
         marginLeft: '10px',
     },
@@ -105,8 +105,33 @@ const styles = {
         marginLeft: '5px',
         fontStyle: 'italic',
         fontSize: '0.9em',
+    },
+    // Styles for Split Chapter UI (re-using some modal styles)
+    splitInputArea: {
+        marginTop: '10px',
+        padding: '10px',
+        border: '1px dashed #ffc107',
+        borderRadius: '4px',
+        backgroundColor: '#fff9e6',
+        marginLeft: '20px', // Align with scene list area
+    },
+    splitTextarea: {
+        width: '98%',
+        minHeight: '100px',
+        marginTop: '5px',
+        marginBottom: '5px',
+        display: 'block',
+    },
+    splitButton: {
+        cursor: 'pointer',
+        backgroundColor: '#ffc107',
+        color: '#333',
+    },
+    splitButtonDisabled: {
+        cursor: 'not-allowed',
+        backgroundColor: '#ffeeba',
+        color: '#666',
     }
-    // NOTE: Split Chapter styles are intentionally omitted
 };
 
 function ChapterSection({
@@ -130,8 +155,13 @@ function ChapterSection({
     onDeleteScene,
     onGenerateScene,
     onSummaryChange,
-    onTitleInputChange, // Added prop for handling input change
-    // Omit props related to Split Chapter for now
+    onTitleInputChange,
+    // Split Chapter Props
+    splitInputContentForThisChapter,
+    isSplittingThisChapter,
+    splitErrorForThisChapter,
+    onSplitInputChange,
+    onSplitChapter,
 }) {
 
     const chapterHasScenes = scenesForChapter && scenesForChapter.length > 0;
@@ -139,7 +169,17 @@ function ChapterSection({
     // Combine flags for disabling generate button
     const disableGenerateButton = isAnyOperationLoading || isLoadingChapterScenes || isGeneratingSceneForThisChapter;
     // Combine flags for disabling summary input (should be disabled if any operation or specifically generating for this chapter)
-    const disableSummaryInput = isAnyOperationLoading || isGeneratingSceneForThisChapter;
+    const disableSummaryInput = isAnyOperationLoading || isGeneratingSceneForThisChapter; // Corrected logic
+
+
+    // Split Button Logic
+    const disableSplitButton = isAnyOperationLoading || isLoadingChapterScenes || chapterHasScenes || !splitInputContentForThisChapter?.trim() || isSplittingThisChapter;
+    const splitButtonTitle = chapterHasScenes ? "Cannot split chapter that already has scenes"
+                           : !splitInputContentForThisChapter?.trim() ? "Paste chapter content below to enable splitting"
+                           : isSplittingThisChapter ? "AI is currently splitting this chapter..."
+                           : isAnyOperationLoading ? "Another operation is in progress..."
+                           : "Split this chapter into scenes using AI";
+    const splitButtonStyle = disableSplitButton ? styles.splitButtonDisabled : styles.splitButton;
 
 
     return (
@@ -151,13 +191,13 @@ function ChapterSection({
                         <input
                             type="text"
                             value={editedChapterTitleForInput}
-                            onChange={onTitleInputChange} // Use the passed-in handler
+                            onChange={onTitleInputChange}
                             disabled={isSavingThisChapter}
                             style={styles.titleEditInput}
                             aria-label="Chapter Title"
                         />
                         <button
-                            onClick={() => onSaveChapter(chapter.id, editedChapterTitleForInput)} // Pass edited title from props
+                            onClick={() => onSaveChapter(chapter.id, editedChapterTitleForInput)}
                             disabled={isSavingThisChapter || !editedChapterTitleForInput?.trim()}
                         >
                             {isSavingThisChapter ? 'Saving...' : 'Save'}
@@ -197,11 +237,42 @@ function ChapterSection({
                 )}
             </div>
 
-            {/* Scene List or Loading */}
+            {/* Scene List or Split Area or Loading */}
             {isLoadingChapterScenes ? (
                 <p style={styles.loadingText}>Loading scenes...</p>
             ) : (
-                chapterHasScenes ? (
+                // Correct Logic: Show Split UI ONLY if NOT loading AND chapter has NO scenes
+                !chapterHasScenes ? (
+                    <div style={styles.splitInputArea}>
+                        <label htmlFor={`split-input-${chapter.id}`} style={{ display: 'block', marginBottom: '5px', fontSize: '0.9em', fontWeight: 'bold' }}>
+                            Paste Full Chapter Content Here to Split:
+                        </label>
+                        <textarea
+                            id={`split-input-${chapter.id}`}
+                            style={styles.splitTextarea}
+                            rows={6}
+                            placeholder={`Paste the full text of chapter "${chapter.title}" here...`}
+                            value={splitInputContentForThisChapter || ''}
+                            onChange={(e) => onSplitInputChange(chapter.id, e.target.value)}
+                            disabled={isSplittingThisChapter || isAnyOperationLoading}
+                            aria-label="Chapter content to split" // Accessibility
+                        />
+                        <button
+                            onClick={() => onSplitChapter(chapter.id)}
+                            style={splitButtonStyle}
+                            disabled={disableSplitButton}
+                            title={splitButtonTitle}
+                        >
+                            {isSplittingThisChapter ? 'Splitting...' : 'Split Chapter (AI)'}
+                        </button>
+                        {splitErrorForThisChapter && (
+                            <p data-testid={`split-error-${chapter.id}`} style={styles.inlineErrorText}>
+                                Split Error: {splitErrorForThisChapter}
+                            </p>
+                        )}
+                    </div>
+                ) : (
+                    // Otherwise, show the scene list
                     <ul style={styles.sceneList}>
                         {scenesForChapter.map(scene => (
                             <li key={scene.id} style={styles.sceneListItem}>
@@ -219,10 +290,6 @@ function ChapterSection({
                             </li>
                         ))}
                     </ul>
-                ) : (
-                    // Display message if no scenes and not loading
-                    <p style={styles.loadingText}>No scenes in this chapter yet.</p>
-                    // NOTE: Split Chapter input area is intentionally omitted here
                 )
             )}
 
@@ -246,7 +313,7 @@ function ChapterSection({
                         value={generationSummaryForInput}
                         onChange={(e) => onSummaryChange(chapter.id, e.target.value)}
                         placeholder="e.g., Character meets the informant"
-                        disabled={disableSummaryInput} // Use combined disable flag
+                        disabled={disableSummaryInput} // Use corrected flag
                         style={styles.summaryInput}
                     />
                     <button
@@ -294,7 +361,13 @@ ChapterSection.propTypes = {
     onDeleteScene: PropTypes.func.isRequired,
     onGenerateScene: PropTypes.func.isRequired,
     onSummaryChange: PropTypes.func.isRequired,
-    onTitleInputChange: PropTypes.func.isRequired, // Added prop type
+    onTitleInputChange: PropTypes.func.isRequired,
+    // Split Chapter Props
+    splitInputContentForThisChapter: PropTypes.string, // Can be undefined initially
+    isSplittingThisChapter: PropTypes.bool.isRequired,
+    splitErrorForThisChapter: PropTypes.string,
+    onSplitInputChange: PropTypes.func.isRequired,
+    onSplitChapter: PropTypes.func.isRequired,
 };
 
 export default ChapterSection;
