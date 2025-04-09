@@ -212,11 +212,33 @@ function ProjectDetailPage() {
         catch(err) { setError("Failed to create scene."); }
     }, [scenes, projectId, refreshData]);
 
+    // --- MODIFIED handleDeleteScene ---
     const handleDeleteScene = useCallback(async (chapterId, sceneId, sceneTitle) => {
         if (!window.confirm(`Delete scene "${sceneTitle}"?`)) return;
-         try { await deleteScene(projectId, chapterId, sceneId); refreshData(); }
-         catch(err) { setError("Failed to delete scene."); }
-    }, [projectId, refreshData]);
+         try {
+             await deleteScene(projectId, chapterId, sceneId);
+             // Optimistic UI update: Remove scene locally
+             setScenes(prevScenes => {
+                 const chapterScenes = prevScenes[chapterId] || [];
+                 const updatedChapterScenes = chapterScenes.filter(scene => scene.id !== sceneId);
+                 // Re-order remaining scenes (optional but good practice)
+                 const reorderedScenes = updatedChapterScenes.map((scene, index) => ({
+                     ...scene,
+                     order: index + 1, // Re-assign order based on new position
+                 }));
+                 return {
+                     ...prevScenes,
+                     [chapterId]: reorderedScenes
+                 };
+             });
+             // No refreshData() call needed here anymore
+         } catch(err) {
+            console.error("Error deleting scene:", err);
+            setError("Failed to delete scene.");
+            // Optionally, could trigger refreshData() here on error to ensure consistency
+            // refreshData();
+        }
+    }, [projectId, setScenes, setError]); // Removed refreshData, added setScenes, setError
 
     const handleEditNameClick = useCallback(() => { setEditedProjectName(project?.name || ''); setIsEditingName(true); setSaveNameError(null); setSaveNameSuccess(''); }, [project]);
     const handleCancelEditName = useCallback(() => { setIsEditingName(false); }, []);
@@ -282,7 +304,7 @@ function ProjectDetailPage() {
         try { const r = await splitChapterIntoScenes(projectId, chapterId, { chapter_content: contentToSplit }); setProposedSplits(r.data.proposed_scenes || []); setChapterIdForSplits(chapterId); setShowSplitModal(true); }
         catch (err) { const msg = err.response?.data?.detail || err.message || 'Failed to split chapter.'; setSplittingChapterId(chapterId); setSplitError(msg); setShowSplitModal(false); }
         finally { setIsSplittingChapter(false); /* Keep splittingChapterId if error */ }
-    }, [splitInputContent, projectId]); // Removed splitError dependency, error is handled internally
+    }, [splitInputContent, projectId]);
 
     const handleCreateScenesFromSplit = useCallback(async () => {
         if (!chapterIdForSplits || proposedSplits.length === 0) { setCreateFromSplitError("No chapter ID or proposed splits available."); return; }
@@ -310,16 +332,8 @@ function ProjectDetailPage() {
     // --- Combined Loading State ---
     const isAnyOperationLoading = isSavingName || isSavingChapter || isGeneratingScene || isCreatingSceneFromDraft || isSplittingChapter || isCreatingScenesFromSplit;
 
-    // --- DEBUG LOGGING ---
-    useEffect(() => {
-        console.log("LOADING STATE CHECK:", {
-            isSavingName, isSavingChapter, isGeneratingScene, isCreatingSceneFromDraft,
-            isSplittingChapter, isCreatingScenesFromSplit, // Added split states
-            isAnyOperationLoading,
-            isLoadingProject, isLoadingChapters, isLoadingCharacters
-        });
-    }, [isSavingName, isSavingChapter, isGeneratingScene, isCreatingSceneFromDraft, isSplittingChapter, isCreatingScenesFromSplit, isAnyOperationLoading, isLoadingProject, isLoadingChapters, isLoadingCharacters]);
-    // --- END DEBUG LOGGING ---
+    // --- DEBUG LOGGING (Removed) ---
+
 
     // --- Rendering Logic ---
      if (isLoadingProject) { return <p>Loading project...</p>; }
@@ -485,14 +499,10 @@ function ProjectDetailPage() {
             <hr />
             <section>
                  <h2>Other Content</h2>
-                <ul style={{ listStyle: 'none', paddingLeft: 0 }}>
-                    <li style={{ marginBottom: '0.5rem' }}> <Link to={`/projects/${projectId}/plan`}>Edit Plan</Link> </li>
-                    <li style={{ marginBottom: '0.5rem' }}> <Link to={`/projects/${projectId}/synopsis`}>Edit Synopsis</Link> </li>
-                    <li style={{ marginBottom: '0.5rem' }}> <Link to={`/projects/${projectId}/world`}>Edit World Info</Link> </li>
-                </ul>
+                 <ul style={{ listStyle: 'none', paddingLeft: 0 }}> <li style={{ marginBottom: '0.5rem' }}> <Link to={`/projects/${projectId}/plan`}>Edit Plan</Link> </li> <li style={{ marginBottom: '0.5rem' }}> <Link to={`/projects/${projectId}/synopsis`}>Edit Synopsis</Link> </li> <li style={{ marginBottom: '0.5rem' }}> <Link to={`/projects/${projectId}/world`}>Edit World Info</Link> </li> </ul>
             </section>
         </div>
     );
 }
 
-export default ProjectDetailPage;
+export default ProjectDetailPage; // Added missing export

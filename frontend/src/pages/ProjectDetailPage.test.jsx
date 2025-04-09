@@ -38,12 +38,12 @@ vi.mock('../api/codexApi', async (importOriginal) => {
     createCharacter: vi.fn(),
     createScene: vi.fn(),
     generateSceneDraft: vi.fn(),
-    splitChapterIntoScenes: vi.fn(), // Keep mock
+    splitChapterIntoScenes: vi.fn(),
     updateChapter: vi.fn(),
   };
 });
 
-// Mock the ChapterSection component - ACCURATE MOCK
+// Mock the ChapterSection component - MORE ACCURATE MOCK
 vi.mock('../components/ChapterSection', () => ({
     default: (props) => {
         // Determine if scenes exist for conditional rendering
@@ -68,6 +68,7 @@ vi.mock('../components/ChapterSection', () => ({
 
                 {/* Scene List OR Split UI - Correct Conditional Logic */}
                 {props.isLoadingChapterScenes ? <p>Loading scenes...</p> : (
+                    // Check length explicitly
                     hasScenes ? ( // Use the calculated boolean
                         // Simulate Scene List if scenes exist
                         <ul>
@@ -501,15 +502,21 @@ describe('ProjectDetailPage', () => {
     const sceneLink = await within(chapterContainer).findByRole('link', { name: `1: ${sceneToDelete.title}` });
     expect(sceneLink).toBeInTheDocument();
     deleteScene.mockResolvedValueOnce({});
-    listChapters.mockResolvedValueOnce({ data: { chapters: [mockChapter] } });
-    listScenes.mockResolvedValueOnce({ data: { scenes: [] } });
+    // No refresh mock needed here, we check the element disappears
+
     const deleteButton = within(chapterContainer).getByRole('button', { name: /del scene/i });
     await user.click(deleteButton);
     expect(window.confirm).toHaveBeenCalledTimes(1);
-    await waitFor(() => { expect(within(chapterContainer).queryByRole('link', { name: `1: ${sceneToDelete.title}` })).not.toBeInTheDocument(); });
+
+    // Wait for the scene link to disappear (due to state update)
+    await waitFor(() => {
+        expect(within(chapterContainer).queryByRole('link', { name: `1: ${sceneToDelete.title}` })).not.toBeInTheDocument();
+    });
+    // Verify API call
     expect(deleteScene).toHaveBeenCalledTimes(1);
-    expect(listChapters).toHaveBeenCalledTimes(2);
-    expect(listScenes).toHaveBeenCalledTimes(2);
+    // Verify refreshData was NOT called
+    expect(listChapters).toHaveBeenCalledTimes(1); // Only initial load
+    expect(listScenes).toHaveBeenCalledTimes(1); // Only initial load
   });
 
 
@@ -580,7 +587,7 @@ describe('ProjectDetailPage', () => {
     expect(listScenes).toHaveBeenCalledTimes(1);
   });
 
-  // --- REMOVE Split Chapter Tests ---
+  // --- REMOVED Split Chapter Tests ---
 
 
   it('handles error during AI scene generation', async () => {
