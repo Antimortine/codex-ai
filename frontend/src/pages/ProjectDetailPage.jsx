@@ -48,7 +48,7 @@ function ProjectDetailPage() {
     const { projectId } = useParams();
     const navigate = useNavigate();
 
-    // --- State variables ---
+    // --- State variables (remain the same) ---
     const [project, setProject] = useState(null);
     const [chapters, setChapters] = useState([]);
     const [characters, setCharacters] = useState([]);
@@ -91,252 +91,285 @@ function ProjectDetailPage() {
     // --- END State variables ---
 
 
-    // --- Data Fetching ---
+    // --- Data Fetching (Initial loads remain the same) ---
     useEffect(() => {
         let isMounted = true;
-        // console.log("[ProjectDetail] Initial useEffect running. projectId:", projectId); // Removed log
         setIsLoadingProject(true);
         setError(null);
         setProject(null); setChapters([]); setCharacters([]); setScenes({});
 
         if (!projectId) {
-            console.error("[ProjectDetail] Project ID is missing!"); // Keep error log
+            console.error("[ProjectDetail] Project ID is missing!");
             if (isMounted) { setError("Project ID not found in URL."); setIsLoadingProject(false); }
             return;
         }
-
-        // console.log(`[ProjectDetail] Calling getProject(${projectId})...`); // Removed log
         getProject(projectId)
             .then(response => {
-                // console.log("[ProjectDetail] getProject successful:", response.data); // Removed log
                 if (isMounted) { setProject(response.data); setEditedProjectName(response.data.name || ''); }
             })
             .catch(err => {
-                console.error("[ProjectDetail] getProject FAILED:", err); // Keep error log
+                console.error("[ProjectDetail] getProject FAILED:", err);
                 if (isMounted) { setError(`Failed to load project data: ${err.message}`); }
             })
             .finally(() => {
-                // console.log("[ProjectDetail] getProject finally block. Setting isLoadingProject to false."); // Removed log
                 if (isMounted) { setIsLoadingProject(false); }
             });
 
-        return () => {
-            // console.log("[ProjectDetail] Initial useEffect cleanup."); // Removed log
-            isMounted = false;
-        };
+        return () => { isMounted = false; };
     }, [projectId]);
 
     useEffect(() => {
         let isMounted = true;
-        // console.log(`[ProjectDetail] Chapters/Chars useEffect running. project: ${project ? 'Exists' : 'null'}, isLoadingProject: ${isLoadingProject}`); // Removed log
-
         if (!project || isLoadingProject) {
-            if (!isLoadingProject) {
-                 // console.log("[ProjectDetail] Chapters/Chars useEffect: Project not loaded or isLoadingProject is true. Resetting states."); // Removed log
-                 setIsLoadingChapters(true);
-                 setIsLoadingCharacters(true);
-            } else {
-                 // console.log("[ProjectDetail] Chapters/Chars useEffect: Project not loaded or isLoadingProject is true. Skipping fetch."); // Removed log
-            }
+            if (!isLoadingProject) { setIsLoadingChapters(true); setIsLoadingCharacters(true); }
             return;
         }
-
-        // console.log("[ProjectDetail] Chapters/Chars useEffect: Project loaded. Setting loading states and fetching..."); // Removed log
         setIsLoadingChapters(true);
         setIsLoadingCharacters(true);
         setChapters([]);
         setCharacters([]);
-
         const fetchChaptersAndChars = async () => {
             let chaptersResult = null;
             let charactersResult = null;
             let fetchError = null;
-
             try {
-                // console.log("[ProjectDetail] fetchChaptersAndChars: Awaiting listChapters..."); // Removed log
                 chaptersResult = await listChapters(projectId);
-                // console.log("[ProjectDetail] fetchChaptersAndChars: listChapters successful:", chaptersResult?.data); // Removed log
-
-                // console.log("[ProjectDetail] fetchChaptersAndChars: Awaiting listCharacters..."); // Removed log
                 charactersResult = await listCharacters(projectId);
-                // console.log("[ProjectDetail] fetchChaptersAndChars: listCharacters successful:", charactersResult?.data); // Removed log
-
             } catch (err) {
-                console.error("[ProjectDetail] fetchChaptersAndChars: Error during sequential fetch:", err); // Keep error log
+                console.error("[ProjectDetail] fetchChaptersAndChars: Error during sequential fetch:", err);
                 fetchError = err;
             }
-
             if (isMounted) {
-                if (fetchError) {
-                     setError(prev => prev ? `${prev} | Error fetching chapters/characters.` : 'Error fetching chapters/characters.');
-                } else {
+                if (fetchError) { setError(prev => prev ? `${prev} | Error fetching chapters/characters.` : 'Error fetching chapters/characters.'); }
+                else {
                     if (chaptersResult) {
                         const sortedChapters = (chaptersResult.data.chapters || []).sort((a, b) => a.order - b.order);
-                        // console.log(`[ProjectDetail] fetchChaptersAndChars: Processing chapters (${sortedChapters.length} chapters).`); // Removed log
                         setChapters(sortedChapters);
                         const initialSummaries = {}; const initialSplitContent = {};
                         sortedChapters.forEach(ch => { initialSummaries[ch.id] = ''; initialSplitContent[ch.id] = ''; });
                         setGenerationSummaries(initialSummaries); setSplitInputContent(initialSplitContent);
-                    } else {
-                         console.error("[ProjectDetail] fetchChaptersAndChars: chaptersResult is null/undefined after await."); // Keep error log
-                         setError(prev => prev ? `${prev} | Failed to load chapters (null result).` : 'Failed to load chapters (null result).');
-                    }
-                    if (charactersResult) {
-                        const chars = charactersResult.data.characters || [];
-                        // console.log(`[ProjectDetail] fetchChaptersAndChars: Processing characters (${chars.length} characters).`); // Removed log
-                        setCharacters(chars);
-                    } else {
-                         console.error("[ProjectDetail] fetchChaptersAndChars: charactersResult is null/undefined after await."); // Keep error log
-                         setError(prev => prev ? `${prev} | Failed to load characters (null result).` : 'Failed to load characters (null result).');
-                    }
+                    } else { console.error("[ProjectDetail] fetchChaptersAndChars: chaptersResult is null/undefined after await."); setError(prev => prev ? `${prev} | Failed to load chapters (null result).` : 'Failed to load chapters (null result).'); }
+                    if (charactersResult) { const chars = charactersResult.data.characters || []; setCharacters(chars); }
+                    else { console.error("[ProjectDetail] fetchChaptersAndChars: charactersResult is null/undefined after await."); setError(prev => prev ? `${prev} | Failed to load characters (null result).` : 'Failed to load characters (null result).'); }
                 }
-                // console.log("[ProjectDetail] fetchChaptersAndChars: Setting loading states to false."); // Removed log
                 setIsLoadingChapters(false);
                 setIsLoadingCharacters(false);
-            } else {
-                // console.log("[ProjectDetail] fetchChaptersAndChars: Component unmounted before processing results."); // Removed log
             }
         };
-
         fetchChaptersAndChars();
-
-        return () => {
-            // console.log("[ProjectDetail] Chapters/Chars useEffect cleanup."); // Removed log
-            isMounted = false;
-        };
+        return () => { isMounted = false; };
     }, [project, projectId, isLoadingProject]);
 
     useEffect(() => {
         let isMounted = true;
-        // console.log(`[ProjectDetail] Scenes useEffect running. chapters count: ${chapters.length}, isLoadingChapters: ${isLoadingChapters}`); // Removed log
-        if (!Array.isArray(chapters) || chapters.length === 0 || isLoadingChapters) {
-            // console.log("[ProjectDetail] Scenes useEffect: Skipping fetch (no chapters or still loading). Resetting scenes."); // Removed log
-            setIsLoadingScenes({});
-            setScenes({});
-            return;
-        }
-
+        if (!Array.isArray(chapters) || chapters.length === 0 || isLoadingChapters) { setIsLoadingScenes({}); setScenes({}); return; }
         const initialLoadingState = {}; chapters.forEach(ch => { initialLoadingState[ch.id] = true; });
         setIsLoadingScenes(initialLoadingState);
         setScenes({});
-
         const fetchAllScenes = async () => {
-            // console.log("[ProjectDetail] fetchAllScenes: Starting fetches for all chapters."); // Removed log
             const scenesPromises = chapters.map(async (chapter) => {
-                try {
-                    const r = await listScenes(projectId, chapter.id);
-                    return { chapterId: chapter.id, scenes: (r.data.scenes || []).sort((a, b) => a.order - b.order), success: true };
-                } catch (err) {
-                    console.error(`[ProjectDetail] fetchAllScenes: Error fetching scenes for chapter ${chapter.id}:`, err); // Keep error log
-                    return { chapterId: chapter.id, error: err, success: false, chapterTitle: chapter.title };
-                }
+                try { const r = await listScenes(projectId, chapter.id); return { chapterId: chapter.id, scenes: (r.data.scenes || []).sort((a, b) => a.order - b.order), success: true }; }
+                catch (err) { console.error(`[ProjectDetail] fetchAllScenes: Error fetching scenes for chapter ${chapter.id}:`, err); return { chapterId: chapter.id, error: err, success: false, chapterTitle: chapter.title }; }
             });
             try {
                 const results = await Promise.allSettled(scenesPromises);
-                // console.log("[ProjectDetail] fetchAllScenes: Promise.allSettled finished. Results:", results); // Removed log
                 if (isMounted) {
                     const newScenesState = {}; const newLoadingState = {};
                     results.forEach(result => {
                         if (result.status === 'fulfilled') {
                             const data = result.value;
                             newLoadingState[data.chapterId] = false;
-                            if (data.success) {
-                                newScenesState[data.chapterId] = data.scenes;
-                                // console.log(`[ProjectDetail] fetchAllScenes: Successfully loaded ${data.scenes.length} scenes for chapter ${data.chapterId}.`); // Removed log
-                            } else {
-                                newScenesState[data.chapterId] = [];
-                                setError(prev => prev ? `${prev} | Failed to load scenes for ${data.chapterTitle}.` : `Failed to load scenes for ${data.chapterTitle}.`);
-                            }
-                        } else {
-                            console.error("[ProjectDetail] fetchAllScenes: A scene fetch promise rejected unexpectedly:", result.reason); // Keep error log
-                        }
+                            if (data.success) { newScenesState[data.chapterId] = data.scenes; }
+                            else { newScenesState[data.chapterId] = []; setError(prev => prev ? `${prev} | Failed to load scenes for ${data.chapterTitle}.` : `Failed to load scenes for ${data.chapterTitle}.`); }
+                        } else { console.error("[ProjectDetail] fetchAllScenes: A scene fetch promise rejected unexpectedly:", result.reason); }
                     });
                     setScenes(newScenesState);
                     setIsLoadingScenes(newLoadingState);
-                } else {
-                     // console.log("[ProjectDetail] fetchAllScenes: Component unmounted before processing results."); // Removed log
                 }
             } catch (err) {
-                console.error("[ProjectDetail] fetchAllScenes: Unexpected error processing scene fetches:", err); // Keep error log
-                if (isMounted) {
-                    setError(prev => prev ? `${prev} | Error processing scene fetches.` : 'Error processing scene fetches.');
-                    const finalLoadingState = {}; chapters.forEach(ch => { finalLoadingState[ch.id] = false; });
-                    setIsLoadingScenes(finalLoadingState);
-                }
+                console.error("[ProjectDetail] fetchAllScenes: Unexpected error processing scene fetches:", err);
+                if (isMounted) { setError(prev => prev ? `${prev} | Error processing scene fetches.` : 'Error processing scene fetches.'); const finalLoadingState = {}; chapters.forEach(ch => { finalLoadingState[ch.id] = false; }); setIsLoadingScenes(finalLoadingState); }
             }
         };
         fetchAllScenes();
-        return () => {
-             // console.log("[ProjectDetail] Scenes useEffect cleanup."); // Removed log
-             isMounted = false;
-        };
-    }, [chapters, projectId, isLoadingChapters]);
+        return () => { isMounted = false; };
+    }, [chapters, projectId, isLoadingChapters]); // This hook should ONLY depend on chapters, projectId, isLoadingChapters
 
 
     // --- Action Handlers ---
-    const refreshData = useCallback(async () => {
+
+    // --- REVISED: refreshData accepts options object ---
+    const refreshData = useCallback(async (specificChapterId = null, options = {}) => {
         let isMounted = true;
-        // console.log("[ProjectDetail] Refreshing data..."); // Removed log
-        setIsLoadingChapters(true); setIsLoadingCharacters(true);
+        const { refreshChapters = true, refreshCharacters = true } = options;
+        console.log(`[ProjectDetail] Refreshing data... ${specificChapterId ? `(Specific Chapter: ${specificChapterId})` : '(Full Refresh)'} Options:`, options);
+
+        // Set loading states based on options
+        if (refreshChapters) setIsLoadingChapters(true);
+        if (refreshCharacters) setIsLoadingCharacters(true);
+
+        const loadingSceneStates = { ...isLoadingScenes };
+        const chaptersToRefreshScenes = specificChapterId ? [chapters.find(c => c.id === specificChapterId)].filter(Boolean) : chapters;
+        chaptersToRefreshScenes.forEach(ch => { loadingSceneStates[ch.id] = true; });
+        setIsLoadingScenes(loadingSceneStates);
+
+        let currentChapters = chapters; // Use current state if not refreshing
+
         try {
-            const [chaptersResponse, charactersResponse] = await Promise.all([ listChapters(projectId), listCharacters(projectId) ]);
+            // Fetch chapters and characters only if requested
+            if (refreshChapters || refreshCharacters) {
+                const promises = [];
+                if (refreshChapters) promises.push(listChapters(projectId)); else promises.push(Promise.resolve(null)); // Placeholder
+                if (refreshCharacters) promises.push(listCharacters(projectId)); else promises.push(Promise.resolve(null)); // Placeholder
+
+                const [chaptersResponse, charactersResponse] = await Promise.all(promises);
+
+                if (isMounted) {
+                    if (refreshChapters && chaptersResponse) {
+                        const sortedChapters = (chaptersResponse.data.chapters || []).sort((a, b) => a.order - b.order);
+                        setChapters(sortedChapters); // Update chapters state
+                        currentChapters = sortedChapters; // Use the newly fetched chapters for scene fetching
+                        setIsLoadingChapters(false);
+                    } else if (refreshChapters) {
+                        // Handle error if chapter fetch failed but was requested
+                        console.error("[ProjectDetail] refreshData: Failed to fetch chapters when requested.");
+                        setError(prev => prev ? `${prev} | Failed to refresh chapters.` : 'Failed to refresh chapters.');
+                        setIsLoadingChapters(false);
+                    }
+
+                    if (refreshCharacters && charactersResponse) {
+                        setCharacters(charactersResponse.data.characters || []); // Update characters state
+                        setIsLoadingCharacters(false);
+                    } else if (refreshCharacters) {
+                        // Handle error if character fetch failed but was requested
+                        console.error("[ProjectDetail] refreshData: Failed to fetch characters when requested.");
+                        setError(prev => prev ? `${prev} | Failed to refresh characters.` : 'Failed to refresh characters.');
+                        setIsLoadingCharacters(false);
+                    }
+                } else {
+                    return () => { isMounted = false; }; // Early exit if unmounted
+                }
+            }
+
+            // Fetch scenes: either specific chapter or all based on *currentChapters* state
+            const finalChaptersToFetchScenes = specificChapterId
+                ? currentChapters.filter(ch => ch.id === specificChapterId)
+                : currentChapters; // Use potentially updated chapter list
+
+            if (finalChaptersToFetchScenes.length === 0 && specificChapterId) {
+                 console.warn(`[ProjectDetail] refreshData: Chapter ${specificChapterId} not found in chapter list during scene refresh.`);
+                 if (isMounted) {
+                      const finalLoadingState = { ...isLoadingScenes };
+                      finalLoadingState[specificChapterId] = false; // Mark as not loading
+                      setIsLoadingScenes(finalLoadingState);
+                 }
+                 return () => { isMounted = false; };
+            }
+
+            const scenesPromises = finalChaptersToFetchScenes.map(async (chapter) => {
+                 try {
+                      console.log(`[ProjectDetail] refreshData: Fetching scenes for chapter ${chapter.id}`);
+                      const r = await listScenes(projectId, chapter.id);
+                      return { chapterId: chapter.id, scenes: (r.data.scenes || []).sort((a, b) => a.order - b.order), success: true };
+                 } catch (err) {
+                      console.error(`[ProjectDetail] refreshData: Error refreshing scenes for chapter ${chapter.id}:`, err);
+                      return { chapterId: chapter.id, error: err, success: false, chapterTitle: chapter.title };
+                 }
+            });
+
+            const results = await Promise.allSettled(scenesPromises);
+
             if (isMounted) {
-                // console.log("[ProjectDetail] Refresh successful."); // Removed log
-                setChapters((chaptersResponse.data.chapters || []).sort((a, b) => a.order - b.order));
-                setCharacters(charactersResponse.data.characters || []);
+                const newScenesState = { ...scenes }; // Start with existing scenes
+                const newLoadingState = { ...isLoadingScenes };
+                results.forEach(result => {
+                     if (result.status === 'fulfilled') {
+                         const data = result.value;
+                         newLoadingState[data.chapterId] = false; // Mark as loaded
+                         if (data.success) {
+                             newScenesState[data.chapterId] = data.scenes; // Update specific chapter's scenes
+                         } else {
+                             newScenesState[data.chapterId] = []; // Clear on error
+                             setError(prev => prev ? `${prev} | Failed to refresh scenes for ${data.chapterTitle}.` : `Failed to refresh scenes for ${data.chapterTitle}.`);
+                         }
+                     } else {
+                         console.error("[ProjectDetail] refreshData: Scene refresh promise rejected:", result.reason);
+                         // Potentially find chapterId from reason if possible and mark loading false
+                     }
+                });
+                // Ensure any chapter that wasn't fetched is marked as not loading
+                currentChapters.forEach(ch => {
+                    if (!(ch.id in newLoadingState) || newLoadingState[ch.id] === undefined) {
+                        newLoadingState[ch.id] = false;
+                    }
+                });
+
+                setScenes(newScenesState);
+                setIsLoadingScenes(newLoadingState);
+                console.log("[ProjectDetail] refreshData complete.");
             }
         } catch (err) {
-            console.error("[ProjectDetail] Refresh data failed:", err); // Keep error log
-            if (isMounted) setError(prev => prev ? `${prev} | Failed to refresh data.` : 'Failed to refresh data.');
-        } finally {
-            if (isMounted) { setIsLoadingChapters(false); setIsLoadingCharacters(false); }
+            console.error("[ProjectDetail] Refresh data failed:", err);
+            if (isMounted) {
+                setError(prev => prev ? `${prev} | Failed to refresh data.` : 'Failed to refresh data.');
+                // Ensure loading states are reset on general error
+                setIsLoadingChapters(false);
+                setIsLoadingCharacters(false);
+                const finalLoadingState = {};
+                chapters.forEach(ch => { finalLoadingState[ch.id] = false; });
+                setIsLoadingScenes(finalLoadingState);
+            }
         }
+
         return () => { isMounted = false; };
-    }, [projectId]);
+    }, [projectId, chapters, scenes, isLoadingScenes]); // Dependencies needed for reading current state
+    // --- END REVISED ---
 
     const handleCreateChapter = useCallback(async (e) => {
         e.preventDefault(); if (!newChapterTitle.trim()) return;
-        try { await createChapter(projectId, { title: newChapterTitle, order: chapters.length > 0 ? Math.max(...chapters.map(c => c.order)) + 1 : 1 }); setNewChapterTitle(''); refreshData(); }
-        catch (err) { console.error("Create chapter error:", err); setError("Failed to create chapter."); } // Added console.error
+        try { await createChapter(projectId, { title: newChapterTitle, order: chapters.length > 0 ? Math.max(...chapters.map(c => c.order)) + 1 : 1 }); setNewChapterTitle(''); refreshData(null, { refreshChapters: true, refreshCharacters: false }); } // Refresh chapters, not chars
+        catch (err) { console.error("Create chapter error:", err); setError("Failed to create chapter."); }
     }, [newChapterTitle, chapters, projectId, refreshData]);
 
     const handleDeleteChapter = useCallback(async (chapterId, chapterTitle) => {
         if (!window.confirm(`Delete chapter "${chapterTitle}" and ALL ITS SCENES?`)) return;
-        try { await deleteChapter(projectId, chapterId); refreshData(); }
-        catch (err) { console.error("Delete chapter error:", err); setError("Failed to delete chapter."); } // Added console.error
+        try { await deleteChapter(projectId, chapterId); refreshData(null, { refreshChapters: true, refreshCharacters: false }); } // Refresh chapters for reordering
+        catch (err) { console.error("Delete chapter error:", err); setError("Failed to delete chapter."); }
     }, [projectId, refreshData]);
 
     const handleCreateCharacter = useCallback(async (e) => {
         e.preventDefault(); if (!newCharacterName.trim()) return;
-        try { await createCharacter(projectId, { name: newCharacterName, description: "" }); setNewCharacterName(''); refreshData(); }
-        catch (err) { console.error("Create character error:", err); setError("Failed to create character."); } // Added console.error
+        try { await createCharacter(projectId, { name: newCharacterName, description: "" }); setNewCharacterName(''); refreshData(null, { refreshChapters: false, refreshCharacters: true }); } // Refresh chars, not chapters
+        catch (err) { console.error("Create character error:", err); setError("Failed to create character."); }
     }, [newCharacterName, projectId, refreshData]);
 
     const handleDeleteCharacter = useCallback(async (characterId, characterName) => {
         if (!window.confirm(`Delete character "${characterName}"?`)) return;
-        try { await deleteCharacter(projectId, characterId); refreshData(); }
-        catch (err) { console.error("Delete character error:", err); setError("Failed to delete character."); } // Added console.error
+        try { await deleteCharacter(projectId, characterId); refreshData(null, { refreshChapters: false, refreshCharacters: true }); } // Refresh chars, not chapters
+        catch (err) { console.error("Delete character error:", err); setError("Failed to delete character."); }
     }, [projectId, refreshData]);
 
     const handleCreateScene = useCallback(async (chapterId) => {
-        const currentScenes = scenes[chapterId] || []; const nextOrder = currentScenes.length > 0 ? Math.max(...currentScenes.map(s => s.order)) + 1 : 1;
-        try { const r = await createScene(projectId, chapterId, { title: "New Scene", order: nextOrder, content: "" }); setScenes(p => ({ ...p, [chapterId]: [...(p[chapterId] || []), r.data].sort((a, b) => a.order - b.order) })); /* refreshData(); */ } // Removed refreshData for optimistic update
-        catch(err) { console.error("Create scene error:", err); setError("Failed to create scene."); } // Added console.error
-    }, [scenes, projectId /*, refreshData */]); // Removed refreshData dependency
+        try {
+             const r = await createScene(projectId, chapterId, { title: "New Scene", content: "", order: null });
+             // --- MODIFIED: Refresh only this chapter's scenes, don't refresh core data ---
+             await refreshData(chapterId, { refreshChapters: false, refreshCharacters: false });
+             // --- END MODIFIED ---
+        }
+        catch(err) { console.error("Create scene error:", err); setError("Failed to create scene."); }
+    }, [projectId, refreshData]); // Depend on refreshData
 
     const handleDeleteScene = useCallback(async (chapterId, sceneId, sceneTitle) => {
         if (!window.confirm(`Delete scene "${sceneTitle}"?`)) return;
          try {
              await deleteScene(projectId, chapterId, sceneId);
-             setScenes(prevScenes => {
-                 const chapterScenes = prevScenes[chapterId] || [];
-                 const updatedChapterScenes = chapterScenes.filter(scene => scene.id !== sceneId);
-                 const reorderedScenes = updatedChapterScenes.map((scene, index) => ({ ...scene, order: index + 1, }));
-                 return { ...prevScenes, [chapterId]: reorderedScenes };
-             });
+             // --- MODIFIED: Refresh only this chapter's scenes, don't refresh core data ---
+             await refreshData(chapterId, { refreshChapters: false, refreshCharacters: false });
+             // --- END MODIFIED ---
          } catch(err) { console.error("Error deleting scene:", err); setError("Failed to delete scene."); }
-    }, [projectId, setScenes, setError]);
+    }, [projectId, refreshData]); // Depend on refreshData
 
+    // (Other handlers remain the same, calling refreshData appropriately)
     const handleEditNameClick = useCallback(() => { setEditedProjectName(project?.name || ''); setIsEditingName(true); setSaveNameError(null); setSaveNameSuccess(''); }, [project]);
     const handleCancelEditName = useCallback(() => { setIsEditingName(false); }, []);
     const handleSaveName = useCallback(async () => {
@@ -344,7 +377,7 @@ function ProjectDetailPage() {
         if (editedProjectName === project?.name) { setIsEditingName(false); return; }
         setIsSavingName(true); setSaveNameError(null); setSaveNameSuccess('');
         try { const r = await updateProject(projectId, { name: editedProjectName }); setProject(r.data); setIsEditingName(false); setSaveNameSuccess('Project name updated successfully!'); setTimeout(() => setSaveNameSuccess(''), 3000); }
-        catch (err) { console.error("Save project name error:", err); setSaveNameError("Failed to update project name. Please try again."); } // Added console.error
+        catch (err) { console.error("Save project name error:", err); setSaveNameError("Failed to update project name. Please try again."); }
         finally { setIsSavingName(false); }
     }, [editedProjectName, project, projectId]);
 
@@ -354,13 +387,12 @@ function ProjectDetailPage() {
     const handleSaveChapter = useCallback(async (chapterId, currentEditedTitle) => {
         if (!currentEditedTitle.trim()) { setSaveChapterError("Chapter title cannot be empty."); return; }
         setIsSavingChapter(true); setSaveChapterError(null);
-        try { await updateChapter(projectId, chapterId, { title: currentEditedTitle }); setEditingChapterId(null); setEditedChapterTitle(''); refreshData(); }
-        catch (err) { console.error("Save chapter title error:", err); const msg = err.response?.data?.detail || err.message || 'Failed to update chapter.'; setSaveChapterError(msg); } // Added console.error
+        try { await updateChapter(projectId, chapterId, { title: currentEditedTitle }); setEditingChapterId(null); setEditedChapterTitle(''); refreshData(null, { refreshChapters: true, refreshCharacters: false }); } // Refresh chapters
+        catch (err) { console.error("Save chapter title error:", err); const msg = err.response?.data?.detail || err.message || 'Failed to update chapter.'; setSaveChapterError(msg); }
         finally { setIsSavingChapter(false); }
     }, [projectId, refreshData]);
 
     const handleGenerateSceneDraft = useCallback(async (chapterId, summary) => {
-        // console.log(`[ProjectDetail] handleGenerateSceneDraft called for chapter ${chapterId}`); // Removed log
         setIsGeneratingScene(true);
         setGeneratingChapterId(chapterId);
         setGenerationError(null);
@@ -369,39 +401,37 @@ function ProjectDetailPage() {
         setShowGeneratedSceneModal(false);
         setCreateSceneError(null);
 
-        const currentScenes = scenes[chapterId] || [];
-        const prevOrder = currentScenes.length > 0 ? Math.max(...currentScenes.map(s => s.order)) : 0;
+        const currentScenesForChapter = scenes[chapterId] || [];
+        const prevOrder = currentScenesForChapter.length > 0 ? Math.max(...currentScenesForChapter.map(s => s.order)) : 0;
 
         try {
             const response = await generateSceneDraft(projectId, chapterId, { prompt_summary: summary, previous_scene_order: prevOrder });
             const generatedTitle = response.data?.title;
             const generatedContent = response.data?.content;
-            // console.log(`[ProjectDetail] Received generation response. Title: "${generatedTitle}", Content starts with: "${generatedContent?.substring(0, 50)}..."`); // Removed log
 
             const potentialError = (typeof generatedContent === 'string' && generatedContent.trim().startsWith("Error:")) ||
                                  (typeof generatedTitle === 'string' && generatedTitle.trim().startsWith("Error:"));
 
             if (potentialError) {
                 const errorMessage = generatedContent.trim().startsWith("Error:") ? generatedContent : generatedTitle;
-                console.warn(`[ProjectDetail] Scene generation returned an error message: ${errorMessage}`); // Keep warn log
+                console.warn(`[ProjectDetail] Scene generation returned an error message: ${errorMessage}`);
                 setGenerationError(errorMessage);
                 setShowGeneratedSceneModal(false);
             } else if (generatedTitle !== undefined && generatedContent !== undefined) {
-                // console.log("[ProjectDetail] Scene generation successful, showing modal."); // Removed log
                 setGeneratedSceneTitle(generatedTitle || "Untitled Scene");
                 setGeneratedSceneContent(generatedContent);
                 setChapterIdForGeneratedScene(chapterId);
                 setShowGeneratedSceneModal(true);
                 setGenerationError(null);
             } else {
-                 console.error("[ProjectDetail] Unexpected response format from generateSceneDraft:", response.data); // Keep error log
+                 console.error("[ProjectDetail] Unexpected response format from generateSceneDraft:", response.data);
                  setGenerationError("Error: Received unexpected response format from AI.");
                  setShowGeneratedSceneModal(false);
             }
         } catch (err) {
-            console.error("[ProjectDetail] Error calling generateSceneDraft API:", err); // Keep error log
+            console.error("[ProjectDetail] Error calling generateSceneDraft API:", err);
             if (err.response?.status === 429) {
-                console.warn("[ProjectDetail] Received 429 status code."); // Keep warn log
+                console.warn("[ProjectDetail] Received 429 status code.");
                 setGenerationError("AI feature temporarily unavailable due to free tier limits. Please try again later.");
             } else {
                  const msg = err.response?.data?.detail || err.message || 'Failed to generate scene draft.';
@@ -409,7 +439,6 @@ function ProjectDetailPage() {
             }
             setShowGeneratedSceneModal(false);
         } finally {
-            // console.log("[ProjectDetail] Finished handleGenerateSceneDraft."); // Removed log
             setIsGeneratingScene(false);
         }
     }, [scenes, projectId]);
@@ -422,19 +451,28 @@ function ProjectDetailPage() {
         setIsCreatingSceneFromDraft(true); setCreateSceneError(null);
         try {
             const titleToSave = generatedSceneTitle;
-            const currentScenes = scenes[chapterIdForGeneratedScene] || [];
-            const nextOrder = currentScenes.length > 0 ? Math.max(...currentScenes.map(s => s.order)) + 1 : 1;
-            const r = await createScene(projectId, chapterIdForGeneratedScene, { title: titleToSave, order: nextOrder, content: generatedSceneContent });
-            setScenes(p => ({ ...p, [chapterIdForGeneratedScene]: [...(p[chapterIdForGeneratedScene] || []), r.data].sort((a, b) => a.order - b.order) }));
+            const r = await createScene(projectId, chapterIdForGeneratedScene, { title: titleToSave, content: generatedSceneContent, order: null });
+
+            // --- MODIFIED: Refresh only this chapter's scenes, don't refresh core data ---
+            await refreshData(chapterIdForGeneratedScene, { refreshChapters: false, refreshCharacters: false });
+            // --- END MODIFIED ---
+
             setShowGeneratedSceneModal(false);
             setGeneratedSceneContent('');
             setGeneratedSceneTitle('');
             setChapterIdForGeneratedScene(null);
             setGeneratingChapterId(null);
-            refreshData();
-        } catch (err) { console.error("Create scene from draft error:", err); const msg = err.response?.data?.detail || err.message || 'Failed to create scene from draft.'; setCreateSceneError(msg); } // Added console.error
+        } catch (err) {
+            console.error("Create scene from draft error:", err);
+            const msg = err.response?.data?.detail || err.message || 'Failed to create scene from draft.';
+            if (typeof msg === 'string' && msg.includes("already exists")) {
+                setCreateSceneError(`Order conflict: ${msg}. Please try creating manually or refresh.`);
+            } else {
+                setCreateSceneError(msg);
+            }
+        }
         finally { setIsCreatingSceneFromDraft(false); }
-    }, [chapterIdForGeneratedScene, generatedSceneTitle, generatedSceneContent, scenes, projectId, refreshData]);
+    }, [chapterIdForGeneratedScene, generatedSceneTitle, generatedSceneContent, projectId, refreshData]);
 
     const handleSummaryChange = useCallback((chapterId, value) => {
         setGenerationSummaries(prev => ({ ...prev, [chapterId]: value }));
@@ -447,8 +485,8 @@ function ProjectDetailPage() {
     const copyGeneratedText = useCallback(() => {
         const textToCopy = `## ${generatedSceneTitle}\n\n${generatedSceneContent}`;
         navigator.clipboard.writeText(textToCopy)
-            .then(() => console.log("Generated title and content copied.")) // Keep log
-            .catch(err => console.error('Failed to copy text: ', err)); // Keep error log
+            .then(() => console.log("Generated title and content copied."))
+            .catch(err => console.error('Failed to copy text: ', err));
     }, [generatedSceneTitle, generatedSceneContent]);
 
     const handleSplitInputChange = useCallback((chapterId, value) => {
@@ -476,7 +514,7 @@ function ProjectDetailPage() {
         try {
             const response = await splitChapterIntoScenes(projectId, chapterId, { chapter_content: contentToSplit });
             if (response.data?.error) {
-                 console.error(`[ProjectDetail] Split chapter returned an error: ${response.data.error}`); // Keep error log
+                 console.error(`[ProjectDetail] Split chapter returned an error: ${response.data.error}`);
                  setSplitError(response.data.error);
                  setShowSplitModal(false);
             } else {
@@ -486,9 +524,9 @@ function ProjectDetailPage() {
                  setSplitError(null);
             }
         } catch (err) {
-            console.error("[ProjectDetail] Error calling splitChapterIntoScenes API:", err); // Keep error log
+            console.error("[ProjectDetail] Error calling splitChapterIntoScenes API:", err);
              if (err.response?.status === 429) {
-                console.warn("[ProjectDetail] Split Received 429 status code."); // Keep warn log
+                console.warn("[ProjectDetail] Split Received 429 status code.");
                 setSplitError("AI feature temporarily unavailable due to free tier limits. Please try again later.");
             } else {
                 const msg = err.response?.data?.detail || err.message || 'Failed to split chapter.';
@@ -496,7 +534,6 @@ function ProjectDetailPage() {
             }
             setShowSplitModal(false);
         } finally {
-            // console.log("[ProjectDetail] Finished handleSplitChapter."); // Removed log
             setIsSplittingChapter(false);
         }
     }, [splitInputContent, projectId]);
@@ -504,19 +541,23 @@ function ProjectDetailPage() {
     const handleCreateScenesFromSplit = useCallback(async () => {
         if (!chapterIdForSplits || proposedSplits.length === 0) { setCreateFromSplitError("No chapter ID or proposed splits available."); return; }
         setIsCreatingScenesFromSplit(true); setCreateFromSplitError(null);
-        const existingScenes = scenes[chapterIdForSplits] || []; let currentMaxOrder = existingScenes.length > 0 ? Math.max(...existingScenes.map(s => s.order)) : 0;
         const errors = []; const createdScenes = [];
         for (const proposedScene of proposedSplits) {
-            currentMaxOrder++; const newSceneData = { title: proposedScene.suggested_title || `Scene ${currentMaxOrder}`, order: currentMaxOrder, content: proposedScene.content || "" };
+            const newSceneData = { title: proposedScene.suggested_title || `Scene`, order: null, content: proposedScene.content || "" };
             try { const result = await createScene(projectId, chapterIdForSplits, newSceneData); createdScenes.push(result.data); }
-            catch (err) { console.error("Create scene from split error:", err); const msg = err.response?.data?.detail || err.message || `Failed to create scene for "${newSceneData.title}".`; errors.push(msg); } // Added console.error
+            catch (err) { console.error("Create scene from split error:", err); const msg = err.response?.data?.detail || err.message || `Failed to create scene for "${newSceneData.title}".`; errors.push(msg); }
         }
-        if (createdScenes.length > 0) { setScenes(p => ({ ...p, [chapterIdForSplits]: [...(p[chapterIdForSplits] || []), ...createdScenes].sort((a, b) => a.order - b.order) })); }
+
+        // --- MODIFIED: Refresh only this chapter's scenes ---
+        if (createdScenes.length > 0) {
+            await refreshData(chapterIdForSplits, { refreshChapters: false, refreshCharacters: false });
+        }
+        // --- END MODIFIED ---
+
         setIsCreatingScenesFromSplit(false);
         if (errors.length > 0) { setCreateFromSplitError(errors.join(' | ')); }
         else { setShowSplitModal(false); setProposedSplits([]); setChapterIdForSplits(null); setSplittingChapterId(null); }
-        refreshData();
-    }, [chapterIdForSplits, proposedSplits, scenes, projectId, refreshData]);
+    }, [chapterIdForSplits, proposedSplits, projectId, refreshData]);
 
     const handleCloseSplitModal = useCallback(() => {
         setShowSplitModal(false); setProposedSplits([]); setChapterIdForSplits(null); setCreateFromSplitError(null);
@@ -542,23 +583,17 @@ function ProjectDetailPage() {
     // --- Combined Loading State ---
     const isAnyOperationLoading = isSavingName || isSavingChapter || isGeneratingScene || isCreatingSceneFromDraft || isSplittingChapter || isCreatingScenesFromSplit;
 
-    // --- Rendering Logic ---
-    // console.log(`[ProjectDetail] Rendering - isLoadingProject: ${isLoadingProject}, isLoadingChapters: ${isLoadingChapters}, isLoadingCharacters: ${isLoadingCharacters}, error: ${error}, project: ${project ? 'Exists' : 'null'}`); // Removed log
-
+    // --- Rendering Logic (remains the same) ---
      if (isLoadingProject) {
-         // console.log("[ProjectDetail] Rendering Loading project state..."); // Removed log
          return <p>Loading project...</p>;
      }
      if (error && !project) {
-         // console.log("[ProjectDetail] Rendering Error state (project load failed)..."); // Removed log
          return ( <div> <p style={{ color: 'red' }}>Error: {error}</p> <Link to="/"> &lt; Back to Project List</Link> </div> );
      }
      if (!project) {
-         // console.log("[ProjectDetail] Rendering Not Found state..."); // Removed log
          return ( <div> <p>Project not found.</p> <Link to="/"> &lt; Back to Project List</Link> </div> );
      }
 
-    // console.log("[ProjectDetail] Rendering Main Content structure..."); // Removed log
     const isContentLoading = isLoadingChapters || isLoadingCharacters;
 
     return (

@@ -139,10 +139,11 @@ def test_create_scene_order_conflict(scene_service_with_mocks):
     mock_chapter_service.get_by_id.return_value = ChapterRead(id=chapter_id, project_id=project_id, title="Test Chapter", order=1)
     mock_file_service._get_scene_path.return_value = mock_scene_path
     mock_file_service.path_exists.return_value = False
-    mock_file_service.write_text_file.return_value = None # Called before conflict check
+    # --- REMOVED: write_text_file mock setup (it shouldn't be called) ---
+    # mock_file_service.write_text_file.return_value = None
     mock_file_service.read_chapter_metadata.return_value = mock_chapter_metadata
-    # Mock the delete_file call that happens during cleanup
-    mock_file_service.delete_file.return_value = None
+    # --- REMOVED: delete_file mock setup (it shouldn't be called) ---
+    # mock_file_service.delete_file.return_value = None
 
     with patch('app.services.scene_service.generate_uuid', return_value=mock_scene_id):
         with pytest.raises(HTTPException) as exc_info:
@@ -150,10 +151,14 @@ def test_create_scene_order_conflict(scene_service_with_mocks):
 
     assert exc_info.value.status_code == 409
     assert "Scene order 1 already exists" in exc_info.value.detail
-    mock_file_service.write_text_file.assert_called_once_with(mock_scene_path, scene_in.content, trigger_index=True)
+    # --- MODIFIED: Assert write_text_file was NOT called ---
+    mock_file_service.write_text_file.assert_not_called()
+    # --- END MODIFIED ---
     mock_file_service.read_chapter_metadata.assert_called_once_with(project_id, chapter_id)
     mock_file_service.write_chapter_metadata.assert_not_called()
-    mock_file_service.delete_file.assert_called_once_with(mock_scene_path) # Verify cleanup was attempted
+    # --- REMOVED: delete_file assertion ---
+    # mock_file_service.delete_file.assert_called_once_with(mock_scene_path)
+    # --- END REMOVED ---
 
 # --- Tests for update ---
 

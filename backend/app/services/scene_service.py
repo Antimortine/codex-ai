@@ -36,38 +36,64 @@ class SceneService:
         if file_service.path_exists(scene_path):
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Scene ID collision")
 
+        # --- MODIFICATION START: Handle optional order ---
+        chapter_metadata = file_service.read_chapter_metadata(project_id, chapter_id)
+        if 'scenes' not in chapter_metadata: chapter_metadata['scenes'] = {}
+        existing_scenes = chapter_metadata['scenes']
+
+        final_order: int
+        if scene_in.order is None:
+            # Calculate next available order
+            max_order = 0
+            if existing_scenes:
+                orders = [data.get('order', 0) for data in existing_scenes.values() if isinstance(data.get('order'), int)]
+                if orders:
+                    max_order = max(orders)
+            final_order = max_order + 1
+            logger.info(f"Scene order not provided. Calculated next available order: {final_order}")
+        else:
+            # Check for conflicts if order *was* provided
+            final_order = scene_in.order
+            for existing_id, data in existing_scenes.items():
+                 if data.get('order') == final_order:
+                     raise HTTPException(
+                        status_code=status.HTTP_409_CONFLICT,
+                        detail=f"Scene order {final_order} already exists for scene '{data.get('title', existing_id)}'"
+                     )
+        # --- MODIFICATION END ---
+
         # Create the scene markdown file and trigger indexing
         # Pass trigger_index=True
         file_service.write_text_file(scene_path, scene_in.content, trigger_index=True)
 
-        # Update chapter metadata using file_service
-        chapter_metadata = file_service.read_chapter_metadata(project_id, chapter_id)
-        if 'scenes' not in chapter_metadata: chapter_metadata['scenes'] = {}
-
-        for existing_id, data in chapter_metadata['scenes'].items():
-             if data.get('order') == scene_in.order:
-                 # Attempt to clean up the created file if order conflicts
-                 try:
-                      file_service.delete_file(scene_path) # This will also attempt index deletion
-                 except Exception as cleanup_err:
-                      logger.error(f"Failed to cleanup scene file {scene_path} after order conflict: {cleanup_err}")
-                 raise HTTPException(
-                    status_code=status.HTTP_409_CONFLICT,
-                    detail=f"Scene order {scene_in.order} already exists for scene '{data.get('title', existing_id)}'"
-                 )
-
-        chapter_metadata['scenes'][scene_id] = {
-            "title": scene_in.title,
-            "order": scene_in.order
-        }
-        file_service.write_chapter_metadata(project_id, chapter_id, chapter_metadata) # JSON, no index trigger
+        # --- MODIFICATION START: Use final_order and check for cleanup on error ---
+        try:
+            # Update chapter metadata using file_service
+            chapter_metadata['scenes'][scene_id] = {
+                "title": scene_in.title,
+                "order": final_order # Use the calculated or validated order
+            }
+            file_service.write_chapter_metadata(project_id, chapter_id, chapter_metadata) # JSON, no index trigger
+        except Exception as meta_write_err:
+             # Attempt to cleanup the created file if metadata write fails
+             logger.error(f"Failed to write chapter metadata for new scene {scene_id}: {meta_write_err}", exc_info=True)
+             try:
+                  file_service.delete_file(scene_path) # This will also attempt index deletion
+             except Exception as cleanup_err:
+                  logger.error(f"Failed to cleanup scene file {scene_path} after metadata write error: {cleanup_err}")
+             # Re-raise the original error or a generic one
+             raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to save scene metadata."
+             ) from meta_write_err
+        # --- MODIFICATION END ---
 
         return SceneRead(
             id=scene_id,
             project_id=project_id,
             chapter_id=chapter_id,
             title=scene_in.title,
-            order=scene_in.order,
+            order=final_order, # Return the final order used
             content=scene_in.content
         )
 
@@ -95,7 +121,7 @@ class SceneService:
             project_id=project_id,
             chapter_id=chapter_id,
             title=scene_data.get("title", f"Scene {scene_id}"),
-            order=scene_data.get("order", -1),
+            order=scene_data.get("order", -1), # Default if missing, though should exist
             content=content
         )
 

@@ -148,7 +148,7 @@ class ChapterService:
         return existing_chapter
 
     def delete(self, project_id: str, chapter_id: str):
-        """Deletes a chapter directory and its contents, including index cleanup."""
+        """Deletes a chapter directory and its contents, including index cleanup, and renumbers remaining chapters."""
         self.get_by_id(project_id, chapter_id) # Ensures chapter exists
 
         chapter_path = file_service._get_chapter_path(project_id, chapter_id)
@@ -157,12 +157,39 @@ class ChapterService:
         file_service.delete_directory(chapter_path) # FileService handles index cleanup within
         logger.info(f"Chapter directory {chapter_id} deleted.")
 
-        # Update project metadata (remove chapter entry)
+        # Update project metadata (remove chapter entry AND renumber)
         project_metadata = file_service.read_project_metadata(project_id)
-        if chapter_id in project_metadata.get('chapters', {}):
-            del project_metadata['chapters'][chapter_id]
+        chapters_dict = project_metadata.get('chapters', {})
+
+        if chapter_id in chapters_dict:
+            del chapters_dict[chapter_id]
+            logger.info(f"Chapter {chapter_id} removed from project metadata dictionary.")
+
+            # --- Renumbering Logic ---
+            if chapters_dict: # Only renumber if there are remaining chapters
+                logger.info(f"Renumbering remaining chapters for project {project_id}...")
+                # Sort remaining chapters by current order
+                remaining_chapters = sorted(
+                    chapters_dict.items(),
+                    key=lambda item: item[1].get('order', float('inf')) # Sort by order, put chapters without order last
+                )
+
+                # Create a new dictionary with renumbered chapters
+                renumbered_chapters = {}
+                for index, (chap_id, chap_data) in enumerate(remaining_chapters):
+                    new_order = index + 1
+                    chap_data['order'] = new_order # Update order in the data dictionary
+                    renumbered_chapters[chap_id] = chap_data # Add to the new dictionary
+                    logger.debug(f"  - Chapter '{chap_data.get('title', chap_id)}' (ID: {chap_id}) renumbered to order {new_order}")
+
+                project_metadata['chapters'] = renumbered_chapters # Replace old dict with renumbered one
+                logger.info("Chapter renumbering complete.")
+            else:
+                logger.info("No remaining chapters to renumber.")
+            # --- End Renumbering Logic ---
+
             file_service.write_project_metadata(project_id, project_metadata)
-            logger.info(f"Chapter {chapter_id} removed from project metadata.")
+            logger.info(f"Project metadata updated after chapter deletion and renumbering.")
         else:
             logger.warning(f"Chapter {chapter_id} was deleted but already missing from project metadata.")
 

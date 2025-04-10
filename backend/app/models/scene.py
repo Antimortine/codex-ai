@@ -16,10 +16,16 @@ from pydantic import BaseModel, Field
 from typing import Optional
 from .common import IDModel
 
+# --- REMOVED: Problematic self-import ---
+# from app.models.scene import SceneCreate, SceneUpdate, SceneRead, SceneList
+# --- END REMOVED ---
+
 # Properties required when creating a scene
 class SceneCreate(BaseModel):
     title: str = Field(..., min_length=1, description="Title or brief description of the scene")
-    order: int = Field(..., ge=1, description="1-based order of the scene within the chapter")
+    # --- MODIFIED: Make order optional ---
+    order: Optional[int] = Field(None, ge=1, description="Optional: 1-based order. If None, backend calculates next available.")
+    # --- END MODIFIED ---
     content: str = Field("", description="Markdown content of the scene") # Default to empty
     # project_id and chapter_id will be path parameters
 
@@ -30,10 +36,14 @@ class SceneUpdate(BaseModel):
     content: Optional[str] = None # Allow updating content
 
 # Properties returned when reading a scene
-class SceneRead(IDModel, SceneCreate):
+class SceneRead(IDModel): # Removed inheritance from SceneCreate temporarily
     project_id: str = Field(..., description="ID of the parent project")
     chapter_id: str = Field(..., description="ID of the parent chapter")
-    # Inherits id, title, order, content
+    # Explicitly define fields matching SceneCreate + ID
+    id: str = Field(...)
+    title: str = Field(...)
+    order: int = Field(...) # Order will always be set when reading
+    content: str = Field(...)
     pass
 
 # Wrapper for list response

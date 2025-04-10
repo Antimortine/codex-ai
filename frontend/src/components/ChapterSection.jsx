@@ -14,11 +14,13 @@
  * limitations under the License.
  */
 
-import React from 'react';
+// --- MODIFICATION: Import React ---
+import React, { memo } from 'react';
+// --- END MODIFICATION ---
 import PropTypes from 'prop-types';
 import { Link } from 'react-router-dom';
 
-// Basic styling (can be moved to CSS or refined)
+// Basic styling (remains the same)
 const styles = {
     chapterSection: {
         border: '1px solid #eee',
@@ -134,7 +136,8 @@ const styles = {
     }
 };
 
-function ChapterSection({
+// --- MODIFICATION: Wrap component definition in memo ---
+const ChapterSection = memo(function ChapterSection({ // Use memo and give the function a name for DevTools
     chapter,
     scenesForChapter,
     isLoadingChapterScenes,
@@ -164,15 +167,11 @@ function ChapterSection({
     onSplitChapter,
 }) {
 
+    // --- Component logic remains the same ---
     const chapterHasScenes = scenesForChapter && scenesForChapter.length > 0;
     const disableChapterActions = isAnyOperationLoading || isLoadingChapterScenes;
-    // Combine flags for disabling generate button
     const disableGenerateButton = isAnyOperationLoading || isLoadingChapterScenes || isGeneratingSceneForThisChapter;
-    // Combine flags for disabling summary input (should be disabled if any operation or specifically generating for this chapter)
-    const disableSummaryInput = isAnyOperationLoading || isGeneratingSceneForThisChapter; // Corrected logic
-
-
-    // Split Button Logic
+    const disableSummaryInput = isAnyOperationLoading || isGeneratingSceneForThisChapter;
     const disableSplitButton = isAnyOperationLoading || isLoadingChapterScenes || chapterHasScenes || !splitInputContentForThisChapter?.trim() || isSplittingThisChapter;
     const splitButtonTitle = chapterHasScenes ? "Cannot split chapter that already has scenes"
                            : !splitInputContentForThisChapter?.trim() ? "Paste chapter content below to enable splitting"
@@ -209,7 +208,6 @@ function ChapterSection({
                         >
                             Cancel
                         </button>
-                        {/* Add data-testid to the error message paragraph */}
                         {saveChapterError && <p data-testid={`chapter-save-error-${chapter.id}`} style={styles.errorText}>Save Error: {saveChapterError}</p>}
                     </div>
                 ) : (
@@ -241,7 +239,6 @@ function ChapterSection({
             {isLoadingChapterScenes ? (
                 <p style={styles.loadingText}>Loading scenes...</p>
             ) : (
-                // Correct Logic: Show Split UI ONLY if NOT loading AND chapter has NO scenes
                 !chapterHasScenes ? (
                     <div style={styles.splitInputArea}>
                         <label htmlFor={`split-input-${chapter.id}`} style={{ display: 'block', marginBottom: '5px', fontSize: '0.9em', fontWeight: 'bold' }}>
@@ -272,7 +269,6 @@ function ChapterSection({
                         )}
                     </div>
                 ) : (
-                    // Otherwise, show the scene list
                     <ul style={styles.sceneList}>
                         {scenesForChapter.map(scene => (
                             <li key={scene.id} style={styles.sceneListItem}>
@@ -324,14 +320,14 @@ function ChapterSection({
                         {isGeneratingSceneForThisChapter ? 'Generating...' : '+ Add Scene using AI'}
                     </button>
                     {isGeneratingSceneForThisChapter && <span style={styles.loadingIndicator}> (AI is working...)</span>}
-                    {/* Add data-testid to the error message paragraph */}
                     {generationErrorForThisChapter && <p data-testid={`chapter-gen-error-${chapter.id}`} style={styles.errorText}>Generate Error: {generationErrorForThisChapter}</p>}
                 </div>
             </div>
         </div>
     );
-}
+}); // --- END MODIFICATION: Close memo HOC ---
 
+// PropTypes remain the same
 ChapterSection.propTypes = {
     chapter: PropTypes.shape({
         id: PropTypes.string.isRequired,
