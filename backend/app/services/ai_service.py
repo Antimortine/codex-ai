@@ -24,6 +24,7 @@ from app.models.ai import (
 from llama_index.core.base.response.schema import NodeWithScore
 from typing import List, Tuple, Optional, Dict # Import Optional, Dict
 import re # Import re for query matching normalization
+from pathlib import Path # Import Path
 
 # Import FileService to load explicit context
 from app.services.file_service import file_service
@@ -67,7 +68,7 @@ class AIService:
         """
         Handles the business logic for querying a project's context.
         Loads explicit Plan/Synopsis, identifies if the query mentions known entities
-        (Plan, Synopsis, World, Character, Scene, Note), loads content directly for ALL matches,
+        (World, Character, Scene, Note), loads content directly for ALL matches (excluding Plan/Synopsis),
         and delegates to RagEngine.
         Returns: Tuple of (answer_string, list_of_retrieved_nodes, optional_list_of_direct_source_info_dicts)
         """
@@ -121,14 +122,19 @@ class AIService:
         logger.debug(f"AIService (Query): Compiled entity list with {len(entity_list)} items.")
 
 
-        # --- 3. Query Matching & Direct Content Fetching (MODIFIED to find ALL matches) ---
-        # (Logic unchanged)
+        # --- 3. Query Matching & Direct Content Fetching (MODIFIED to find ALL matches and EXCLUDE Plan/Synopsis) ---
         matched_entities_found: List[Dict] = []
         if entity_list:
             normalized_query = query_text.lower().strip()
             def normalize_name(name): return name.lower().strip()
+
             logger.debug(f"AIService (Query): Searching for entity names in normalized query: '{normalized_query}'")
             for entity in entity_list:
+                # --- ADDED CHECK: Skip Plan and Synopsis for direct loading ---
+                if entity['type'] in ['Plan', 'Synopsis']:
+                    continue
+                # --- END ADDED CHECK ---
+
                 normalized_entity_name = normalize_name(entity['name'])
                 pattern = rf"\b{re.escape(normalized_entity_name)}\b"
                 if re.search(pattern, normalized_query):
@@ -137,18 +143,42 @@ class AIService:
                         logger.info(f"AIService (Query): Attempting to load direct content for matched entity: {entity['name']}")
                         file_path_to_load = entity['file_path']
                         content = ""
-                        if entity['type'] in ['Plan', 'Synopsis', 'World']: content = self.file_service.read_content_block_file(project_id, file_path_to_load.name)
-                        else: content = self.file_service.read_text_file(file_path_to_load)
-                        direct_sources_data.append({ 'type': entity['type'], 'name': entity['name'], 'content': content })
-                        logger.info(f"AIService (Query): Successfully loaded direct content for '{entity['name']}' (Length: {len(content)})")
-                    except Exception as e: logger.error(f"AIService (Query): Error loading direct content for '{entity['name']}': {e}", exc_info=True) # Log error but continue
-        if not direct_sources_data: logger.info("AIService (Query): No direct entity matches found in query.")
-        else: logger.info(f"AIService (Query): Found and loaded {len(direct_sources_data)} direct sources.")
+                        # Use read_text_file for characters, scenes, notes; read_content_block_file for world
+                        if entity['type'] == 'World':
+                            content = self.file_service.read_content_block_file(project_id, file_path_to_load.name)
+                        elif entity['type'] in ['Character', 'Scene', 'Note']:
+                             # Ensure file_path is Path object before calling read_text_file
+                             if isinstance(file_path_to_load, Path):
+                                 content = self.file_service.read_text_file(file_path_to_load)
+                             else:
+                                 logger.error(f"AIService (Query): Invalid file_path type for entity '{entity['name']}': {type(file_path_to_load)}")
+                                 continue # Skip if path is not valid
+                        else:
+                             logger.warning(f"AIService (Query): Unknown entity type '{entity['type']}' encountered for direct loading.")
+                             continue # Skip unknown types
 
+                        # Add to list of direct sources
+                        direct_sources_data.append({
+                            'type': entity['type'],
+                            'name': entity['name'], # Original case name
+                            'content': content,
+                            'file_path': str(file_path_to_load) # Store path for potential filtering later
+                        })
+                        logger.info(f"AIService (Query): Successfully loaded direct content for '{entity['name']}' (Length: {len(content)})")
+                    except HTTPException as e:
+                         if e.status_code == 404: logger.warning(f"AIService (Query): File not found for matched entity '{entity['name']}' at {entity['file_path']}. Skipping direct load for this entity.")
+                         else: logger.error(f"AIService (Query): Error loading direct content for '{entity['name']}': {e.detail}")
+                    except Exception as e:
+                         logger.error(f"AIService (Query): Unexpected error loading direct content for '{entity['name']}': {e}", exc_info=True)
+                # Continue checking other entities even after a match
+
+        if not direct_sources_data:
+             logger.info("AIService (Query): No direct entity matches found in query (excluding Plan/Synopsis).")
+        else:
+             logger.info(f"AIService (Query): Found and loaded {len(direct_sources_data)} direct sources.")
 
         # --- 4. Call RAG Engine ---
         logger.debug("AIService (Query): Delegating query to RagEngine...")
-        # --- MODIFIED: Pass direct_sources_data list correctly ---
         answer, source_nodes, direct_sources_info_list = await self.rag_engine.query(
             project_id=project_id,
             query_text=query_text,
@@ -156,7 +186,6 @@ class AIService:
             explicit_synopsis=explicit_synopsis,
             direct_sources_data=direct_sources_data # Pass the list of dicts
         )
-        # --- END MODIFIED ---
         return answer, source_nodes, direct_sources_info_list
 
 
@@ -165,15 +194,11 @@ class AIService:
     async def generate_scene_draft(self, project_id: str, chapter_id: str, request_data: AISceneGenerationRequest) -> Dict[str, str]: # Return Dict
         # (Logic unchanged)
         logger.info(f"AIService: Processing scene generation request for project {project_id}, chapter {chapter_id}, previous order: {request_data.previous_scene_order}")
-        explicit_plan = "Not Available"
-        explicit_synopsis = "Not Available"
-        explicit_previous_scenes: List[Tuple[int, str]] = []
+        explicit_plan = "Not Available"; explicit_synopsis = "Not Available"; explicit_previous_scenes: List[Tuple[int, str]] = []
         logger.debug("AIService: Loading explicit context for generation...")
-        try:
-            explicit_plan = self.file_service.read_content_block_file(project_id, "plan.md")
+        try: explicit_plan = self.file_service.read_content_block_file(project_id, "plan.md")
         except Exception as e: logger.error(f"AIService (Gen): Error loading plan.md: {e}", exc_info=True); explicit_plan = "Error loading plan." if not isinstance(e, HTTPException) or e.status_code != 404 else ""
-        try:
-            explicit_synopsis = self.file_service.read_content_block_file(project_id, "synopsis.md")
+        try: explicit_synopsis = self.file_service.read_content_block_file(project_id, "synopsis.md")
         except Exception as e: logger.error(f"AIService (Gen): Error loading synopsis.md: {e}", exc_info=True); explicit_synopsis = "Error loading synopsis." if not isinstance(e, HTTPException) or e.status_code != 404 else ""
         previous_scene_order = request_data.previous_scene_order
         if previous_scene_order is not None and previous_scene_order > 0 and PREVIOUS_SCENE_COUNT > 0:
@@ -196,13 +221,8 @@ class AIService:
         logger.debug(f"AIService (Gen): Context prepared - Plan: {len(explicit_plan)} chars, Synopsis: {len(explicit_synopsis)} chars, Prev Scenes: {len(explicit_previous_scenes)}")
         try:
             generated_draft_dict = await self.rag_engine.generate_scene(project_id=project_id, chapter_id=chapter_id, prompt_summary=request_data.prompt_summary, previous_scene_order=request_data.previous_scene_order, explicit_plan=explicit_plan, explicit_synopsis=explicit_synopsis, explicit_previous_scenes=explicit_previous_scenes)
-            if not isinstance(generated_draft_dict, dict) or "title" not in generated_draft_dict or "content" not in generated_draft_dict:
-                 error_detail = f"AI scene generation returned an unexpected format: {generated_draft_dict}"
-                 logger.error(error_detail)
-                 raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=error_detail)
-            if isinstance(generated_draft_dict["content"], str) and generated_draft_dict["content"].strip().startswith("Error:"):
-                 logger.error(f"Scene generation failed: {generated_draft_dict['content']}")
-                 raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=generated_draft_dict['content'])
+            if not isinstance(generated_draft_dict, dict) or "title" not in generated_draft_dict or "content" not in generated_draft_dict: raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"AI scene generation returned an unexpected format: {generated_draft_dict}")
+            if isinstance(generated_draft_dict["content"], str) and generated_draft_dict["content"].strip().startswith("Error:"): raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=generated_draft_dict['content'])
             return generated_draft_dict
         except HTTPException as http_exc: logger.error(f"HTTP Exception during scene generation delegation: {http_exc.detail}", exc_info=True); raise http_exc
         except Exception as e: logger.error(f"Unexpected error during scene generation delegation: {e}", exc_info=True); raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred during AI scene generation.")
@@ -212,9 +232,7 @@ class AIService:
         logger.info(f"AIService: Processing rephrase request for project {project_id}. Text: '{request_data.selected_text[:50]}...'")
         try:
             suggestions = await self.rag_engine.rephrase(project_id=project_id, selected_text=request_data.selected_text, context_before=request_data.context_before, context_after=request_data.context_after)
-            if suggestions and isinstance(suggestions[0], str) and suggestions[0].startswith("Error:"):
-                logger.error(f"Rephrasing failed: {suggestions[0]}")
-                raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=suggestions[0])
+            if suggestions and isinstance(suggestions[0], str) and suggestions[0].startswith("Error:"): raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=suggestions[0])
             return suggestions
         except HTTPException as http_exc: logger.error(f"HTTP Exception during rephrase delegation: {http_exc.detail}", exc_info=True); raise http_exc
         except Exception as e: logger.error(f"Unexpected error during rephrase delegation: {e}", exc_info=True); raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred during AI rephrasing.")

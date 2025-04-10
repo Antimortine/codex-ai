@@ -22,32 +22,19 @@ from llama_index.core.llms import LLM
 from typing import List, Tuple, Optional, Dict # Import Dict
 
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception, RetryError
-# --- MODIFIED: Import base error and specific error ---
-from google.api_core.exceptions import GoogleAPICallError, ServiceUnavailable, ResourceExhausted # Import potential base/specific errors
-# --- END MODIFIED ---
+from google.api_core.exceptions import GoogleAPICallError, ServiceUnavailable, ResourceExhausted
 
 from app.core.config import settings
 
 logger = logging.getLogger(__name__)
 
 # --- Define a retry predicate function ---
+# (Unchanged)
 def _is_retryable_google_api_error(exception):
-    """Return True if the exception is a Google API 429 error."""
-    # --- MODIFIED: Check for GoogleAPICallError base class ---
     if isinstance(exception, GoogleAPICallError):
-    # --- END MODIFIED ---
-        # Check for status_code attribute, common in HTTP-based errors
-        if hasattr(exception, 'status_code') and exception.status_code == 429:
-            logger.warning("Google API rate limit hit (429 status code). Retrying query...")
-            return True
-        # Sometimes ResourceExhausted might be raised without a status_code but implies 429
-        if isinstance(exception, ResourceExhausted):
-             logger.warning("Google API ResourceExhausted error encountered. Retrying query...")
-             return True
-        # Check if the message contains '429' as a fallback
-        if hasattr(exception, 'message') and '429' in str(exception.message):
-             logger.warning("Google API rate limit hit (429 in message). Retrying query...")
-             return True
+        if hasattr(exception, 'status_code') and exception.status_code == 429: logger.warning("Google API rate limit hit (429 status code). Retrying query..."); return True
+        if isinstance(exception, ResourceExhausted): logger.warning("Google API ResourceExhausted error encountered. Retrying query..."); return True
+        if hasattr(exception, 'message') and '429' in str(exception.message): logger.warning("Google API rate limit hit (429 in message). Retrying query..."); return True
     logger.debug(f"Non-retryable error encountered during query: {type(exception)}")
     return False
 # --- End retry predicate ---
@@ -57,6 +44,7 @@ class QueryProcessor:
     """Handles RAG querying logic, including explicit context."""
 
     def __init__(self, index: VectorStoreIndex, llm: LLM):
+        # (Initialization unchanged)
         if not index: raise ValueError("QueryProcessor requires a valid VectorStoreIndex instance.")
         if not llm: raise ValueError("QueryProcessor requires a valid LLM instance.")
         self.index = index
@@ -75,16 +63,24 @@ class QueryProcessor:
         return await self.llm.acomplete(prompt)
 
     async def query(self, project_id: str, query_text: str, explicit_plan: str, explicit_synopsis: str,
-                  direct_sources_data: Optional[List[Dict]] = None # Changed from single direct_content*
-                  ) -> Tuple[str, List[NodeWithScore], Optional[List[Dict[str, str]]]]: # Return list of dicts
+                  direct_sources_data: Optional[List[Dict]] = None
+                  ) -> Tuple[str, List[NodeWithScore], Optional[List[Dict[str, str]]]]:
         logger.info(f"QueryProcessor: Received query for project '{project_id}': '{query_text}'")
         retrieved_nodes: List[NodeWithScore] = []
         direct_sources_info_list: Optional[List[Dict[str, str]]] = None
+        # --- MODIFIED: Store file paths of directly loaded sources ---
+        direct_source_file_paths = set()
         if direct_sources_data:
-             direct_sources_info_list = [
-                 {"type": source.get("type", "Unknown"), "name": source.get("name", "Unknown")}
-                 for source in direct_sources_data
-             ]
+             direct_sources_info_list = []
+             for source in direct_sources_data:
+                 direct_sources_info_list.append({
+                     "type": source.get("type", "Unknown"),
+                     "name": source.get("name", "Unknown")
+                 })
+                 # Store the file path associated with this direct source
+                 if source.get('file_path'):
+                      direct_source_file_paths.add(source['file_path'])
+        # --- END MODIFIED ---
 
         try:
             # 1. Create Retriever & Retrieve Nodes (Unchanged)
@@ -98,7 +94,7 @@ class QueryProcessor:
             retrieved_nodes = await retriever.aretrieve(query_text)
             logger.info(f"Retrieved {len(retrieved_nodes)} nodes for query context.")
 
-            # 2. Build Prompt (Unchanged logic, includes direct content if present)
+            # 2. Build Prompt
             logger.debug("Building query prompt with explicit, direct, and retrieved context...")
             system_prompt = (
                 "You are an AI assistant answering questions about a creative writing project. "
@@ -123,10 +119,25 @@ class QueryProcessor:
                           f"```markdown\n{truncated_direct_content}\n```\n"
                           f"--- End Directly Requested {source_type}: \"{source_name}\" ---\n\n"
                       )
-            nodes_for_prompt = retrieved_nodes
+
+            # --- MODIFIED: Filter retrieved nodes before adding to prompt ---
+            nodes_for_prompt = []
+            if retrieved_nodes:
+                nodes_for_prompt = [
+                    node for node in retrieved_nodes
+                    if node.metadata.get('file_path') not in direct_source_file_paths
+                ]
+                if len(nodes_for_prompt) < len(retrieved_nodes):
+                    logger.debug(f"Filtered {len(retrieved_nodes) - len(nodes_for_prompt)} retrieved nodes to avoid duplicating directly loaded content in prompt.")
+            # --- END MODIFIED ---
+
             retrieved_context_str = "\n\n---\n\n".join(
-                [f"Source: {node.metadata.get('file_path', 'N/A')}\n\n{node.get_content()}" for node in nodes_for_prompt]
-            ) if nodes_for_prompt else "No specific context snippets were retrieved via search."
+                # --- MODIFIED: Use document_type and document_title from metadata ---
+                [f"Source ({node.metadata.get('document_type', 'Unknown')}: \"{node.metadata.get('document_title', 'Unknown Source')}\")\n\n{node.get_content()}"
+                 for node in nodes_for_prompt]
+                # --- END MODIFIED ---
+            ) if nodes_for_prompt else "No additional relevant context snippets were retrieved via search." # Modified message slightly
+
             user_message_content += (
                  f"**Retrieved Context Snippets:**\n```markdown\n{retrieved_context_str}\n```\n\n"
                  f"**Instruction:** Based *only* on the provided Plan, Synopsis, Directly Requested Content (if any), and Retrieved Context, answer the User Query."
@@ -143,26 +154,21 @@ class QueryProcessor:
                  answer = "(The AI did not provide an answer based on the context.)"
 
             logger.info(f"Query successful. Returning answer, {len(retrieved_nodes)} source nodes, and direct source info list (if any).")
+            # Return the original, unfiltered retrieved_nodes for UI display
             return answer, retrieved_nodes, direct_sources_info_list
 
-        # --- Exception Handling ---
-        # --- MODIFIED: Catch GoogleAPICallError base class ---
+        # --- Exception Handling (Unchanged from previous fix) ---
         except GoogleAPICallError as e:
-             if _is_retryable_google_api_error(e): # Check if it's the 429 error
+             if _is_retryable_google_api_error(e):
                   logger.error(f"Rate limit error persisted after retries for query: {e}", exc_info=False)
                   error_message = f"Error: Rate limit exceeded for query after multiple retries. Please wait and try again."
-                  # Return None for direct sources list on error
                   return error_message, retrieved_nodes, None
              else:
-                  # Handle other non-retryable GoogleAPICallErrors
                   logger.error(f"Non-retryable GoogleAPICallError during query for project '{project_id}': {e}", exc_info=True)
                   error_message = f"Error: Sorry, an error occurred while communicating with the AI service for project '{project_id}'. Details: {e}"
-                  # Return None for direct sources list on error
                   return error_message, [], None
-        # --- END MODIFIED ---
         except Exception as e:
              logger.error(f"Error during RAG query for project '{project_id}': {e}", exc_info=True)
              error_message = f"Error: Sorry, an internal error occurred processing the query. Please check logs."
-             # Return None for direct sources list on error
              return error_message, [], None
         # --- END Exception Handling ---

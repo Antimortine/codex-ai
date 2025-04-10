@@ -17,6 +17,7 @@ from unittest.mock import MagicMock, patch, ANY, call
 from pathlib import Path
 import sys
 import os
+from typing import Dict, Any # Import Dict, Any
 
 # Ensure the backend directory is in the path for imports
 backend_dir = Path(__file__).parent.parent.parent / 'backend'
@@ -30,11 +31,10 @@ from app.core.config import BASE_PROJECT_DIR, settings
 from app.services.file_service import file_service # Needed for metadata reading
 
 # --- Mocks Setup ---
-# Create persistent mock objects that will be configured by patches
+# (Mocks remain the same)
 mock_chroma_collection = MagicMock(name="MockChromaCollectionInstance")
 mock_chroma_client = MagicMock(name="MockChromaClient")
 mock_chroma_client.get_or_create_collection.return_value = mock_chroma_collection
-
 mock_vector_store = MagicMock(name="MockVectorStore")
 mock_storage_context = MagicMock(name="MockStorageContext")
 mock_vector_index = MagicMock(name="MockVectorStoreIndex")
@@ -46,7 +46,7 @@ mock_llama_settings_embed = MagicMock(name="MockLlamaSettingsEmbed")
 mock_internal_file_service = MagicMock(spec=file_service, name="MockInternalFileService")
 
 # --- Fixtures ---
-
+# (Fixtures remain the same)
 @pytest.fixture(scope="function", autouse=True)
 def reset_mocks():
     """Reset mocks before each test function."""
@@ -67,22 +67,19 @@ def reset_mocks():
     mock_internal_file_service.reset_mock()
     mock_internal_file_service.read_project_metadata.reset_mock()
     mock_internal_file_service._get_characters_dir.reset_mock()
+    mock_internal_file_service._get_content_block_path.reset_mock()
+    mock_internal_file_service._get_chapter_path.reset_mock()
+    mock_internal_file_service._get_scene_path.reset_mock()
+    mock_internal_file_service.read_chapter_metadata.reset_mock()
 
 
-# Use function scope for the fixture applying patches to avoid test interference
 @pytest.fixture(scope="function")
-def patched_index_manager_instance(request): # request is a pytest fixture
-    """
-    Provides a freshly initialized IndexManager instance for each test,
-    with dependencies patched correctly. Allows local patches via request marker.
-    """
-    # Check if the test function using this fixture has marked a local patch for load_index
+def patched_index_manager_instance(request):
     load_index_patch_config = request.node.get_closest_marker("patch_load_index")
-    load_index_mock = MagicMock(return_value=mock_vector_index) # Default behavior
+    load_index_mock = MagicMock(return_value=mock_vector_index)
     if load_index_patch_config:
-        load_index_mock.side_effect = load_index_patch_config.args[0] # Use side_effect from marker
+        load_index_mock.side_effect = load_index_patch_config.args[0]
 
-    # Patch targets *within* the app.rag.index_manager module namespace
     with patch('app.rag.index_manager.chromadb.PersistentClient', return_value=mock_chroma_client) as mock_p_client_cls, \
          patch('app.rag.index_manager.ChromaVectorStore', return_value=mock_vector_store) as mock_c_vs_cls, \
          patch('app.rag.index_manager.StorageContext.from_defaults', return_value=mock_storage_context) as mock_sc_from_defaults, \
@@ -95,75 +92,42 @@ def patched_index_manager_instance(request): # request is a pytest fixture
          patch('app.rag.index_manager.LlamaSettings', llm=mock_llama_settings_llm, embed_model=mock_llama_settings_embed) as mock_llama_settings, \
          patch('app.rag.index_manager.file_service', mock_internal_file_service):
 
-        # Store references to the patch objects if needed for assertions on the class itself
-        mocks_dict = {
-            "p_client_cls": mock_p_client_cls,
-            "c_vs_cls": mock_c_vs_cls,
-            "sc_from_defaults": mock_sc_from_defaults,
-            "vs_from_docs": mock_vs_from_docs,
-            "load_index": mock_load_index, # This is the mock configured by the fixture/marker
-            "sdr_cls": mock_sdr_cls,
-            "hf_cls": mock_hf_cls,
-            "gg_cls": mock_gg_cls,
-            "cuda": mock_cuda,
-            "llama_settings": mock_llama_settings
-        }
-
-        # Ensure GOOGLE_API_KEY is set for initialization to pass
+        mocks_dict = { "p_client_cls": mock_p_client_cls, "c_vs_cls": mock_c_vs_cls, "sc_from_defaults": mock_sc_from_defaults, "vs_from_docs": mock_vs_from_docs, "load_index": mock_load_index, "sdr_cls": mock_sdr_cls, "hf_cls": mock_hf_cls, "gg_cls": mock_gg_cls, "cuda": mock_cuda, "llama_settings": mock_llama_settings }
         original_key = settings.GOOGLE_API_KEY
         settings.GOOGLE_API_KEY = "fake-test-key"
         manager = None
         try:
-            # Instantiate the manager *within* the patch context
             manager = IndexManager()
-            # Assign the mock index to the instance for easier access in tests
             manager.index = mock_vector_index
-            # Yield the manager instance along with the patch objects if needed
-            yield manager, mocks_dict # Yield manager and mocks
+            yield manager, mocks_dict
         finally:
-            settings.GOOGLE_API_KEY = original_key # Restore original key
+            settings.GOOGLE_API_KEY = original_key
 
 # --- Test IndexManager ---
-
+# (Initialization tests unchanged)
 def test_index_manager_initialization_load_existing(patched_index_manager_instance):
-    """Test initialization when index is loaded from storage."""
-    manager, mocks = patched_index_manager_instance # Unpack fixture result
-
-    # Assertions check the globally defined mocks that were configured by the patches
+    manager, mocks = patched_index_manager_instance
     mocks["p_client_cls"].assert_called_once_with(path=CHROMA_PERSIST_DIR)
     mock_chroma_client.get_or_create_collection.assert_called_once_with(name=CHROMA_COLLECTION_NAME)
-
-    # *** CORRECTED ASSERTION ***
-    # Assert that ChromaVectorStore was called with the object *returned* by get_or_create_collection
     mocks["c_vs_cls"].assert_called_once_with(chroma_collection=mock_chroma_client.get_or_create_collection.return_value)
-
     mocks["sc_from_defaults"].assert_called_once_with(vector_store=mock_vector_store)
-    mocks["load_index"].assert_called_once_with(mock_storage_context) # Check the mock from the fixture
-    mocks["vs_from_docs"].assert_not_called() # Should not create new if loaded
-
+    mocks["load_index"].assert_called_once_with(mock_storage_context)
+    mocks["vs_from_docs"].assert_not_called()
     assert manager.index == mock_vector_index
 
-
-# Mark the test to modify the load_index patch behavior via the fixture
 @pytest.mark.patch_load_index(ValueError("No existing index found"))
 def test_index_manager_initialization_create_new(patched_index_manager_instance):
-     """Test initialization when loading fails and a new index is created."""
-     manager, mocks = patched_index_manager_instance # Fixture now handles the init with the marker
-
-     # Assert calls made during the fixture's initialization run for *this test*
+     manager, mocks = patched_index_manager_instance
      mocks["p_client_cls"].assert_called_once_with(path=CHROMA_PERSIST_DIR)
      mock_chroma_client.get_or_create_collection.assert_called_once_with(name=CHROMA_COLLECTION_NAME)
      mocks["c_vs_cls"].assert_called_once_with(chroma_collection=mock_chroma_client.get_or_create_collection.return_value)
      mocks["sc_from_defaults"].assert_called_once_with(vector_store=mock_vector_store)
-     # Assert that the load_index mock (configured by the marker) was called
      mocks["load_index"].assert_called_once_with(mock_storage_context)
-     # Assert that from_documents was called because load failed
      mocks["vs_from_docs"].assert_called_once_with([], storage_context=mock_storage_context)
      assert manager.index == mock_vector_index
 
-
+# (Path extraction tests unchanged)
 def test_extract_project_id_success(patched_index_manager_instance):
-    """Test successful extraction of project_id."""
     manager, _ = patched_index_manager_instance
     project_id = "proj_123"
     file_path = BASE_PROJECT_DIR / project_id / "chapters" / "ch1" / "scene1.md"
@@ -171,20 +135,82 @@ def test_extract_project_id_success(patched_index_manager_instance):
     assert extracted_id == project_id
 
 def test_extract_project_id_outside_base(patched_index_manager_instance):
-    """Test extraction when file is outside BASE_PROJECT_DIR."""
     manager, _ = patched_index_manager_instance
     file_path = Path("/tmp/some_other_file.md")
     extracted_id = manager._extract_project_id(file_path)
     assert extracted_id is None
 
 def test_extract_project_id_base_dir(patched_index_manager_instance):
-    """Test extraction when file path is the base directory itself."""
     manager, _ = patched_index_manager_instance
     extracted_id = manager._extract_project_id(BASE_PROJECT_DIR)
     assert extracted_id is None
 
-# --- index_file Tests ---
+# --- _get_document_details Tests (Unchanged) ---
+def test_get_document_details_plan(patched_index_manager_instance):
+    manager, _ = patched_index_manager_instance
+    project_id = "proj_details"
+    file_path = BASE_PROJECT_DIR / project_id / "plan.md"
+    details = manager._get_document_details(file_path, project_id)
+    assert details == {'document_type': 'Plan', 'document_title': 'Project Plan'}
 
+def test_get_document_details_synopsis(patched_index_manager_instance):
+    manager, _ = patched_index_manager_instance
+    project_id = "proj_details"
+    file_path = BASE_PROJECT_DIR / project_id / "synopsis.md"
+    details = manager._get_document_details(file_path, project_id)
+    assert details == {'document_type': 'Synopsis', 'document_title': 'Project Synopsis'}
+
+def test_get_document_details_world(patched_index_manager_instance):
+    manager, _ = patched_index_manager_instance
+    project_id = "proj_details"
+    file_path = BASE_PROJECT_DIR / project_id / "world.md"
+    details = manager._get_document_details(file_path, project_id)
+    assert details == {'document_type': 'World', 'document_title': 'World Info'}
+
+def test_get_document_details_character(patched_index_manager_instance):
+    manager, _ = patched_index_manager_instance
+    project_id = "proj_details"
+    char_id = "char1"
+    char_name = "Gandalf"
+    file_path = BASE_PROJECT_DIR / project_id / "characters" / f"{char_id}.md"
+    mock_internal_file_service.read_project_metadata.return_value = {
+        "characters": {char_id: {"name": char_name}}
+    }
+    details = manager._get_document_details(file_path, project_id)
+    assert details == {'document_type': 'Character', 'document_title': char_name}
+    mock_internal_file_service.read_project_metadata.assert_called_once_with(project_id)
+
+def test_get_document_details_scene(patched_index_manager_instance):
+    manager, _ = patched_index_manager_instance
+    project_id = "proj_details"
+    chapter_id = "ch1"
+    scene_id = "sc1"
+    scene_title = "The Shire"
+    file_path = BASE_PROJECT_DIR / project_id / "chapters" / chapter_id / f"{scene_id}.md"
+    mock_internal_file_service.read_chapter_metadata.return_value = {
+        "scenes": {scene_id: {"title": scene_title}}
+    }
+    details = manager._get_document_details(file_path, project_id)
+    assert details == {'document_type': 'Scene', 'document_title': scene_title}
+    mock_internal_file_service.read_chapter_metadata.assert_called_once_with(project_id, chapter_id)
+
+def test_get_document_details_note(patched_index_manager_instance):
+    manager, _ = patched_index_manager_instance
+    project_id = "proj_details"
+    note_name = "Magic System Ideas"
+    file_path = BASE_PROJECT_DIR / project_id / "notes" / f"{note_name}.md"
+    details = manager._get_document_details(file_path, project_id)
+    assert details == {'document_type': 'Note', 'document_title': note_name}
+
+def test_get_document_details_unknown(patched_index_manager_instance):
+    manager, _ = patched_index_manager_instance
+    project_id = "proj_details"
+    file_path = BASE_PROJECT_DIR / project_id / "other_folder" / "some_file.txt"
+    details = manager._get_document_details(file_path, project_id)
+    assert details == {'document_type': 'Unknown', 'document_title': 'some_file.txt'}
+
+
+# --- index_file Tests (Unchanged from previous fix) ---
 @patch('pathlib.Path.is_file')
 @patch('pathlib.Path.stat')
 def test_index_file_success_normal_file(
@@ -192,34 +218,25 @@ def test_index_file_success_normal_file(
     mock_is_file: MagicMock,
     patched_index_manager_instance
 ):
-    """Test indexing a regular markdown file successfully."""
     manager, mocks = patched_index_manager_instance
-    # Arrange
     project_id = "proj_index1"
     file_path = BASE_PROJECT_DIR / project_id / "plan.md"
     doc_id = str(file_path)
     mock_is_file.return_value = True
-    mock_stat.return_value.st_size = 100 # Non-empty file
+    mock_stat.return_value.st_size = 100
     mock_document = MagicMock(name="MockDocumentPlan")
-    mock_document.id_ = doc_id
-    mock_document.metadata = {}
     mock_simple_directory_reader_instance.load_data.return_value = [mock_document]
+    with patch.object(manager, '_get_document_details', return_value={'document_type': 'Plan', 'document_title': 'Project Plan'}) as mock_get_details:
+        manager.index_file(file_path)
+        mock_is_file.assert_called_once()
+        mock_stat.assert_called_once()
+        manager.index.delete_ref_doc.assert_called_once_with(ref_doc_id=doc_id, delete_from_docstore=True)
+        mocks["sdr_cls"].assert_called_once_with(input_files=[file_path], file_metadata=ANY)
+        assert callable(mocks["sdr_cls"].call_args.kwargs['file_metadata'])
+        mock_simple_directory_reader_instance.load_data.assert_called_once()
+        manager.index.insert_nodes.assert_called_once_with([mock_document])
+        mock_get_details.assert_called_once_with(file_path, project_id)
 
-    # Act
-    manager.index_file(file_path)
-
-    # Assert
-    mock_is_file.assert_called_once()
-    mock_stat.assert_called_once()
-    manager.index.delete_ref_doc.assert_called_once_with(ref_doc_id=doc_id, delete_from_docstore=True)
-    mocks["sdr_cls"].assert_called_once_with(
-        input_files=[file_path],
-        file_metadata=ANY
-    )
-    mock_simple_directory_reader_instance.load_data.assert_called_once()
-    assert mock_document.metadata['file_path'] == doc_id
-    assert mock_document.metadata['project_id'] == project_id
-    manager.index.insert_nodes.assert_called_once_with([mock_document])
 
 @patch('pathlib.Path.is_file')
 @patch('pathlib.Path.stat')
@@ -228,9 +245,7 @@ def test_index_file_success_character_file(
     mock_is_file: MagicMock,
     patched_index_manager_instance
 ):
-    """Test indexing a character file with name injection."""
     manager, mocks = patched_index_manager_instance
-    # Arrange
     project_id = "proj_char_index"
     character_id = "char_abc"
     character_name = "Gandalf"
@@ -239,51 +254,29 @@ def test_index_file_success_character_file(
     mock_is_file.return_value = True
     mock_stat.return_value.st_size = 50
     mock_document = MagicMock(name="MockDocumentChar")
-    mock_document.id_ = doc_id
-    mock_document.metadata = {}
     mock_simple_directory_reader_instance.load_data.return_value = [mock_document]
-    # Mock file_service response for character name
-    mock_fs = mock_internal_file_service
-    mock_fs.read_project_metadata.return_value = {
-        "characters": {character_id: {"name": character_name}}
-    }
-    mock_fs._get_characters_dir.return_value = file_path.parent
+    with patch.object(manager, '_get_document_details', return_value={'document_type': 'Character', 'document_title': character_name}) as mock_get_details:
+        manager.index_file(file_path)
+        mock_is_file.assert_called_once()
+        mock_stat.assert_called_once()
+        manager.index.delete_ref_doc.assert_called_once_with(ref_doc_id=doc_id, delete_from_docstore=True)
+        mocks["sdr_cls"].assert_called_once_with(input_files=[file_path], file_metadata=ANY)
+        assert callable(mocks["sdr_cls"].call_args.kwargs['file_metadata'])
+        mock_simple_directory_reader_instance.load_data.assert_called_once()
+        manager.index.insert_nodes.assert_called_once_with([mock_document])
+        mock_get_details.assert_called_once_with(file_path, project_id)
 
-    # Act
-    manager.index_file(file_path)
-
-    # Assert
-    mock_is_file.assert_called_once()
-    mock_stat.assert_called_once()
-    manager.index.delete_ref_doc.assert_called_once_with(ref_doc_id=doc_id, delete_from_docstore=True)
-    mocks["sdr_cls"].assert_called_once()
-    mock_simple_directory_reader_instance.load_data.assert_called_once()
-    assert mock_document.metadata['file_path'] == doc_id
-    assert mock_document.metadata['project_id'] == project_id
-    assert mock_document.metadata['character_name'] == character_name
-    manager.index.insert_nodes.assert_called_once_with([mock_document])
-    mock_fs.read_project_metadata.assert_called_once_with(project_id)
 
 @patch('pathlib.Path.is_file')
 @patch('pathlib.Path.stat')
-def test_index_file_empty_file(
-    mock_stat: MagicMock,
-    mock_is_file: MagicMock,
-    patched_index_manager_instance
-):
-    """Test indexing an empty file (should delete old nodes and skip insertion)."""
+def test_index_file_empty_file(mock_stat: MagicMock, mock_is_file: MagicMock, patched_index_manager_instance):
     manager, mocks = patched_index_manager_instance
-    # Arrange
     project_id = "proj_empty"
     file_path = BASE_PROJECT_DIR / project_id / "empty.md"
     doc_id = str(file_path)
     mock_is_file.return_value = True
-    mock_stat.return_value.st_size = 0 # Empty file
-
-    # Act
+    mock_stat.return_value.st_size = 0
     manager.index_file(file_path)
-
-    # Assert
     mock_is_file.assert_called_once()
     mock_stat.assert_called_once()
     manager.index.delete_ref_doc.assert_called_once_with(ref_doc_id=doc_id, delete_from_docstore=True)
@@ -292,40 +285,29 @@ def test_index_file_empty_file(
 
 @patch('pathlib.Path.is_file')
 def test_index_file_not_a_file(mock_is_file: MagicMock, patched_index_manager_instance):
-    """Test indexing something that isn't a file."""
     manager, _ = patched_index_manager_instance
     project_id = "proj_dir"
     file_path = BASE_PROJECT_DIR / project_id / "chapters"
     mock_is_file.return_value = False
-
     manager.index_file(file_path)
-
     mock_is_file.assert_called_once()
     manager.index.delete_ref_doc.assert_not_called()
     manager.index.insert_nodes.assert_not_called()
 
 @patch('pathlib.Path.is_file')
 @patch('pathlib.Path.stat')
-def test_index_file_outside_project(
-    mock_stat: MagicMock,
-    mock_is_file: MagicMock,
-    patched_index_manager_instance
-):
-    """Test indexing a file outside the base project directory."""
+def test_index_file_outside_project(mock_stat: MagicMock, mock_is_file: MagicMock, patched_index_manager_instance):
     manager, _ = patched_index_manager_instance
     file_path = Path("/tmp/other.md")
     mock_is_file.return_value = True
     mock_stat.return_value.st_size = 10
-
     manager.index_file(file_path)
-
     mock_is_file.assert_called_once()
     mock_stat.assert_called_once()
     manager.index.delete_ref_doc.assert_not_called()
     manager.index.insert_nodes.assert_not_called()
 
-# --- delete_doc Tests ---
-
+# --- delete_doc Tests (Complete and Corrected) ---
 def test_delete_doc_success(patched_index_manager_instance):
     """Test successful deletion of a document from the index."""
     manager, _ = patched_index_manager_instance
@@ -340,10 +322,10 @@ def test_delete_doc_success(patched_index_manager_instance):
 def test_delete_doc_non_path_input(patched_index_manager_instance):
     """Test delete_doc with invalid input type."""
     manager, _ = patched_index_manager_instance
-    manager.delete_doc("not/a/path/object")
-    manager.index.delete_ref_doc.assert_not_called()
+    manager.delete_doc("not/a/path/object") # Pass a string instead of Path
+    manager.index.delete_ref_doc.assert_not_called() # Should not attempt deletion
 
-@patch('pathlib.Path.is_file')
+@patch('pathlib.Path.is_file') # Mock is_file needed if delete_doc checks it (it doesn't currently)
 def test_delete_doc_index_error(mock_is_file: MagicMock, patched_index_manager_instance):
     """Test delete_doc when the index deletion raises an error."""
     manager, _ = patched_index_manager_instance
@@ -351,11 +333,15 @@ def test_delete_doc_index_error(mock_is_file: MagicMock, patched_index_manager_i
     project_id = "proj_del_err"
     file_path = BASE_PROJECT_DIR / project_id / "delete_err.md"
     doc_id = str(file_path)
-    mock_is_file.return_value = True
+    # mock_is_file.return_value = True # Not strictly needed as delete_doc doesn't check
+    # Make the mock index raise an error on delete
     manager.index.delete_ref_doc.side_effect = RuntimeError("Index deletion failed")
 
     # Act
+    # Should log an error but not raise an exception itself
     manager.delete_doc(file_path)
 
     # Assert
+    # Verify delete_ref_doc was still called
     manager.index.delete_ref_doc.assert_called_once_with(ref_doc_id=doc_id, delete_from_docstore=True)
+# --- END delete_doc Tests ---

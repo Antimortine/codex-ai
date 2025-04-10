@@ -82,8 +82,10 @@ async def test_query_success_with_nodes(
     query_text = "What is the main character's goal?"
     plan = "Plan: Reach the mountain."
     synopsis = "Synopsis: A hero journeys."
-    mock_node1 = NodeWithScore(node=TextNode(id_='n1', text="The hero wants to climb.", metadata={'file_path': 'plan.md', 'project_id': project_id}), score=0.9)
-    mock_node2 = NodeWithScore(node=TextNode(id_='n2', text="Goal is the summit.", metadata={'file_path': 'scenes/s1.md', 'project_id': project_id}), score=0.8)
+    # --- ADDED: Mock metadata including type/title ---
+    mock_node1 = NodeWithScore(node=TextNode(id_='n1', text="The hero wants to climb.", metadata={'file_path': 'plan.md', 'project_id': project_id, 'document_type': 'Plan', 'document_title': 'Project Plan'}), score=0.9)
+    mock_node2 = NodeWithScore(node=TextNode(id_='n2', text="Goal is the summit.", metadata={'file_path': 'scenes/s1.md', 'project_id': project_id, 'document_type': 'Scene', 'document_title': 'Opening Scene'}), score=0.8)
+    # --- END ADDED ---
     retrieved_nodes = [mock_node1, mock_node2]
     expected_answer = "The main character's goal is to reach the mountain summit."
     mock_retriever_instance = mock_retriever_class.return_value
@@ -101,8 +103,12 @@ async def test_query_success_with_nodes(
     assert query_text in prompt_arg
     assert plan in prompt_arg
     assert synopsis in prompt_arg
+    # --- ADDED: Check for new source format in prompt ---
+    assert 'Source (Plan: "Project Plan")' in prompt_arg
     assert "The hero wants to climb." in prompt_arg
+    assert 'Source (Scene: "Opening Scene")' in prompt_arg
     assert "Goal is the summit." in prompt_arg
+    # --- END ADDED ---
 
 
 @pytest.mark.asyncio
@@ -129,7 +135,9 @@ async def test_query_success_no_nodes(
     mock_retriever_instance.aretrieve.assert_awaited_once_with(query_text)
     mock_llm.acomplete.assert_awaited_once()
     prompt_arg = mock_llm.acomplete.call_args[0][0]
-    assert "No specific context snippets were retrieved via search." in prompt_arg
+    # --- MODIFIED Assertion ---
+    assert "No additional relevant context snippets were retrieved via search." in prompt_arg
+    # --- END MODIFIED ---
 
 @pytest.mark.asyncio
 @patch('app.rag.query_processor.VectorIndexRetriever', autospec=True)
@@ -282,12 +290,9 @@ async def test_query_handles_retry_failure_gracefully(
 
     # Configure the mock LLM's acomplete method to always raise the retryable error
     final_error = create_mock_client_error(429, "Rate limit")
-    # --- MODIFIED: Patch the decorated method correctly ---
-    # We need to mock the method on the *instance* that will be used inside processor.query
-    # Since processor.query calls self._execute_llm_complete, we mock it there.
+    # Patch the decorated method directly
     processor = QueryProcessor(index=mock_index, llm=mock_llm)
     with patch.object(processor, '_execute_llm_complete', side_effect=final_error) as mock_decorated_method:
-    # --- END MODIFIED ---
 
         # Act - Call the main query method, which contains the try/except ClientError block
         answer, source_nodes, direct_info = await processor.query(project_id, query_text, plan, synopsis)
