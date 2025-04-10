@@ -25,12 +25,14 @@ from typing import List, Optional
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception, RetryError
 from google.genai.errors import ClientError
 
-from app.core.config import settings
+from app.core.config import settings # Import settings directly
 
 logger = logging.getLogger(__name__)
 
-REPHRASE_SIMILARITY_TOP_K = settings.RAG_GENERATION_SIMILARITY_TOP_K
-REPHRASE_SUGGESTION_COUNT = settings.RAG_REPHRASE_SUGGESTION_COUNT
+# --- REMOVED Local Constants ---
+# REPHRASE_SIMILARITY_TOP_K = settings.RAG_GENERATION_SIMILARITY_TOP_K # Use settings.RAG_GENERATION_SIMILARITY_TOP_K directly
+# REPHRASE_SUGGESTION_COUNT = settings.RAG_REPHRASE_SUGGESTION_COUNT # Use settings.RAG_REPHRASE_SUGGESTION_COUNT directly
+# --- END REMOVED ---
 
 # --- Define a retry predicate function ---
 def _is_retryable_google_api_error(exception):
@@ -79,16 +81,17 @@ class Rephraser:
 
         try:
             # 1. Construct Retrieval Query & Retrieve Context
-            # ... (retrieval logic) ...
             retrieval_context = f"{context_before or ''} {selected_text} {context_after or ''}".strip()
             retrieval_query = f"Context relevant to the following passage: {retrieval_context}"
             logger.debug(f"Constructed retrieval query for rephrase: '{retrieval_query}'")
-            logger.debug(f"Creating retriever for rephrase with top_k={REPHRASE_SIMILARITY_TOP_K} and filter for project_id='{project_id}'")
+            # --- MODIFIED: Use settings directly ---
+            logger.debug(f"Creating retriever for rephrase with top_k={settings.RAG_GENERATION_SIMILARITY_TOP_K} and filter for project_id='{project_id}'")
             retriever = VectorIndexRetriever(
                 index=self.index,
-                similarity_top_k=REPHRASE_SIMILARITY_TOP_K,
+                similarity_top_k=settings.RAG_GENERATION_SIMILARITY_TOP_K, # Use setting directly
                 filters=MetadataFilters(filters=[ExactMatchFilter(key="project_id", value=project_id)]),
             )
+            # --- END MODIFIED ---
             retrieved_nodes: List[NodeWithScore] = await retriever.aretrieve(retrieval_query)
             logger.info(f"Retrieved {len(retrieved_nodes)} nodes for rephrase context.")
             rag_context_list = []
@@ -101,16 +104,17 @@ class Rephraser:
 
 
             # 2. Build Rephrase Prompt
-            # ... (prompt building logic) ...
             logger.debug("Building rephrase prompt...")
             system_prompt = (
                 "You are an expert writing assistant. Your task is to rephrase the user's selected text, providing several alternative phrasings. "
                 "Use the surrounding text and the broader project context provided to ensure the suggestions fit naturally and maintain consistency with the overall narrative style and tone."
             )
+            # --- MODIFIED: Use settings directly ---
             user_message_content = (
-                f"Please provide {REPHRASE_SUGGESTION_COUNT} alternative ways to phrase the 'Text to Rephrase' below, considering the context.\n\n"
+                f"Please provide {settings.RAG_REPHRASE_SUGGESTION_COUNT} alternative ways to phrase the 'Text to Rephrase' below, considering the context.\n\n" # Use setting directly
                 f"**Broader Project Context:**\n```markdown\n{rag_context_str}\n```\n\n"
             )
+            # --- END MODIFIED ---
             if context_before or context_after:
                  user_message_content += "**Surrounding Text:**\n```\n"
                  if context_before: user_message_content += f"{context_before}\n"
@@ -119,12 +123,17 @@ class Rephraser:
                  user_message_content += "```\n\n"
             else:
                  user_message_content += f"**Text to Rephrase:**\n```\n{selected_text}\n```\n\n"
+            # --- MODIFIED: Use settings directly ---
             user_message_content += (
                 f"**Instructions:**\n"
-                f"- Provide exactly {REPHRASE_SUGGESTION_COUNT} distinct suggestions.\n"
-                # ... rest of instructions ...
+                f"- Provide exactly {settings.RAG_REPHRASE_SUGGESTION_COUNT} distinct suggestions.\n" # Use setting directly
+                f"- Each suggestion should be a direct replacement for the 'Text to Rephrase'.\n"
+                f"- Maintain the original meaning and approximate length.\n"
+                f"- Match the tone and style suggested by the surrounding text and context.\n"
+                f"- Output the suggestions as a simple numbered list (e.g., '1. Suggestion one\n2. Suggestion two').\n"
                 f"- Just output the numbered list of suggestions."
             )
+            # --- END MODIFIED ---
             full_prompt = f"{system_prompt}\n\nUser: {user_message_content}\n\nAssistant:"
 
 
@@ -134,46 +143,32 @@ class Rephraser:
 
             if not generated_text:
                  logger.warning("LLM returned an empty response for rephrase.")
-                 # --- MODIFIED: Add "Error: " prefix ---
                  return ["Error: The AI failed to generate suggestions. Please try again."]
-                 # --- END MODIFIED ---
 
             # 4. Parse the Numbered List Response
-            # ... (parsing logic) ...
             logger.debug(f"Raw LLM response for parsing:\n{generated_text}")
             suggestions = re.findall(r"^\s*\d+\.\s*(.*)", generated_text, re.MULTILINE)
             if not suggestions:
                 logger.warning(f"Could not parse numbered list from LLM response. Response was:\n{generated_text}")
-                # --- MODIFIED: Add "Error: " prefix ---
-                # Try splitting by lines as fallback, but still return error if that fails
                 suggestions = [line.strip() for line in generated_text.splitlines() if line.strip()]
                 if not suggestions: return [f"Error: Could not parse suggestions. Raw response: {generated_text}"]
                 logger.warning(f"Fallback parsing used (split by newline), got {len(suggestions)} potential suggestions.")
-                # --- END MODIFIED ---
-            suggestions = [s.strip() for s in suggestions if s.strip()][:REPHRASE_SUGGESTION_COUNT]
 
+            # --- MODIFIED: Use settings directly ---
+            suggestions = [s.strip() for s in suggestions if s.strip()][:settings.RAG_REPHRASE_SUGGESTION_COUNT] # Use setting directly
+            # --- END MODIFIED ---
 
             logger.info(f"Successfully parsed {len(suggestions)} rephrase suggestions for project '{project_id}'.")
             return suggestions
 
-        # --- CORRECTED Exception Handling ---
+        # Exception Handling (remains the same)
         except ClientError as e:
-             # Catch ClientError specifically (which tenacity re-raises if it was the cause)
-             if _is_retryable_google_api_error(e): # Check if it's the 429 error
+             if _is_retryable_google_api_error(e):
                   logger.error(f"Rate limit error persisted after retries for rephrase: {e}", exc_info=False)
-                  # --- MODIFIED: Add "Error: " prefix ---
                   return [f"Error: Rate limit exceeded after multiple retries. Please wait and try again."]
-                  # --- END MODIFIED ---
              else:
-                  # Handle other non-retryable ClientErrors
                   logger.error(f"Non-retryable ClientError during rephrase for project '{project_id}': {e}", exc_info=True)
-                  # --- MODIFIED: Add "Error: " prefix ---
                   return [f"Error: An unexpected error occurred while communicating with the AI service. Details: {e}"]
-                  # --- END MODIFIED ---
         except Exception as e:
-             # Catch other errors
              logger.error(f"Error during rephrase for project '{project_id}': {e}", exc_info=True)
-             # --- MODIFIED: Add "Error: " prefix ---
              return [f"Error: An unexpected internal error occurred while rephrasing."]
-             # --- END MODIFIED ---
-        # --- END CORRECTED ---
