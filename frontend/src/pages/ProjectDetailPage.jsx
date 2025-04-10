@@ -24,7 +24,9 @@ import {
     generateSceneDraft,
     splitChapterIntoScenes
 } from '../api/codexApi';
-import QueryInterface from '../components/QueryInterface';
+// --- REMOVED: QueryInterface import ---
+// import QueryInterface from '../components/QueryInterface';
+// --- END REMOVED ---
 import ChapterSection from '../components/ChapterSection';
 
 // Styles remain the same...
@@ -638,7 +640,17 @@ function ProjectDetailPage() {
             <p>ID: {projectId}</p>
             {error && <p style={{ color: 'orange', marginTop: '0.2rem' }}>Warning: {error}</p>}
             <hr />
-            {projectId && <QueryInterface projectId={projectId} />}
+            {/* --- REMOVED: QueryInterface rendering --- */}
+            {/* {projectId && <QueryInterface projectId={projectId} />} */}
+            {/* --- ADDED: Link to new Query Page --- */}
+            {projectId && (
+                <div style={{ marginBottom: '1rem' }}>
+                    <Link to={`/projects/${projectId}/query`} style={{ fontWeight: 'bold', textDecoration: 'none', padding: '8px 12px', border: '1px solid #007bff', borderRadius: '4px', backgroundColor: '#e7f3ff' }}>
+                        Chat with AI about this Project →
+                    </Link>
+                </div>
+            )}
+            {/* --- END ADDED --- */}
             <hr />
 
             {/* --- Sections --- */}
