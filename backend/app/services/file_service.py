@@ -20,13 +20,15 @@ from app.core.config import BASE_PROJECT_DIR
 # ---- REMOVE the direct import of index_manager here ----
 # from app.rag.index_manager import index_manager
 import logging
+# --- ADDED: Import List type hint ---
+from typing import List
 
 logger = logging.getLogger(__name__)
 
 class FileService:
 
     # --- Path Helper Methods ---
-    # ... (remain unchanged) ...
+    # ... (existing helpers unchanged) ...
     def _get_project_path(self, project_id: str) -> Path:
         """Returns the path to the project directory."""
         return BASE_PROJECT_DIR / project_id
@@ -71,9 +73,15 @@ class FileService:
          """Path to the chapter's metadata file (contains scene info)."""
          return self._get_chapter_path(project_id, chapter_id) / "chapter_meta.json"
 
+    # --- ADDED: Chat History Path Helper ---
+    def _get_chat_history_path(self, project_id: str) -> Path:
+        """Path to the project's chat history file."""
+        return self._get_project_path(project_id) / "chat_history.json"
+    # --- END ADDED ---
+
 
     # --- Core File Operations ---
-    # ... (path_exists, create_directory, read_text_file unchanged) ...
+    # ... (existing methods unchanged) ...
     def path_exists(self, path: Path) -> bool:
         """Checks if a path exists."""
         return path.exists()
@@ -206,7 +214,6 @@ class FileService:
             logger.error(f"Error deleting directory {path}: {e}")
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Could not delete {path.name}")
 
-    # ... (list_subdirectories, list_markdown_files unchanged) ...
     def list_subdirectories(self, path: Path) -> list[str]:
         """Lists names of immediate subdirectories."""
         if not self.path_exists(path) or not path.is_dir(): return []
@@ -242,7 +249,6 @@ class FileService:
          self.write_chapter_metadata(project_id, chapter_id, {"scenes": {}}) # JSON, no index trigger
 
     # --- Methods for Content Blocks with Indexing ---
-    # Modified to use the updated write_text_file
     def write_content_block_file(self, project_id: str, block_name: str, content: str):
         """Writes content block file AND triggers indexing."""
         path = self._get_content_block_path(project_id, block_name)
@@ -255,7 +261,6 @@ class FileService:
          return self.read_text_file(path)
 
     # --- Centralized Metadata I/O Methods ---
-    # ... (read/write_project/chapter_metadata remain unchanged) ...
     def read_project_metadata(self, project_id: str) -> dict:
         """Reads the project_meta.json file for a given project."""
         metadata_path = self._get_project_metadata_path(project_id)
@@ -304,6 +309,42 @@ class FileService:
         except HTTPException as e:
             logger.error(f"Failed to write chapter metadata for {chapter_id} in {project_id}: {e.detail}")
             raise e
+
+    # --- ADDED: Chat History Methods ---
+    def read_chat_history(self, project_id: str) -> List[dict]:
+        """Reads the chat_history.json file for a given project."""
+        history_path = self._get_chat_history_path(project_id)
+        try:
+            # Use read_json_file which handles 404 and decode errors
+            data = self.read_json_file(history_path)
+            # Ensure the top-level structure is a list (or default to empty list)
+            if isinstance(data, list):
+                return data
+            elif isinstance(data, dict) and 'history' in data and isinstance(data['history'], list):
+                 # Handle potential old format if we saved {'history': [...]} previously
+                 logger.warning(f"Reading chat history from potentially old format for project {project_id}")
+                 return data['history']
+            else:
+                 logger.warning(f"Chat history file for project {project_id} does not contain a list. Returning empty history.")
+                 return []
+        except HTTPException as e:
+            if e.status_code == 404:
+                 logger.info(f"Chat history file not found for project {project_id}. Returning empty list.")
+                 return [] # Return empty list if file doesn't exist
+            logger.error(f"Unexpected error reading chat history for {project_id}: {e.detail}")
+            raise e # Re-raise other errors
+
+    def write_chat_history(self, project_id: str, history_data: List[dict]):
+        """Writes data to the chat_history.json file."""
+        history_path = self._get_chat_history_path(project_id)
+        try:
+            # Directly write the list as the root JSON object
+            self.write_json_file(history_path, history_data)
+            logger.debug(f"Successfully wrote chat history for {project_id}")
+        except HTTPException as e:
+            logger.error(f"Failed to write chat history for {project_id}: {e.detail}")
+            raise e
+    # --- END ADDED ---
 
 
 # Create a single instance

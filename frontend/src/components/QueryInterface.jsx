@@ -16,10 +16,12 @@
 
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import PropTypes from 'prop-types';
-import { queryProjectContext } from '../api/codexApi';
+// --- MODIFIED: Import new API functions ---
+import { queryProjectContext, getChatHistory, updateChatHistory } from '../api/codexApi';
+// --- END MODIFIED ---
 
-// --- LocalStorage Key ---
-const getHistoryStorageKey = (projectId) => `codex-ai-chat-${projectId}`;
+// --- REMOVED: LocalStorage Key ---
+// const getHistoryStorageKey = (projectId) => `codex-ai-chat-${projectId}`;
 
 // Basic styling (remains the same)
 const styles = {
@@ -182,84 +184,91 @@ function QueryInterface({ projectId }) {
     const [currentQuery, setCurrentQuery] = useState('');
     const [history, setHistory] = useState([]);
     const [isProcessing, setIsProcessing] = useState(false);
+    const [isLoadingHistory, setIsLoadingHistory] = useState(true); // State for initial history load
+    const [historyError, setHistoryError] = useState(null); // State for history load error
     const nextId = useRef(0);
     const historyEndRef = useRef(null);
     const formRef = useRef(null);
-    // --- MODIFIED: Initialize isInitialLoad to true ---
-    const isInitialLoad = useRef(true);
-    // --- END MODIFIED ---
+    // --- REMOVED: isInitialLoad ref ---
+    // const isInitialLoad = useRef(true);
 
-    // --- Load history from LocalStorage on mount ---
+    // --- Load history from Backend on mount ---
     useEffect(() => {
         if (!projectId) return;
 
-        console.log(`[QueryInterface] Load Effect: Attempting load for project: ${projectId}`);
-        const storageKey = getHistoryStorageKey(projectId);
-        let loadedHistoryData = []; // Default to empty
-        let loadedNextId = 0;
+        let isMounted = true; // Flag to prevent state update on unmounted component
+        setIsLoadingHistory(true);
+        setHistoryError(null);
+        setHistory([]); // Clear existing history before loading
 
-        try {
-            const storedHistory = localStorage.getItem(storageKey);
-            if (storedHistory) {
-                const parsedHistory = JSON.parse(storedHistory);
-                if (Array.isArray(parsedHistory)) {
-                    loadedHistoryData = parsedHistory.map(entry => ({
+        console.log(`[QueryInterface] Load Effect: Fetching history for project: ${projectId}`);
+
+        getChatHistory(projectId)
+            .then(response => {
+                if (isMounted) {
+                    const loadedHistory = response.data?.history || [];
+                    // Add isLoading: false to each loaded entry
+                    const historyWithLoadingState = loadedHistory.map(entry => ({
                         ...entry,
-                        isLoading: false // Ensure loading is false on load
+                        isLoading: false
                     }));
-                    const maxId = loadedHistoryData.reduce((max, entry) => Math.max(max, entry.id), -1);
-                    loadedNextId = maxId + 1;
-                    console.log(`[QueryInterface] Load Effect: Loaded ${loadedHistoryData.length} entries. Next ID: ${loadedNextId}`);
-                } else {
-                    console.warn(`[QueryInterface] Load Effect: Invalid history data found for key ${storageKey}. Resetting.`);
-                    localStorage.removeItem(storageKey);
+                    setHistory(historyWithLoadingState);
+                    const maxId = historyWithLoadingState.reduce((max, entry) => Math.max(max, entry.id), -1);
+                    nextId.current = maxId + 1;
+                    console.log(`[QueryInterface] Load Effect: Loaded ${historyWithLoadingState.length} entries. Next ID: ${nextId.current}`);
                 }
-            } else {
-                console.log(`[QueryInterface] Load Effect: No history found for key ${storageKey}.`);
-            }
-        } catch (error) {
-            console.error("[QueryInterface] Load Effect: Error loading/parsing history:", error);
-        }
+            })
+            .catch(error => {
+                console.error("[QueryInterface] Load Effect: Error fetching history:", error);
+                if (isMounted) {
+                    // Don't set history on error, show specific error message
+                    setHistoryError(`Failed to load chat history: ${error.response?.data?.detail || error.message}`);
+                }
+            })
+            .finally(() => {
+                if (isMounted) {
+                    setIsLoadingHistory(false);
+                }
+            });
 
-        // Set state *after* reading/parsing
-        setHistory(loadedHistoryData);
-        nextId.current = loadedNextId;
-
-        // --- MODIFIED: Set flag *after* state updates are scheduled ---
-        // Use setTimeout to ensure this runs after the current render cycle completes
-        const timerId = setTimeout(() => {
-            console.log("[QueryInterface] Load Effect: Marking initial load as complete.");
-            isInitialLoad.current = false;
-        }, 0);
-
-        // Cleanup function for the timeout
-        return () => clearTimeout(timerId);
-        // --- END MODIFIED ---
-
+        // Cleanup function
+        return () => {
+            isMounted = false;
+        };
     }, [projectId]); // Depend only on projectId
 
-    // --- Save history to LocalStorage on change ---
-    useEffect(() => {
-        // --- MODIFIED: Check flag *inside* the effect ---
-        if (!projectId || isInitialLoad.current) {
-            console.log(`[QueryInterface] Save Effect: Skipping save for project ${projectId}, initial load flag: ${isInitialLoad.current}`);
-            return; // Don't save during initial load phase or if projectId is missing
-        }
-        // --- END MODIFIED ---
+    // --- Save history to Backend on change ---
+    // Debounce this later if needed, for now save after each query completion
+    const saveHistory = useCallback(async (currentHistory) => {
+        if (!projectId) return;
 
-        console.log(`[QueryInterface] Save Effect: Saving ${history.length} history entries for project: ${projectId}`);
-        const storageKey = getHistoryStorageKey(projectId);
+        // Don't save if history is currently loading or failed to load
+        if (isLoadingHistory || historyError) {
+             console.log("[QueryInterface] Save Effect: Skipping save due to loading/error state.");
+             return;
+        }
+
+        console.log(`[QueryInterface] Save Effect: Saving ${currentHistory.length} history entries for project: ${projectId}`);
+        // Prepare data for backend (remove isLoading state)
+        const historyToSave = currentHistory.map(({ isLoading, ...entry }) => entry);
+
         try {
-            localStorage.setItem(storageKey, JSON.stringify(history));
+            await updateChatHistory(projectId, { history: historyToSave });
+            console.log(`[QueryInterface] Save Effect: History saved successfully.`);
         } catch (error) {
             console.error("[QueryInterface] Save Effect: Error saving history:", error);
+            // Maybe show a non-blocking error to the user? For now, just log.
+            // setHistoryError(`Failed to save chat history: ${error.response?.data?.detail || error.message}`);
         }
-    }, [history, projectId]); // Depend on history and projectId
+    }, [projectId, isLoadingHistory, historyError]); // Dependencies for the save callback
 
     // --- Scroll to bottom when history updates ---
     useEffect(() => {
-        historyEndRef.current?.scrollIntoView({ behavior: "smooth" });
-    }, [history]);
+        // Only scroll if there's history to scroll to
+        if (history.length > 0) {
+            historyEndRef.current?.scrollIntoView({ behavior: "smooth" });
+        }
+    }, [history]); // Trigger scroll on history change
 
     const processQuery = useCallback(async () => {
         if (!currentQuery.trim() || isProcessing) return;
@@ -274,9 +283,13 @@ function QueryInterface({ projectId }) {
             isLoading: true,
         };
 
-        setHistory(prev => [...prev, newEntry]);
+        // Optimistically update UI
+        const updatedHistory = [...history, newEntry];
+        setHistory(updatedHistory);
         setCurrentQuery('');
         setIsProcessing(true);
+
+        let finalHistoryState = updatedHistory; // Keep track of the state to save
 
         try {
             console.log(`Sending query for project ${projectId}: "${queryText}"`);
@@ -289,28 +302,33 @@ function QueryInterface({ projectId }) {
 
             if (isString && startsWithError) {
                 console.warn(`[QueryInterface] Query returned an error message in the answer field.`);
-                setHistory(prev => prev.map(entry =>
+                finalHistoryState = updatedHistory.map(entry =>
                     entry.id === entryId ? { ...entry, error: answerText, isLoading: false } : entry
-                ));
+                );
+                setHistory(finalHistoryState);
             } else {
                 console.log(`[QueryInterface] Setting response state for entry ${entryId}.`);
-                setHistory(prev => prev.map(entry =>
+                finalHistoryState = updatedHistory.map(entry =>
                     entry.id === entryId ? { ...entry, response: apiResponse.data, isLoading: false } : entry
-                ));
+                );
+                setHistory(finalHistoryState);
             }
 
         } catch (err) {
             console.error("[QueryInterface] Error in API call catch block:", err);
             const errorMsg = err.response?.data?.detail || err.message || 'Failed to get response from AI.';
             console.log(`[QueryInterface] Setting error state for entry ${entryId}: "${errorMsg}"`);
-            setHistory(prev => prev.map(entry =>
+            finalHistoryState = updatedHistory.map(entry =>
                 entry.id === entryId ? { ...entry, error: errorMsg, isLoading: false } : entry
-            ));
+            );
+            setHistory(finalHistoryState);
         } finally {
             console.log("[QueryInterface] Setting isProcessing to false.");
             setIsProcessing(false);
+            // Save history after processing is complete
+            await saveHistory(finalHistoryState);
         }
-    }, [currentQuery, isProcessing, projectId]);
+    }, [currentQuery, isProcessing, projectId, history, saveHistory]); // Added history and saveHistory
 
     const handleSubmitForm = (e) => {
         e.preventDefault();
@@ -324,21 +342,17 @@ function QueryInterface({ projectId }) {
         }
     };
 
-    const handleNewChat = () => {
-        setHistory([]);
+    // --- MODIFIED: Clear state and save empty history ---
+    const handleNewChat = async () => {
+        const newHistoryState = [];
+        setHistory(newHistoryState);
         setCurrentQuery('');
         setIsProcessing(false);
         nextId.current = 0;
-        if (projectId) {
-            const storageKey = getHistoryStorageKey(projectId);
-            try {
-                localStorage.removeItem(storageKey);
-                console.log(`[QueryInterface] Cleared history from LocalStorage for key ${storageKey}.`);
-            } catch (error) {
-                console.error("[QueryInterface] Error clearing history from LocalStorage:", error);
-            }
-        }
+        // Save the cleared history to the backend
+        await saveHistory(newHistoryState);
     };
+    // --- END MODIFIED ---
 
     const historyAreaId = "query-history";
     const isProcessingId = "is-processing";
@@ -347,7 +361,13 @@ function QueryInterface({ projectId }) {
         <div style={styles.container}>
             {/* Hidden element to track processing state */}
             <div data-testid={isProcessingId} style={{ display: 'none' }} data-processing={isProcessing ? 'true' : 'false'}></div>
-            {history.length > 0 && (
+
+            {/* Display loading/error for initial history fetch */}
+            {isLoadingHistory && <p style={styles.loading}>Loading chat history...</p>}
+            {historyError && <p style={styles.error}>{historyError}</p>}
+
+            {/* Only show history area if not loading and no error */}
+            {!isLoadingHistory && !historyError && history.length > 0 && (
                 <div style={styles.historyArea} data-testid={historyAreaId}>
                     {history.map(entry => (
                         <HistoryEntry key={entry.id} entry={entry} />
@@ -355,6 +375,9 @@ function QueryInterface({ projectId }) {
                     <div ref={historyEndRef} />
                 </div>
             )}
+             {!isLoadingHistory && !historyError && history.length === 0 && (
+                 <p>No chat history yet. Ask a question below!</p>
+             )}
 
             <form ref={formRef} onSubmit={handleSubmitForm}>
                 <textarea
@@ -363,7 +386,7 @@ function QueryInterface({ projectId }) {
                     onChange={(e) => setCurrentQuery(e.target.value)}
                     onKeyDown={handleKeyDown}
                     placeholder="Ask a question about your project plan, characters, scenes... (Ctrl+Enter to submit)"
-                    disabled={isProcessing}
+                    disabled={isProcessing || isLoadingHistory || !!historyError} // Disable if loading history or error occurred
                     rows={3}
                     aria-label="AI Query Input"
                 />
@@ -371,8 +394,8 @@ function QueryInterface({ projectId }) {
                 <button
                     type="submit"
                     data-testid="submit-query-button"
-                    style={{ ...styles.button, ...(isProcessing && styles.buttonDisabled) }}
-                    disabled={isProcessing || !currentQuery.trim()}
+                    style={{ ...styles.button, ...((isProcessing || isLoadingHistory || !!historyError) && styles.buttonDisabled) }}
+                    disabled={isProcessing || isLoadingHistory || !!historyError || !currentQuery.trim()}
                 >
                     {isProcessing ? 'Asking AI...' : 'Submit Query'}
                 </button>
@@ -381,7 +404,7 @@ function QueryInterface({ projectId }) {
                     data-testid="new-chat-button"
                     onClick={handleNewChat}
                     style={styles.newChatButton}
-                    disabled={isProcessing}
+                    disabled={isProcessing || isLoadingHistory} // Disable while processing or loading history
                 >
                     New Chat
                 </button>

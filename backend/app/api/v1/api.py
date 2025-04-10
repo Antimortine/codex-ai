@@ -20,6 +20,9 @@ from app.api.v1.endpoints import scenes
 from app.api.v1.endpoints import characters
 from app.api.v1.endpoints import content_blocks
 from app.api.v1.endpoints import ai
+# --- ADDED: Import chat_history router ---
+from app.api.v1.endpoints import chat_history
+# --- END ADDED ---
 
 api_router = APIRouter()
 
@@ -64,3 +67,11 @@ api_router.include_router(
     prefix="/ai",
     tags=["AI"]
 )
+
+# --- ADDED: Chat History routes ---
+api_router.include_router(
+    chat_history.router,
+    prefix="/projects/{project_id}", # Mount under project ID
+    tags=["Chat History"]
+)
+# --- END ADDED ---
