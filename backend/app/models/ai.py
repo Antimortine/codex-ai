@@ -16,7 +16,6 @@ from pydantic import BaseModel, Field
 from typing import Optional, List
 
 # --- Query Models ---
-# ... (unchanged) ...
 class AIQueryRequest(BaseModel):
     query: str = Field(..., description="The user's question or query text.")
 
@@ -31,16 +30,26 @@ class AIQueryResponse(BaseModel):
     source_nodes: Optional[List[SourceNodeModel]] = Field(None, description="List of source nodes retrieved and used for the answer.")
 
 # --- Scene Generation Models ---
-# ... (unchanged) ...
 class AISceneGenerationRequest(BaseModel):
     prompt_summary: Optional[str] = Field(None, description="Optional brief summary or prompt to guide the scene generation.")
     previous_scene_order: Optional[int] = Field(None, ge=0, description="The order number of the scene immediately preceding the one to be generated (0 if it's the first scene).")
 
+# --- Schema for the Scene Generation Tool (Used internally by SceneGenerator) ---
+class SaveGeneratedSceneToolSchema(BaseModel):
+    """Data model for the generated scene draft, used as Tool arguments."""
+    title: str = Field(..., description="The concise title generated for the scene draft.")
+    content: str = Field(..., description="The full Markdown content generated for the scene draft.")
+
+# --- CORRECTED: Updated Scene Generation API Response Model ---
 class AISceneGenerationResponse(BaseModel):
-    generated_content: str = Field(..., description="The generated Markdown content for the scene draft.")
+    # Removed generated_content field
+    # Added title and content fields
+    title: str = Field(..., description="The AI-generated title for the scene draft.")
+    content: str = Field(..., description="The AI-generated Markdown content for the scene draft.")
+# --- END CORRECTED ---
+
 
 # --- Text Editing Models ---
-# ... (unchanged) ...
 class AIRephraseRequest(BaseModel):
     selected_text: str = Field(..., description="The text selected by the user for rephrasing.")
     context_before: Optional[str] = Field(None, description="Optional text immediately preceding the selection for better context.")
@@ -50,22 +59,27 @@ class AIRephraseResponse(BaseModel):
     suggestions: List[str] = Field(..., description="A list of alternative phrasings for the selected text.")
 
 # --- Chapter Splitting Models ---
-# ... (AIChapterSplitRequest unchanged) ...
 class AIChapterSplitRequest(BaseModel):
     chapter_content: str = Field(..., description="The full Markdown content of the chapter to be split.")
 
 class ProposedScene(BaseModel):
     """Represents a single scene proposed by the AI splitter."""
-    # --- MODIFIED: Simplified descriptions ---
     suggested_title: str = Field(..., description="Suggested scene title.")
     content: str = Field(..., description="Markdown content for the scene.")
-    # --- END MODIFIED ---
 
 class ProposedSceneList(BaseModel):
     """Data model for the list of proposed scenes, used as Tool arguments."""
-    # --- MODIFIED: Simplified description ---
     proposed_scenes: List[ProposedScene] = Field(..., description="List of proposed scenes.")
-    # --- END MODIFIED ---
 
 class AIChapterSplitResponse(BaseModel):
     proposed_scenes: List[ProposedScene] = Field(..., description="A list of proposed scenes derived from the chapter content.")
+
+# --- Summarization Models (Placeholder for future feature) ---
+# class AISummarizeRequest(BaseModel):
+#     selected_text: str = Field(...)
+#     context_before: Optional[str] = None
+#     context_after: Optional[str] = None
+#     # Add other options like desired length?
+
+# class AISummarizeResponse(BaseModel):
+#     summary: str = Field(...)
