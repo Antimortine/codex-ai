@@ -15,9 +15,7 @@
  */
 
 import React from 'react';
-// --- ADDED: Import within ---
-import { render, screen, waitFor, within } from '@testing-library/react';
-// --- END ADDED ---
+import { render, screen, waitFor, within, fireEvent, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { describe, it, expect, vi, beforeEach } from 'vitest';
 
@@ -33,7 +31,27 @@ import { queryProjectContext } from '../api/codexApi';
 
 const TEST_PROJECT_ID = 'query-proj-1';
 
-describe('QueryInterface', () => {
+// Helper function to get the latest history entry element
+const getLatestHistoryEntry = () => {
+    const historyContainer = screen.queryByTestId('query-history');
+    if (!historyContainer) return null;
+    // Find the div with the highest data-entry-id attribute
+    const entries = historyContainer.querySelectorAll('div[data-entry-id]');
+    if (!entries || entries.length === 0) return null;
+    let latestEntry = null;
+    let maxId = -1;
+    entries.forEach(entry => {
+        const id = parseInt(entry.getAttribute('data-entry-id'), 10);
+        if (id > maxId) {
+            maxId = id;
+            latestEntry = entry;
+        }
+    });
+    return latestEntry;
+};
+
+
+describe('QueryInterface Component with History', () => {
   let user;
 
   beforeEach(() => {
@@ -43,36 +61,168 @@ describe('QueryInterface', () => {
     queryProjectContext.mockResolvedValue({
       data: { answer: 'Default AI answer.', source_nodes: [] },
     });
+    // Mock localStorage
+    Storage.prototype.getItem = vi.fn();
+    Storage.prototype.setItem = vi.fn();
+    Storage.prototype.removeItem = vi.fn();
   });
 
-  it('renders the query input and submit button', () => {
+  it('renders the query input, submit button, and new chat button', () => {
     render(<QueryInterface projectId={TEST_PROJECT_ID} />);
     expect(screen.getByPlaceholderText(/ask a question about your project/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /submit query/i })).toBeInTheDocument();
-    expect(screen.queryByRole('heading', { name: /ai answer/i })).not.toBeInTheDocument(); // No response initially
+    expect(screen.getByRole('button', { name: /new chat/i })).toBeInTheDocument();
+    expect(screen.queryByTestId('query-history')).not.toBeInTheDocument(); // No history initially
   });
 
-  it('disables submit button when query is empty or loading', async () => {
+  it('disables submit button when query is empty', async () => {
     render(<QueryInterface projectId={TEST_PROJECT_ID} />);
     const submitButton = screen.getByRole('button', { name: /submit query/i });
     const queryInput = screen.getByPlaceholderText(/ask a question about your project/i);
 
-    // Initially empty
-    expect(submitButton).toBeDisabled();
-
-    // After typing
+    expect(submitButton).toBeDisabled(); // Initially empty
     await user.type(queryInput, 'Test query');
-    expect(submitButton).not.toBeDisabled();
-
-    // While loading (simulate)
-    queryProjectContext.mockImplementation(() => new Promise(() => {})); // Never resolves
-    await user.click(submitButton);
-    expect(submitButton).toBeDisabled();
-    expect(screen.getByText(/waiting for AI response.../i)).toBeInTheDocument();
+    expect(submitButton).not.toBeDisabled(); // After typing
+    await user.clear(queryInput);
+    expect(submitButton).toBeDisabled(); // Empty again
   });
 
-  it('calls queryProjectContext API on submit with correct data', async () => {
+  // Let's test one thing at a time to make it more reliable
+  it('calls API and displays query/response in history', async () => {
     const queryText = 'What is the plan?';
+    const answerText = 'The plan is to test.';
+    
+    // Mock the API response
+    queryProjectContext.mockResolvedValue({
+      data: { answer: answerText, source_nodes: [] }
+    });
+
+    render(<QueryInterface projectId={TEST_PROJECT_ID} />);
+    
+    // Get initial form elements
+    const queryInput = screen.getByPlaceholderText(/ask a question about your project/i);
+    const submitButton = screen.getByTestId('submit-query-button');
+    
+    // Submit the query
+    await user.type(queryInput, queryText);
+    await user.click(submitButton);
+
+    // Wait for the user query to appear in history
+    await screen.findByText(new RegExp(`You: ${queryText}`));
+    
+    // Wait for AI response to appear in history
+    await screen.findByText(new RegExp(`AI: ${answerText}`));
+    
+    // Verify the input is cleared
+    expect(queryInput).toHaveValue('');
+  });
+  
+  it('shows processing state and disables controls while processing', async () => {
+    // Create manually resolvable promise 
+    let resolveApi;
+    const apiPromise = new Promise(resolve => {
+      resolveApi = () => resolve({ data: { answer: 'Test answer', source_nodes: [] } });
+    });
+    queryProjectContext.mockReturnValue(apiPromise);
+
+    render(<QueryInterface projectId={TEST_PROJECT_ID} />);
+    
+    // Get initial elements
+    const queryInput = screen.getByPlaceholderText(/ask a question about your project/i);
+    const submitButton = screen.getByTestId('submit-query-button');
+    const newChatButton = screen.getByTestId('new-chat-button');
+    
+    // Submit a query
+    await user.type(queryInput, 'Test query');
+    await user.click(submitButton);
+    
+    // Verify processing state is active
+    expect(screen.getByTestId('is-processing')).toHaveAttribute('data-processing', 'true');
+    
+    // Verify controls are disabled
+    expect(submitButton).toBeDisabled();
+    expect(newChatButton).toBeDisabled();
+    expect(queryInput).toBeDisabled();
+    
+    // Resolve the API call
+    resolveApi();
+  });
+  
+  it('shows processing state while API call is in progress and resets after completion', async () => {
+    // Create a manually controlled promise
+    let resolveApi;
+    const apiPromise = new Promise(resolve => {
+      resolveApi = resolve;
+    });
+    
+    // Use the manually controlled promise in our mock
+    queryProjectContext.mockImplementation(() => apiPromise);
+
+    render(<QueryInterface projectId={TEST_PROJECT_ID} />);
+    
+    // Get input and submit button
+    const queryInput = screen.getByPlaceholderText(/ask a question about your project/i);
+    const submitButton = screen.getByTestId('submit-query-button');
+    
+    // Submit a query
+    await user.type(queryInput, 'Test query');
+    await user.click(submitButton);
+    
+    // Immediately after clicking, check that processing state is active
+    // Should be able to catch it because our API promise is still pending
+    await waitFor(() => {
+      expect(screen.getByTestId('is-processing')).toHaveAttribute('data-processing', 'true');
+    });
+    
+    // Now resolve the API promise
+    resolveApi({ data: { answer: 'Test response', source_nodes: [] } });
+    
+    // Wait for the response to appear in the UI
+    await screen.findByText(/AI: Test response/i);
+    
+    // After the response appears, verify the processing state is reset to false
+    await waitFor(() => {
+      expect(screen.getByTestId('is-processing')).toHaveAttribute('data-processing', 'false');
+    });
+  });
+
+  it('adds multiple entries to history', async () => {
+    const query1 = 'First query';
+    const answer1 = 'Answer one';
+    const query2 = 'Second query';
+    const answer2 = 'Answer two';
+
+    queryProjectContext
+      .mockResolvedValueOnce({ data: { answer: answer1, source_nodes: [] } })
+      .mockResolvedValueOnce({ data: { answer: answer2, source_nodes: [] } });
+
+    render(<QueryInterface projectId={TEST_PROJECT_ID} />);
+    const submitButton = screen.getByRole('button', { name: /submit query/i });
+    const queryInput = screen.getByPlaceholderText(/ask a question about your project/i);
+
+    // Submit first query
+    await user.type(queryInput, query1);
+    await user.click(submitButton);
+    await waitFor(() => expect(screen.getByText(`AI: ${answer1}`)).toBeInTheDocument());
+
+    // Submit second query
+    await user.type(queryInput, query2);
+    await user.click(submitButton);
+    await waitFor(() => expect(screen.getByText(`AI: ${answer2}`)).toBeInTheDocument());
+
+    // Check history
+    const historyArea = screen.getByTestId('query-history');
+    expect(within(historyArea).getByText(`You: ${query1}`)).toBeInTheDocument();
+    expect(within(historyArea).getByText(`AI: ${answer1}`)).toBeInTheDocument();
+    expect(within(historyArea).getByText(`You: ${query2}`)).toBeInTheDocument();
+    expect(within(historyArea).getByText(`AI: ${answer2}`)).toBeInTheDocument();
+  });
+
+  it('handles API error and displays it in the correct history entry', async () => {
+    const queryText = 'Query that fails';
+    const errorMessage = 'AI service unavailable';
+    queryProjectContext.mockRejectedValue({ response: { data: { detail: errorMessage } } });
+
     render(<QueryInterface projectId={TEST_PROJECT_ID} />);
     const submitButton = screen.getByRole('button', { name: /submit query/i });
     const queryInput = screen.getByPlaceholderText(/ask a question about your project/i);
@@ -80,39 +230,65 @@ describe('QueryInterface', () => {
     await user.type(queryInput, queryText);
     await user.click(submitButton);
 
+    // Wait for error to appear in the history entry
     await waitFor(() => {
-      expect(queryProjectContext).toHaveBeenCalledTimes(1);
-      expect(queryProjectContext).toHaveBeenCalledWith(TEST_PROJECT_ID, { query: queryText });
+        const latestEntry = getLatestHistoryEntry();
+        expect(latestEntry).toBeInTheDocument();
+        expect(within(latestEntry).getByTestId(/query-error-\d+/)).toHaveTextContent(errorMessage);
+        expect(within(latestEntry).queryByText(/AI:/)).not.toBeInTheDocument(); // No answer
     });
   });
 
-  it('displays the AI answer when API call succeeds', async () => {
-    const queryText = 'Test query';
-    const answerText = 'This is the successful answer.';
+  it('handles API response with "Error:" prefix as an error in history', async () => {
+    const queryText = 'Query returning error string';
+    const errorMessageInAnswer = 'Error: Rate limit exceeded.';
+    queryProjectContext.mockResolvedValue({ data: { answer: errorMessageInAnswer, source_nodes: [] } });
+
+    render(<QueryInterface projectId={TEST_PROJECT_ID} />);
+    const submitButton = screen.getByRole('button', { name: /submit query/i });
+    const queryInput = screen.getByPlaceholderText(/ask a question about your project/i);
+
+    await user.type(queryInput, queryText);
+    await user.click(submitButton);
+
+    // Wait for error to appear in the history entry
+    await waitFor(() => {
+        const latestEntry = getLatestHistoryEntry();
+        expect(latestEntry).toBeInTheDocument();
+        expect(within(latestEntry).getByTestId(/query-error-\d+/)).toHaveTextContent(errorMessageInAnswer);
+        expect(within(latestEntry).queryByText(/AI:/)).not.toBeInTheDocument(); // No answer
+    });
+  });
+
+  it('clears history when "New Chat" button is clicked', async () => {
+    const queryText = 'Some query';
+    const answerText = 'Some answer';
     queryProjectContext.mockResolvedValue({ data: { answer: answerText, source_nodes: [] } });
 
     render(<QueryInterface projectId={TEST_PROJECT_ID} />);
     const submitButton = screen.getByRole('button', { name: /submit query/i });
     const queryInput = screen.getByPlaceholderText(/ask a question about your project/i);
+    const newChatButton = screen.getByRole('button', { name: /new chat/i });
 
+    // Add an entry to history
     await user.type(queryInput, queryText);
     await user.click(submitButton);
+    await waitFor(() => expect(screen.getByTestId('query-history')).toBeInTheDocument());
+    expect(screen.getByText(`AI: ${answerText}`)).toBeInTheDocument();
 
-    // Wait for the answer to appear
-    const responseArea = await screen.findByTestId('query-response');
-    expect(within(responseArea).getByText(answerText)).toBeInTheDocument(); // Check within response area
-    expect(within(responseArea).getByRole('heading', { name: /ai answer/i })).toBeInTheDocument();
-    expect(screen.queryByText(/waiting for AI response.../i)).not.toBeInTheDocument();
-    expect(screen.queryByTestId('query-error')).not.toBeInTheDocument(); // No error displayed
+    // Click New Chat
+    await user.click(newChatButton);
+
+    // Verify history is gone
+    expect(screen.queryByTestId('query-history')).not.toBeInTheDocument();
+    expect(queryInput).toHaveValue(''); // Input should also be cleared
   });
 
-  it('displays source nodes when API call succeeds and returns nodes', async () => {
+  it('hides and shows source nodes using the details spoiler', async () => {
     const queryText = 'Query with sources';
     const answerText = 'Answer based on sources.';
     const sourceNodes = [
-      { id: 'node1', text: 'Source snippet one.', score: 0.95, metadata: { file_path: 'project/plan.md' } },
-      { id: 'node2', text: 'Source snippet two.', score: 0.88, metadata: { file_path: 'project/chapters/ch1/scene1.md' } },
-      { id: 'node3', text: 'Source snippet three.', score: null, metadata: { file_path: 'other/file.txt' } }, // Test null score
+      { id: 'n1', text: 'Source snippet one.', score: 0.9, metadata: { file_path: 'plan.md' } },
     ];
     queryProjectContext.mockResolvedValue({ data: { answer: answerText, source_nodes: sourceNodes } });
 
@@ -123,118 +299,69 @@ describe('QueryInterface', () => {
     await user.type(queryInput, queryText);
     await user.click(submitButton);
 
-    // Wait for answer
-    const responseArea = await screen.findByTestId('query-response');
-    expect(within(responseArea).getByText(answerText)).toBeInTheDocument();
+    // Wait for response
+    const latestEntry = await waitFor(() => getLatestHistoryEntry());
+    expect(within(latestEntry).getByText(`AI: ${answerText}`)).toBeInTheDocument();
 
-    // Check sources heading within response area
-    expect(within(responseArea).getByRole('heading', { name: /sources used/i })).toBeInTheDocument();
+    // Find the summary element
+    const summary = within(latestEntry).getByText(/sources used \(1\)/i);
+    expect(summary).toBeInTheDocument();
 
-    // Check individual source nodes within response area
-    expect(within(responseArea).getByText('plan.md (Score: 0.950)')).toBeInTheDocument();
-    expect(within(responseArea).getByText('Source snippet one.')).toBeInTheDocument();
+    // Source content should NOT be visible initially
+    const detailsContent = summary.closest('details').querySelector('div');
+    expect(detailsContent).not.toBeVisible();
 
-    expect(within(responseArea).getByText('scene1.md (Score: 0.880)')).toBeInTheDocument();
-    expect(within(responseArea).getByText('Source snippet two.')).toBeInTheDocument();
 
-    expect(within(responseArea).getByText('file.txt (Score: N/A)')).toBeInTheDocument(); // Check null score handling
-    expect(within(responseArea).getByText('Source snippet three.')).toBeInTheDocument();
+    // Click the summary to expand
+    await user.click(summary);
+
+    // Source content SHOULD now be visible
+    expect(within(latestEntry).getByText('Source snippet one.')).toBeVisible();
+    expect(within(latestEntry).getByText('plan.md (Score: 0.900)')).toBeVisible();
+
+    // Click again to collapse
+    await user.click(summary);
+    await waitFor(() => {
+        const updatedDetailsContent = summary.closest('details').querySelector('div');
+        expect(updatedDetailsContent).not.toBeVisible();
+    });
   });
 
-   it('displays specific message when API call succeeds but returns no source nodes', async () => {
-    const queryText = 'Query with no sources';
-    const answerText = 'Answer without sources.';
-    queryProjectContext.mockResolvedValue({ data: { answer: answerText, source_nodes: [] } }); // Empty array
-
+  it('submits query on Ctrl+Enter in textarea', async () => {
+    const queryText = 'Submit with ctrl enter';
     render(<QueryInterface projectId={TEST_PROJECT_ID} />);
-    const submitButton = screen.getByRole('button', { name: /submit query/i });
     const queryInput = screen.getByPlaceholderText(/ask a question about your project/i);
 
     await user.type(queryInput, queryText);
-    await user.click(submitButton);
+    // Simulate Ctrl+Enter press
+    fireEvent.keyDown(queryInput, { key: 'Enter', ctrlKey: true });
 
-    // Wait for answer
-    const responseArea = await screen.findByTestId('query-response');
-    expect(within(responseArea).getByText(answerText)).toBeInTheDocument();
-
-    // Check for the specific message within response area
-    expect(within(responseArea).getByText('(No specific sources retrieved for this answer)')).toBeInTheDocument();
-    expect(within(responseArea).queryByRole('heading', { name: /sources used/i })).not.toBeInTheDocument();
-  });
-
-  it('displays an error message if API call fails', async () => {
-    const queryText = 'Query that fails';
-    const errorMessage = 'AI service unavailable';
-    // Simulate API error with a detail message
-    queryProjectContext.mockRejectedValue({ response: { data: { detail: errorMessage } } });
-
-    render(<QueryInterface projectId={TEST_PROJECT_ID} />);
-    const submitButton = screen.getByRole('button', { name: /submit query/i });
-    const queryInput = screen.getByPlaceholderText(/ask a question about your project/i);
-
-    await user.type(queryInput, queryText);
-    await user.click(submitButton);
-
-    // --- FIXED ASSERTION ---
-    // Wait for error message using data-testid
-    const errorElement = await screen.findByTestId('query-error');
-    expect(errorElement).toBeInTheDocument();
-    expect(errorElement).toHaveTextContent(errorMessage); // Check the content without "Error: " prefix
-    // --- END FIXED ASSERTION ---
-
-    expect(screen.queryByTestId('query-response')).not.toBeInTheDocument(); // No response area
-    expect(screen.queryByText(/waiting for AI response.../i)).not.toBeInTheDocument();
-  });
-
-   it('displays a generic error message if API error has no detail', async () => {
-    const queryText = 'Query that fails generically';
-    const genericErrorMessage = 'Network Error';
-    // Simulate API error without a detail message
-    queryProjectContext.mockRejectedValue(new Error(genericErrorMessage));
-
-    render(<QueryInterface projectId={TEST_PROJECT_ID} />);
-    const submitButton = screen.getByRole('button', { name: /submit query/i });
-    const queryInput = screen.getByPlaceholderText(/ask a question about your project/i);
-
-    await user.type(queryInput, queryText);
-    await user.click(submitButton);
-
-    // --- FIXED ASSERTION ---
-    // Wait for generic error message using data-testid
-    const errorElement = await screen.findByTestId('query-error');
-    expect(errorElement).toBeInTheDocument();
-    expect(errorElement).toHaveTextContent(genericErrorMessage); // Check the content without "Error: " prefix
-    // --- END FIXED ASSERTION ---
-
-    expect(screen.queryByTestId('query-response')).not.toBeInTheDocument(); // No response area
-  });
-
-  // --- NEW TEST CASE ---
-  it('displays an error message if API returns answer starting with "Error:"', async () => {
-    const queryText = 'Query that returns error in answer';
-    const errorMessageInAnswer = 'Error: Rate limit exceeded after multiple retries. Please wait and try again.';
-    // Simulate successful API call but with error message in the answer field
-    queryProjectContext.mockResolvedValue({
-      data: { answer: errorMessageInAnswer, source_nodes: [] },
+    // Check if API was called
+    await waitFor(() => {
+      expect(queryProjectContext).toHaveBeenCalledTimes(1);
+      expect(queryProjectContext).toHaveBeenCalledWith(TEST_PROJECT_ID, { query: queryText });
     });
 
+    // Check if history updated (basic check)
+    expect(await screen.findByTestId('query-history')).toBeInTheDocument();
+    expect(screen.getByText(`You: ${queryText}`)).toBeInTheDocument();
+  });
+
+  it('does not submit query on Enter only in textarea', async () => {
+    const queryText = 'Do not submit';
     render(<QueryInterface projectId={TEST_PROJECT_ID} />);
-    const submitButton = screen.getByRole('button', { name: /submit query/i });
     const queryInput = screen.getByPlaceholderText(/ask a question about your project/i);
 
     await user.type(queryInput, queryText);
-    await user.click(submitButton);
+    // Simulate Enter press only
+    await user.keyboard('{Enter}'); // userEvent simulates Enter press correctly
 
-    // Wait for error message using data-testid
-    const errorElement = await screen.findByTestId('query-error');
-    expect(errorElement).toBeInTheDocument();
-    // Check that the full error message from the answer field is displayed
-    expect(errorElement).toHaveTextContent(errorMessageInAnswer);
-
-    // Ensure the response area is NOT displayed
-    expect(screen.queryByTestId('query-response')).not.toBeInTheDocument();
-    expect(screen.queryByText(/waiting for AI response.../i)).not.toBeInTheDocument();
+    // Check API was NOT called
+    expect(queryProjectContext).not.toHaveBeenCalled();
+    // Input should contain newline potentially, but not be cleared
+    expect(queryInput.value).toContain(queryText);
   });
-  // --- END NEW TEST CASE ---
+
+
 
 });

@@ -14,9 +14,9 @@
  * limitations under the License.
  */
 
-import React, { useState } from 'react';
-import PropTypes from 'prop-types'; // Import PropTypes
-import { queryProjectContext } from '../api/codexApi'; // Import the API function
+import React, { useState, useRef, useEffect, useCallback } from 'react'; // Added useCallback
+import PropTypes from 'prop-types';
+import { queryProjectContext } from '../api/codexApi';
 
 // Basic styling (can be moved to CSS file)
 const styles = {
@@ -27,8 +27,27 @@ const styles = {
         marginTop: '20px',
         backgroundColor: '#f9f9f9',
     },
+    historyArea: {
+        maxHeight: '400px',
+        overflowY: 'auto',
+        marginBottom: '15px',
+        padding: '10px',
+        border: '1px solid #e0e0e0',
+        backgroundColor: '#fff',
+        borderRadius: '4px',
+    },
+    historyEntry: {
+        marginBottom: '15px',
+        paddingBottom: '10px',
+        borderBottom: '1px dashed #eee',
+    },
+    queryText: {
+        fontWeight: 'bold',
+        color: '#333',
+        marginBottom: '5px',
+    },
     textarea: {
-        width: '95%', // Adjust width as needed
+        width: '95%',
         minHeight: '60px',
         marginBottom: '10px',
         padding: '8px',
@@ -42,24 +61,43 @@ const styles = {
         color: 'white',
         border: 'none',
         borderRadius: '3px',
+        marginRight: '10px',
     },
     buttonDisabled: {
         backgroundColor: '#aaa',
         cursor: 'not-allowed',
     },
-    responseArea: {
-        marginTop: '15px',
-        padding: '10px',
-        border: '1px dashed #eee',
-        backgroundColor: 'white',
-        whiteSpace: 'pre-wrap', // Preserve whitespace and newlines in answer
-        wordWrap: 'break-word', // Break long words
+    newChatButton: {
+        padding: '8px 15px',
+        cursor: 'pointer',
+        backgroundColor: '#6c757d',
+        color: 'white',
+        border: 'none',
+        borderRadius: '3px',
     },
+    responseArea: {
+        padding: '10px',
+        backgroundColor: 'white',
+        whiteSpace: 'pre-wrap',
+        wordWrap: 'break-word',
+    },
+    // --- MODIFIED: Source Nodes Area Style ---
     sourceNodesArea: {
-        marginTop: '10px',
+        // marginTop: '10px', // Removed margin, handled by details element
         fontSize: '0.9em',
         color: '#555',
     },
+    // --- ADDED: Details/Summary Styles ---
+    detailsSummary: {
+        cursor: 'pointer',
+        fontWeight: 'bold',
+        marginTop: '10px',
+        color: '#444',
+    },
+    detailsContent: {
+        paddingTop: '5px', // Add some space below the summary
+    },
+    // --- END ADDED ---
     sourceNode: {
         borderLeft: '3px solid #ddd',
         paddingLeft: '8px',
@@ -71,9 +109,9 @@ const styles = {
     sourceNodeText: {
         whiteSpace: 'pre-wrap',
         wordWrap: 'break-word',
-        maxHeight: '100px', // Limit height of snippet
-        overflowY: 'auto', // Add scroll if snippet is long
-        display: 'block', // Ensure block display for scroll
+        maxHeight: '100px',
+        overflowY: 'auto',
+        display: 'block',
         marginTop: '5px',
         padding: '5px',
         backgroundColor: '#e9e9e9',
@@ -82,128 +120,207 @@ const styles = {
     },
     error: {
         color: 'red',
-        marginTop: '10px',
-        fontWeight: 'bold', // Make error more prominent
+        fontWeight: 'bold',
     },
     loading: {
-        marginTop: '10px',
         fontStyle: 'italic',
         color: '#555',
     }
 };
 
-function QueryInterface({ projectId }) {
-    const [query, setQuery] = useState('');
-    const [response, setResponse] = useState(null); // Stores { answer: string, source_nodes: [] }
-    const [isLoading, setIsLoading] = useState(false);
-    const [error, setError] = useState(null);
-
-    const handleSubmitQuery = async (e) => {
-        e.preventDefault();
-        if (!query.trim() || isLoading) return;
-
-        setIsLoading(true);
-        setError(null);
-        setResponse(null); // Clear previous response and error
-
-        try {
-            console.log(`Sending query for project ${projectId}: "${query}"`);
-            const apiResponse = await queryProjectContext(projectId, { query: query });
-            console.log("[QueryInterface] Raw API Response:", apiResponse); // Log raw response
-
-            const answerText = apiResponse.data?.answer;
-            console.log(`[QueryInterface] Extracted answerText: "${answerText}" (Type: ${typeof answerText})`); // Log extracted answer
-
-            // --- Check if the answer itself is an error message ---
-            const isString = typeof answerText === 'string';
-            const startsWithError = isString && answerText.trim().startsWith("Error:");
-            console.log(`[QueryInterface] isString: ${isString}, startsWithError: ${startsWithError}`); // Log check results
-
-            if (isString && startsWithError) {
-                console.warn(`[QueryInterface] Query returned an error message in the answer field. Setting error state.`);
-                setError(answerText); // Set the error state with the message from the answer
-                setResponse(null);    // Clear response state
-            } else {
-                console.log(`[QueryInterface] Setting response state.`);
-                setResponse(apiResponse.data); // Set response state
-                setError(null);             // Clear error state
-            }
-
-        } catch (err) {
-            console.error("[QueryInterface] Error in API call catch block:", err);
-            // Extract error message more robustly
-            const errorMsg = err.response?.data?.detail || err.message || 'Failed to get response from AI.';
-            console.log(`[QueryInterface] Setting error state from catch block: "${errorMsg}"`);
-            setError(errorMsg);
-            setResponse(null);
-        } finally {
-            console.log("[QueryInterface] Setting isLoading to false.");
-            setIsLoading(false);
-        }
-    };
-
-    // Helper to extract filename from path
+// --- Helper Component for Rendering a Single History Entry ---
+const HistoryEntry = ({ entry }) => {
     const getFilename = (filePath) => {
         if (!filePath) return 'Unknown Source';
         return filePath.split(/[\\/]/).pop();
     }
 
-    // Log state just before rendering
-    console.log(`[QueryInterface] Rendering - isLoading: ${isLoading}, error: "${error}", response: ${response ? JSON.stringify(response).substring(0,100)+'...' : 'null'}`);
+    return (
+        <div style={styles.historyEntry} data-entry-id={entry.id}>
+            <div style={styles.queryText}>You: {entry.query}</div>
+            <div style={styles.responseArea} data-testid={`response-area-${entry.id}`}>
+                {entry.isLoading && <p style={styles.loading}>Waiting for AI response...</p>}
+                {entry.error && <p style={styles.error} data-testid={`query-error-${entry.id}`}>{entry.error}</p>}
+                {entry.response && !entry.error && (
+                    <>
+                        <p>AI: {entry.response.answer}</p>
+                        {/* --- MODIFIED: Wrap source nodes in <details> --- */}
+                        {entry.response.source_nodes && entry.response.source_nodes.length > 0 && (
+                            <details style={styles.sourceNodesArea}>
+                                <summary style={styles.detailsSummary}>Sources Used ({entry.response.source_nodes.length})</summary>
+                                <div style={styles.detailsContent}>
+                                    {entry.response.source_nodes.map((node) => (
+                                        <div key={node.id} style={styles.sourceNode}>
+                                            <strong>Source:</strong> {getFilename(node.metadata?.file_path)} (Score: {node.score?.toFixed(3) ?? 'N/A'})
+                                            <pre style={styles.sourceNodeText}><code>{node.text}</code></pre>
+                                        </div>
+                                    ))}
+                                </div>
+                            </details>
+                        )}
+                        {/* --- END MODIFIED --- */}
+                        {entry.response.source_nodes && entry.response.source_nodes.length === 0 && (
+                            <p style={styles.sourceNodesArea}><em>(No specific sources retrieved for this answer)</em></p>
+                        )}
+                    </>
+                )}
+            </div>
+        </div>
+    );
+};
+
+HistoryEntry.propTypes = {
+    entry: PropTypes.shape({
+        id: PropTypes.number.isRequired,
+        query: PropTypes.string.isRequired,
+        response: PropTypes.object, // AIQueryResponse structure
+        error: PropTypes.string,
+        isLoading: PropTypes.bool,
+    }).isRequired,
+};
+// --- End Helper Component ---
+
+
+function QueryInterface({ projectId }) {
+    const [currentQuery, setCurrentQuery] = useState('');
+    const [history, setHistory] = useState([]);
+    const [isProcessing, setIsProcessing] = useState(false);
+    const nextId = useRef(0);
+    const historyEndRef = useRef(null);
+    const formRef = useRef(null); // Ref for the form
+
+    useEffect(() => {
+        historyEndRef.current?.scrollIntoView({ behavior: "smooth" });
+    }, [history]);
+
+    // --- MODIFIED: Extracted submission logic ---
+    const processQuery = useCallback(async () => {
+        if (!currentQuery.trim() || isProcessing) return;
+
+        const queryText = currentQuery;
+        const entryId = nextId.current++;
+        const newEntry = {
+            id: entryId,
+            query: queryText,
+            response: null,
+            error: null,
+            isLoading: true,
+        };
+
+        setHistory(prev => [...prev, newEntry]);
+        setCurrentQuery('');
+        setIsProcessing(true);
+
+        try {
+            console.log(`Sending query for project ${projectId}: "${queryText}"`);
+            const apiResponse = await queryProjectContext(projectId, { query: queryText });
+            console.log("[QueryInterface] Raw API Response:", apiResponse);
+
+            const answerText = apiResponse.data?.answer;
+            const isString = typeof answerText === 'string';
+            const startsWithError = isString && answerText.trim().startsWith("Error:");
+
+            if (isString && startsWithError) {
+                console.warn(`[QueryInterface] Query returned an error message in the answer field.`);
+                setHistory(prev => prev.map(entry =>
+                    entry.id === entryId ? { ...entry, error: answerText, isLoading: false } : entry
+                ));
+            } else {
+                console.log(`[QueryInterface] Setting response state for entry ${entryId}.`);
+                setHistory(prev => prev.map(entry =>
+                    entry.id === entryId ? { ...entry, response: apiResponse.data, isLoading: false } : entry
+                ));
+            }
+
+        } catch (err) {
+            console.error("[QueryInterface] Error in API call catch block:", err);
+            const errorMsg = err.response?.data?.detail || err.message || 'Failed to get response from AI.';
+            console.log(`[QueryInterface] Setting error state for entry ${entryId}: "${errorMsg}"`);
+            setHistory(prev => prev.map(entry =>
+                entry.id === entryId ? { ...entry, error: errorMsg, isLoading: false } : entry
+            ));
+        } finally {
+            console.log("[QueryInterface] Setting isProcessing to false.");
+            setIsProcessing(false);
+        }
+    }, [currentQuery, isProcessing, projectId]); // Dependencies for the callback
+    // --- END MODIFIED ---
+
+    // --- Form submit handler ---
+    const handleSubmitForm = (e) => {
+        e.preventDefault(); // Prevent default form submission
+        processQuery(); // Call the extracted logic
+    };
+    // --- End Form submit handler ---
+
+    // --- ADDED: Ctrl+Enter handler ---
+    const handleKeyDown = (e) => {
+        if (e.key === 'Enter' && e.ctrlKey && !isProcessing && currentQuery.trim()) {
+            e.preventDefault(); // Prevent default Enter behavior (newline)
+            processQuery(); // Trigger submission logic
+        }
+    };
+    // --- END ADDED ---
+
+    const handleNewChat = () => {
+        setHistory([]);
+        setCurrentQuery('');
+        setIsProcessing(false);
+        nextId.current = 0;
+    };
+
+    const historyAreaId = "query-history";
+    const isProcessingId = "is-processing";
 
     return (
         <div style={styles.container}>
-            <h3>Ask AI about this Project</h3>
-            <form onSubmit={handleSubmitQuery}>
+        {/* Hidden element to track processing state */}
+        <div data-testid={isProcessingId} style={{ display: 'none' }} data-processing={isProcessing ? 'true' : 'false'}></div>
+            {history.length > 0 && (
+                <div style={styles.historyArea} data-testid={historyAreaId}>
+                    {history.map(entry => (
+                        <HistoryEntry key={entry.id} entry={entry} />
+                    ))}
+                    <div ref={historyEndRef} />
+                </div>
+            )}
+
+            {/* --- MODIFIED: Added ref and onSubmit --- */}
+            <form ref={formRef} onSubmit={handleSubmitForm}>
+            {/* --- END MODIFIED --- */}
                 <textarea
                     style={styles.textarea}
-                    value={query}
-                    onChange={(e) => setQuery(e.target.value)}
-                    placeholder="Ask a question about your project plan, characters, scenes..."
-                    disabled={isLoading}
+                    value={currentQuery}
+                    onChange={(e) => setCurrentQuery(e.target.value)}
+                    onKeyDown={handleKeyDown} // Added keydown handler
+                    placeholder="Ask a question about your project plan, characters, scenes... (Ctrl+Enter to submit)"
+                    disabled={isProcessing}
                     rows={3}
+                    aria-label="AI Query Input"
                 />
                 <br />
                 <button
                     type="submit"
-                    style={{ ...styles.button, ...(isLoading && styles.buttonDisabled) }}
-                    disabled={isLoading || !query.trim()}
+                    data-testid="submit-query-button"
+                    style={{ ...styles.button, ...(isProcessing && styles.buttonDisabled) }}
+                    disabled={isProcessing || !currentQuery.trim()}
                 >
-                    {isLoading ? 'Asking AI...' : 'Submit Query'}
+                    {isProcessing ? 'Asking AI...' : 'Submit Query'}
+                </button>
+                <button
+                    type="button"
+                    data-testid="new-chat-button"
+                    onClick={handleNewChat}
+                    style={styles.newChatButton}
+                    disabled={isProcessing}
+                >
+                    New Chat
                 </button>
             </form>
-
-            {isLoading && <p style={styles.loading}>Waiting for AI response...</p>}
-            {/* Display error state prominently */}
-            {error && <p style={styles.error} data-testid="query-error">{error}</p>}
-
-            {/* Only display response area if there's a valid response AND no error */}
-            {response && !error && (
-                <div style={styles.responseArea} data-testid="query-response">
-                    <h4>AI Answer:</h4>
-                    <p>{response.answer}</p>
-
-                    {response.source_nodes && response.source_nodes.length > 0 && (
-                        <div style={styles.sourceNodesArea}>
-                            <h5>Sources Used:</h5>
-                            {response.source_nodes.map((node) => (
-                                <div key={node.id} style={styles.sourceNode}>
-                                    <strong>Source:</strong> {getFilename(node.metadata?.file_path)} (Score: {node.score?.toFixed(3) ?? 'N/A'})
-                                    <pre style={styles.sourceNodeText}><code>{node.text}</code></pre>
-                                </div>
-                            ))}
-                        </div>
-                    )}
-                     {response.source_nodes && response.source_nodes.length === 0 && (
-                         <p style={styles.sourceNodesArea}><em>(No specific sources retrieved for this answer)</em></p>
-                     )}
-                </div>
-            )}
         </div>
     );
 }
 
-// Add PropTypes for projectId
 QueryInterface.propTypes = {
   projectId: PropTypes.string.isRequired,
 };
