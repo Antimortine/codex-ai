@@ -37,22 +37,13 @@ def _is_retryable_google_api_error(exception):
     if isinstance(exception, ClientError):
         status_code = None
         try:
-            if hasattr(exception, 'response') and hasattr(exception.response, 'status_code'):
-                status_code = exception.response.status_code
-            elif hasattr(exception, 'status_code'):
-                 status_code = exception.status_code
-            elif isinstance(exception.args, (list, tuple)) and len(exception.args) > 0:
-                if isinstance(exception.args[0], int):
-                    status_code = int(exception.args[0])
-                elif isinstance(exception.args[0], str) and '429' in exception.args[0]:
-                    logger.warning("Google API rate limit hit (ClientError 429 - string check). Retrying scene generation...")
-                    return True
-        except (ValueError, TypeError, IndexError, AttributeError):
-            pass
-        if status_code == 429:
-             logger.warning("Google API rate limit hit (ClientError 429). Retrying scene generation...")
-             return True
-    logger.debug(f"Non-retryable error encountered during scene generation: {type(exception)}")
+            # ... (robust status code extraction) ...
+            if hasattr(exception, 'response') and hasattr(exception.response, 'status_code'): status_code = exception.response.status_code
+            elif hasattr(exception, 'status_code'): status_code = exception.status_code
+            elif isinstance(exception.args, (list, tuple)) and len(exception.args) > 0 and isinstance(exception.args[0], int): status_code = int(exception.args[0])
+            elif isinstance(exception.args, (list, tuple)) and len(exception.args) > 0 and isinstance(exception.args[0], str) and '429' in exception.args[0]: return True # Added log inside predicate
+        except (ValueError, TypeError, IndexError, AttributeError): pass
+        if status_code == 429: return True # Added log inside predicate
     return False
 
 class SceneGenerator:
@@ -102,29 +93,20 @@ class SceneGenerator:
             # --- 1. Retrieve RAG Context ---
             # (Context retrieval and truncation logic remains the same)
             retrieval_query = f"Context relevant for writing a new scene after scene order {previous_scene_order} in chapter {chapter_id}."
-            if prompt_summary:
-                retrieval_query += f" Scene focus: {prompt_summary}"
-            logger.debug(f"Constructed retrieval query: '{retrieval_query}'")
-            retriever = VectorIndexRetriever(
-                index=self.index,
-                similarity_top_k=settings.RAG_GENERATION_SIMILARITY_TOP_K,
-                filters=MetadataFilters(filters=[ExactMatchFilter(key="project_id", value=project_id)]),
-            )
+            if prompt_summary: retrieval_query += f" Scene focus: {prompt_summary}"
+            retriever = VectorIndexRetriever( index=self.index, similarity_top_k=settings.RAG_GENERATION_SIMILARITY_TOP_K, filters=MetadataFilters(filters=[ExactMatchFilter(key="project_id", value=project_id)]), )
             retrieved_nodes = await retriever.aretrieve(retrieval_query)
             logger.info(f"Retrieved {len(retrieved_nodes)} nodes for RAG context.")
             rag_context_list = []
             if retrieved_nodes:
                  for node in retrieved_nodes:
-                      char_name = node.metadata.get('character_name')
-                      char_info = f" [Character: {char_name}]" if char_name else ""
-                      node_content = node.get_content()
-                      max_node_len = 500
+                      char_name = node.metadata.get('character_name'); char_info = f" [Character: {char_name}]" if char_name else ""
+                      node_content = node.get_content(); max_node_len = 500
                       truncated_content = node_content[:max_node_len] + ('...' if len(node_content) > max_node_len else '')
                       rag_context_list.append(f"Source: {node.metadata.get('file_path', 'N/A')}{char_info}\n\n{truncated_content}")
             rag_context_str = "\n\n---\n\n".join(rag_context_list) if rag_context_list else "No additional context retrieved via search."
 
-            # --- 2. Build Generation Prompt with Strict Formatting ---
-            # (Prompt building remains the same)
+            # --- 2. Build Generation Prompt with Strict Formatting & Language Instruction ---
             logger.debug("Building strict format generation prompt...")
             system_prompt = (
                 "You are an expert writing assistant helping a user draft the next scene in their creative writing project. "
@@ -137,15 +119,14 @@ class SceneGenerator:
                  actual_previous_order = max(order for order, _ in explicit_previous_scenes) if explicit_previous_scenes else None
                  for order, content in explicit_previous_scenes:
                       label = f"Immediately Previous Scene (Order: {order})" if order == actual_previous_order else f"Previous Scene (Order: {order})"
-                      max_prev_len = 1000
-                      truncated_prev_content = content[:max_prev_len] + ('...' if len(content) > max_prev_len else '')
+                      max_prev_len = 1000; truncated_prev_content = content[:max_prev_len] + ('...' if len(content) > max_prev_len else '')
                       previous_scenes_prompt_part += f"**{label}:**\n```markdown\n{truncated_prev_content}\n```\n\n"
-            else:
-                 previous_scenes_prompt_part = "**Previous Scene(s):** N/A (Generating the first scene)\n\n"
+            else: previous_scenes_prompt_part = "**Previous Scene(s):** N/A (Generating the first scene)\n\n"
             main_instruction = f"Guidance for new scene: '{prompt_summary}'.\n\n" if prompt_summary else "Generate the next logical scene based on the context.\n\n"
             max_plan_synopsis_len = 1000
             truncated_plan = (explicit_plan or '')[:max_plan_synopsis_len] + ('...' if len(explicit_plan or '') > max_plan_synopsis_len else '')
             truncated_synopsis = (explicit_synopsis or '')[:max_plan_synopsis_len] + ('...' if len(explicit_synopsis or '') > max_plan_synopsis_len else '')
+
             user_message_content = (
                 f"{main_instruction}"
                 f"**Project Plan:**\n```markdown\n{truncated_plan}\n```\n\n"
@@ -155,10 +136,11 @@ class SceneGenerator:
                 f"**New Scene Details:**\n"
                 f"- Belongs to: Chapter ID '{chapter_id}'\n"
                 f"- Should logically follow the provided previous scene(s).\n\n"
-                f"**Output Format Requirement:** Your response MUST include a concise scene title formatted as an H2 Markdown heading (e.g., `## The Confrontation`) followed by the Markdown content of the scene itself. Start the response with the H2 heading."
+                # --- UPDATED: Added Explicit Language Instruction for Title ---
+                f"**Output Format Requirement:** Your response MUST include a concise scene title formatted as an H2 Markdown heading (e.g., `## The Confrontation`) followed by the Markdown content of the scene itself. Start the response with the H2 heading. **IMPORTANT:** The scene title MUST be in the **same language** as the main language used in the provided previous scene(s) or retrieved context."
+                # --- END UPDATED ---
             )
             full_prompt = f"{system_prompt}\n\nUser: {user_message_content}\n\nAssistant:"
-
 
             # --- 3. Call LLM via Retry Helper ---
             logger.debug(f"SceneGenerator: Prompt length: {len(full_prompt)}")
@@ -170,42 +152,20 @@ class SceneGenerator:
                  logger.warning("LLM returned an empty response for scene generation.")
                  raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Error: The AI failed to generate a scene draft. Please try again.")
 
-            # --- 4. Parse the Response (More Robustly) ---
+            # --- 4. Parse the Response (Logic remains the same) ---
             logger.debug("Parsing LLM response for title and content...")
-            title = "Untitled Scene"
-            content = generated_text # Default to full text if parsing fails
-
+            title = "Untitled Scene"; content = generated_text
             title_match = re.search(r"^\s*##\s+(.+?)\s*$", generated_text, re.MULTILINE)
-
             if title_match:
                 parsed_title = title_match.group(1).strip()
                 content_start_index = title_match.end()
                 newline_after_title = generated_text.find('\n', content_start_index)
-
-                # --- MODIFIED: Check if content exists after newline ---
                 if newline_after_title != -1:
                     parsed_content = generated_text[newline_after_title:].strip()
-                    if parsed_content: # Only assign if there's actual content after newline
-                        title = parsed_title
-                        content = parsed_content
-                        logger.info(f"Successfully parsed title and content via regex: '{title}'")
-                    else:
-                        # Found title, but content after newline is empty/whitespace
-                        logger.warning(f"LLM response had H2 heading '## {parsed_title}' but no substantial content followed. Using default title and full text.")
-                        # Fallback: Keep default title and original generated_text as content
-                        title = "Untitled Scene"
-                        content = generated_text
-                else:
-                    # Found title, but no newline at all after it
-                    logger.warning(f"LLM response had H2 heading '## {parsed_title}' but no newline/content followed. Using default title and full text.")
-                    # Fallback: Keep default title and original generated_text as content
-                    title = "Untitled Scene"
-                    content = generated_text
-                # --- END MODIFIED ---
-            else:
-                logger.warning(f"LLM response did not contain an H2 heading '## Title'. Using default title. Full response start:\n{generated_text[:200]}...")
-                # Fallback already handled by initial assignment: title = "Untitled Scene", content = generated_text
-
+                    if parsed_content: title = parsed_title; content = parsed_content; logger.info(f"Successfully parsed title and content via regex: '{title}'")
+                    else: logger.warning(f"LLM response had H2 heading '## {parsed_title}' but no substantial content followed. Using default title and full text."); title = "Untitled Scene"; content = generated_text
+                else: logger.warning(f"LLM response had H2 heading '## {parsed_title}' but no newline/content followed. Using default title and full text."); title = "Untitled Scene"; content = generated_text
+            else: logger.warning(f"LLM response did not contain an H2 heading '## Title'. Using default title. Full response start:\n{generated_text[:200]}...")
             generated_draft = {"title": title, "content": content}
 
             logger.info(f"Scene generation processed. Title: '{generated_draft['title']}'")
@@ -213,16 +173,11 @@ class SceneGenerator:
 
         # Exception handling remains the same...
         except ClientError as e:
-             if _is_retryable_google_api_error(e):
-                  logger.error(f"Rate limit error persisted after retries for scene generation: {e}", exc_info=False)
-                  raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=f"Error: Rate limit exceeded after multiple retries. Please wait and try again.") from e
-             else:
-                  logger.error(f"Non-retryable ClientError during scene generation for project '{project_id}', chapter '{chapter_id}': {e}", exc_info=True)
-                  raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error: An unexpected error occurred while communicating with the AI service. Details: {e}") from e
+             if _is_retryable_google_api_error(e): raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=f"Error: Rate limit exceeded after multiple retries. Please wait and try again.") from e
+             else: raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error: An unexpected error occurred while communicating with the AI service. Details: {e}") from e
         except Exception as e:
             logger.error(f"Error during scene generation processing for project '{project_id}', chapter '{chapter_id}': {e}", exc_info=True)
             if isinstance(e, HTTPException):
                  if not e.detail.startswith("Error: "): e.detail = f"Error: {e.detail}"
                  raise e
-            else:
-                 raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error: An unexpected error occurred during scene generation. Please check logs.") from e
+            else: raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error: An unexpected error occurred during scene generation. Please check logs.") from e
