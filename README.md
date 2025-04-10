@@ -13,18 +13,18 @@ For more details on the system's design, see:
 ## Key Features
 
 -   **Project Management:** Create, list, update, and delete writing projects.
--   **Hierarchical Structure:** Organize your work into **Chapters** and **Scenes**.
+-   **Hierarchical Structure:** Organize your work into **Chapters** and **Scenes** (using 1-based ordering).
 -   **Content Blocks:** Manage core project documents like Plan, Synopsis, and Worldbuilding notes.
 -   **Character Profiles:** Create and manage character descriptions.
 -   **Markdown Editor:** Write and edit all content using a familiar Markdown format (@uiw/react-md-editor).
 -   **Context-Aware Q&A:** Ask questions about your own story ("What was Character X's motivation in Chapter 2?", "Remind me of the description of Location Y?"). The AI uses the specific project's indexed content (including Plan & Synopsis) to answer, ensuring relevance and isolation between projects.
--   **AI-Powered Scene Generation:** Generate scene drafts based on previous scenes, plan, synopsis, retrieved context, and optional user prompts.
+-   **AI-Powered Scene Generation:** Generate scene drafts (including title and content) based on previous scenes, plan, synopsis, retrieved context, and optional user prompts.
 -   **AI-Powered Editing (Rephrase):** Get suggestions for rephrasing selected text directly within the editor.
--   **AI Chapter Splitting:** Analyze full chapter text (pasted into the UI) and receive AI-proposed scene splits with suggested titles and content. *(New!)*
+-   **AI Chapter Splitting:** Analyze full chapter text (pasted into the UI) and receive AI-proposed scene splits with suggested titles and content.
 -   **Source Node Retrieval:** API responses for AI queries include the specific text chunks (source nodes) used by the AI to generate the answer, providing transparency.
--   **RAG Integration (LlamaIndex + ChromaDB + HuggingFace):** The AI maintains awareness of project context by indexing Markdown content into a vector database (ChromaDB) using multilingual embeddings. Project-specific metadata filtering ensures the AI only retrieves context relevant to the current project during queries.
+-   **RAG Integration (LlamaIndex + ChromaDB + HuggingFace):** The AI maintains awareness of project context by indexing Markdown content into a vector database (ChromaDB) using multilingual embeddings (`sentence-transformers/paraphrase-multilingual-mpnet-base-v2`). Project-specific metadata filtering ensures the AI only retrieves context relevant to the current project during queries.
 -   **Extensible Architecture:** Designed with abstractions (via LlamaIndex) to potentially support different LLMs and Vector Databases in the future.
--   **Basic Testing:** Initial backend tests using `pytest`. Frontend tests using `vitest`.
+-   **Testing:** Backend tests using `pytest`. Frontend tests using `vitest`.
 -   **Markdown Export (Planned):** Compile selected Chapters or the entire manuscript into a single Markdown file.
 
 ## Technology Stack
@@ -51,7 +51,7 @@ These instructions will get you a copy of the project up and running on your loc
 -   Python 3.9+ (tested up to 3.13, but check library compatibility if using very new versions) and Pip
 -   Node.js and npm (or yarn)
 -   Git
--   Access to Google Generative AI API (API Key for Gemini)
+-   Access to Google Generative AI API (API Key for Gemini - Paid tier recommended for reliable use)
 -   **Rust Compiler:** The `tokenizers` library (a dependency) often requires Rust for building extensions. Install it via [https://rustup.rs/](https://rustup.rs/) if you encounter installation errors related to `cargo`.
 
 ### Installation & Setup
@@ -73,9 +73,6 @@ These instructions will get you a copy of the project up and running on your loc
     python -m pip install --upgrade pip
     pip install pip-tools
 
-    # Check/Create requirements.in (defines direct dependencies)
-    # Ensure backend/requirements.in exists and lists direct dependencies.
-
     # Compile the full requirements.txt lock file
     pip-compile requirements.in --output-file requirements.txt
 
@@ -84,7 +81,7 @@ These instructions will get you a copy of the project up and running on your loc
 
     # Set up environment variables
     cp .env.example .env
-    # Edit the .env file with your actual secrets (e.g., GOOGLE_API_KEY)
+    # Edit the .env file with your actual secrets (GOOGLE_API_KEY)
     nano .env # Or your preferred editor
 
     # Go back to root directory
@@ -97,9 +94,6 @@ These instructions will get you a copy of the project up and running on your loc
     cd frontend
     # Install Node.js dependencies
     npm install  # or yarn install
-    # Set up environment variables (if needed, e.g., backend API URL)
-    # cp .env.example .env
-    # nano .env
     # Go back to root directory
     cd ..
     ```
@@ -161,26 +155,28 @@ codex-ai/
 │ ├── index.html  
 │ └── package.json  
 ├── docs/ # Project documentation  
-│ ├── architecture.md # Link Added  
-│ └── design_principles.md # Link Added  
+│ ├── architecture.md  
+│ └── design_principles.md  
 ├── scripts/ # Utility scripts (inspect_chroma.py, etc.)  
 ├── .gitignore  
 └── README.md
 ```
 
+## Known Issues
+
+*   **Scene Order Conflict:** When creating a scene from an AI draft immediately after deleting another scene, the frontend might calculate an incorrect `nextOrder` value, potentially leading to a "Scene order X already exists" error from the backend upon saving. (Workaround: Update page).
+*   **Rate Limiting (Free Tier):** While backend retry logic exists, the free tier of the Google Gemini API has strict limits (Requests Per Minute and Daily). Heavy use of AI features (Generation, Splitting, Query, Rephrase) may still hit these limits, resulting in temporary unavailability errors (HTTP 429). Using a paid plan (or free credits) is recommended for reliable usage.
 
 ## Roadmap
 
--   **AI-Powered Editing:** Implement more features (Summarize, Expand, Tone Change) using the `AIEditorWrapper`.
--   **Backend Investigation:** Debug the 500 Internal Server Error occurring during AI Scene Generation.
--   **Refine AI Features:** Improve prompt engineering for better quality (especially for Generation and Splitting). Improve error handling and UX for AI features (e.g., Split Chapter modal, rate limiting feedback).
--   **Testing:** Expand backend test coverage (services, other API endpoints, RAG components with mocking). Maintain frontend test coverage.
--   **UI/UX:** Improve navigation, editor features, general usability. Address `SuggestionPopup` limitations.
--   **Configuration:** Move more hardcoded values (e.g., RAG parameters) to configuration/settings.
--   **Refactoring:** Address deprecation warnings (e.g., FastAPI lifespan events). Consider `PromptBuilder` abstraction if prompt logic grows complex.
--   **Deployment Strategy:** Define and implement deployment (e.g., Docker).
--   **(Future)** Integration with additional LLM providers/Vector DBs.
--   **(Future)** Real-time collaboration features.
+*   **AI-Powered Editing:** Implement more features (Summarize, Expand, Tone Change) using the `AIEditorWrapper`.
+*   **Testing:** Expand backend test coverage (services, RAG components). Add frontend tests for cooldowns and specific modal interactions.
+*   **UI/UX Refinements:** Improve the "Split Chapter" modal display and interaction. Provide clearer visual feedback during AI operations and cooldowns. Address `SuggestionPopup` limitations. Fix the scene order calculation bug when creating from AI draft.
+*   **Configuration:** Move more hardcoded values (e.g., RAG parameters, cooldown durations) to configuration/settings.
+*   **Refactoring:** Address deprecation warnings (e.g., FastAPI lifespan events). Consider `PromptBuilder` abstraction if prompt logic grows complex.
+*   **Deployment Strategy:** Define and implement deployment (e.g., Docker).
+*   **(Future)** Integration with additional LLM providers/Vector DBs.
+*   **(Future)** Markdown Export feature.
 
 ## Contributing
 
@@ -197,3 +193,4 @@ Codex AI is developed and maintained by Antimortine.
 -   **Email:** [antimortine@gmail.com](mailto:antimortine@gmail.com)
 -   **Telegram:** [https://t.me/antimortine](https://t.me/antimortine)
 -   **GitHub:** [https://github.com/Antimortine](https://github.com/Antimortine)
+
