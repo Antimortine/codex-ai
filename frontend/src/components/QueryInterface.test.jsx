@@ -14,6 +14,8 @@
  * limitations under the License.
  */
 
+// --- REMOVED # Comments ---
+
 import React from 'react';
 import { render, screen, waitFor, within, fireEvent, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
@@ -65,7 +67,7 @@ describe('QueryInterface Component with History (API Persistence)', () => {
 
     // Default successful responses
     queryProjectContext.mockResolvedValue({
-      data: { answer: 'Default AI answer.', source_nodes: [] },
+      data: { answer: 'Default AI answer.', source_nodes: [], direct_sources: null }, // Added direct_sources: null
     });
     getChatHistory.mockResolvedValue({ data: { history: [] } }); // Default empty history
     updateChatHistory.mockResolvedValue({ data: {} }); // Mock successful save
@@ -76,7 +78,6 @@ describe('QueryInterface Component with History (API Persistence)', () => {
     getChatHistory.mockImplementation(() => new Promise(() => {})); // Never resolves
     render(<QueryInterface projectId={TEST_PROJECT_ID} />);
     expect(screen.getByText(/loading chat history.../i)).toBeInTheDocument();
-    // Use findByRole for potentially delayed rendering/state updates
     expect(await screen.findByRole('button', { name: /submit query/i })).toBeDisabled();
     expect(await screen.findByRole('button', { name: /new chat/i })).toBeDisabled();
     expect(await screen.findByPlaceholderText(/ask a question about your project/i)).toBeDisabled();
@@ -84,21 +85,18 @@ describe('QueryInterface Component with History (API Persistence)', () => {
 
   it('loads and displays existing history on mount', async () => {
     const existingHistory = [
-        { id: 0, query: 'Old query', response: { answer: 'Old answer', source_nodes: [] }, error: null },
+        { id: 0, query: 'Old query', response: { answer: 'Old answer', source_nodes: [], direct_sources: null }, error: null }, // Added direct_sources
         { id: 1, query: 'Another old query', response: null, error: 'Old error' },
     ];
     getChatHistory.mockResolvedValue({ data: { history: existingHistory } });
 
     render(<QueryInterface projectId={TEST_PROJECT_ID} />);
 
-    // Wait for loading to finish by checking for history content
     await waitFor(() => {
         expect(screen.getByText('You: Old query')).toBeInTheDocument();
     });
     expect(screen.queryByText(/loading chat history.../i)).not.toBeInTheDocument();
 
-
-    // Check history is displayed
     const historyArea = screen.getByTestId('query-history');
     expect(historyArea).toBeInTheDocument();
     expect(within(historyArea).getByText('You: Old query')).toBeInTheDocument();
@@ -106,7 +104,6 @@ describe('QueryInterface Component with History (API Persistence)', () => {
     expect(within(historyArea).getByText('You: Another old query')).toBeInTheDocument();
     expect(within(historyArea).getByTestId('query-error-1')).toHaveTextContent('Old error');
 
-    // Check controls are enabled/disabled correctly (Submit should be disabled as input is empty)
     expect(screen.getByRole('button', { name: /submit query/i })).toBeDisabled();
     expect(screen.getByRole('button', { name: /new chat/i })).toBeEnabled();
     expect(screen.getByPlaceholderText(/ask a question about your project/i)).toBeEnabled();
@@ -118,15 +115,13 @@ describe('QueryInterface Component with History (API Persistence)', () => {
 
     render(<QueryInterface projectId={TEST_PROJECT_ID} />);
 
-    // Wait for loading to finish and error to appear
     await waitFor(() => {
         expect(screen.queryByText(/loading chat history.../i)).not.toBeInTheDocument();
     });
     expect(await screen.findByText(`Failed to load chat history: ${loadErrorMsg}`)).toBeInTheDocument();
 
-    // Check controls are disabled due to error
     expect(screen.getByRole('button', { name: /submit query/i })).toBeDisabled();
-    expect(screen.getByRole('button', { name: /new chat/i })).toBeEnabled(); // New Chat might still be useful
+    expect(screen.getByRole('button', { name: /new chat/i })).toBeEnabled();
     expect(screen.getByPlaceholderText(/ask a question about your project/i)).toBeDisabled();
     expect(screen.queryByTestId('query-history')).not.toBeInTheDocument();
   });
@@ -135,34 +130,34 @@ describe('QueryInterface Component with History (API Persistence)', () => {
 
   it('renders the query input, submit button, and new chat button', async () => {
     render(<QueryInterface projectId={TEST_PROJECT_ID} />);
-    await waitFor(() => expect(getChatHistory).toHaveBeenCalled()); // Wait for load attempt
+    await waitFor(() => expect(getChatHistory).toHaveBeenCalled());
     expect(screen.getByPlaceholderText(/ask a question about your project/i)).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /submit query/i })).toBeInTheDocument();
     expect(screen.getByRole('button', { name: /new chat/i })).toBeInTheDocument();
-    expect(screen.queryByTestId('query-history')).not.toBeInTheDocument(); // No history initially by default mock
+    expect(screen.queryByTestId('query-history')).not.toBeInTheDocument();
   });
 
   it('disables submit button when query is empty', async () => {
     render(<QueryInterface projectId={TEST_PROJECT_ID} />);
-    await waitFor(() => expect(getChatHistory).toHaveBeenCalled()); // Wait for load attempt
+    await waitFor(() => expect(getChatHistory).toHaveBeenCalled());
     const submitButton = screen.getByRole('button', { name: /submit query/i });
     const queryInput = screen.getByPlaceholderText(/ask a question about your project/i);
 
-    expect(submitButton).toBeDisabled(); // Initially empty
+    expect(submitButton).toBeDisabled();
     await user.type(queryInput, 'Test query');
-    expect(submitButton).not.toBeDisabled(); // After typing
+    expect(submitButton).not.toBeDisabled();
     await user.clear(queryInput);
-    expect(submitButton).toBeDisabled(); // Empty again
+    expect(submitButton).toBeDisabled();
   });
 
   it('calls API, displays history, clears input, and saves history on submit', async () => {
     const queryText = 'What is the plan?';
     const answerText = 'The plan is to test.';
-    const expectedResponse = { answer: answerText, source_nodes: [] };
+    const expectedResponse = { answer: answerText, source_nodes: [], direct_sources: null }; // Added direct_sources
     queryProjectContext.mockResolvedValue({ data: expectedResponse });
 
     render(<QueryInterface projectId={TEST_PROJECT_ID} />);
-    await waitFor(() => expect(getChatHistory).toHaveBeenCalled()); // Wait for initial load
+    await waitFor(() => expect(getChatHistory).toHaveBeenCalled());
 
     const queryInput = screen.getByPlaceholderText(/ask a question about your project/i);
     const submitButton = screen.getByRole('button', { name: /submit query/i });
@@ -170,48 +165,40 @@ describe('QueryInterface Component with History (API Persistence)', () => {
     await user.type(queryInput, queryText);
     await user.click(submitButton);
 
-    // Wait for API and save function to be called
     await waitFor(() => {
       expect(updateChatHistory).toHaveBeenCalledTimes(1);
     }, { timeout: 2000 });
-    
-    // Check history display
+
     const historyArea = screen.getByTestId('query-history');
     expect(historyArea).toBeInTheDocument();
-    
+
     const latestEntry = getLatestHistoryEntry();
     expect(latestEntry).toBeInTheDocument();
     expect(within(latestEntry).getByText(`You: ${queryText}`)).toBeInTheDocument();
     expect(within(latestEntry).getByText(`AI: ${answerText}`)).toBeInTheDocument();
-    
-    // Check input has been cleared
+
     expect(queryInput).toHaveValue('');
-    
-    // Skip button disabled state checks since they're unstable in the test environment
-    // The actual component works fine, but the test environment is having timing issues
-    
-    // Verify save history was called with correct data
+
     const expectedHistoryToSave = [
       { id: 0, query: queryText, response: expectedResponse, error: null }
     ];
     expect(updateChatHistory).toHaveBeenCalledWith(TEST_PROJECT_ID, { history: expectedHistoryToSave });
   });
-  // --- END REVISED TEST ---
 
   it('adds multiple entries to history and saves final state', async () => {
     const query1 = 'First query';
     const answer1 = 'Answer one';
     const query2 = 'Second query';
     const answer2 = 'Answer two';
-    const response1 = { answer: answer1, source_nodes: [] };
-    const response2 = { answer: answer2, source_nodes: [] };
+    const response1 = { answer: answer1, source_nodes: [], direct_sources: null }; // Added direct_sources
+    const response2 = { answer: answer2, source_nodes: [], direct_sources: null }; // Added direct_sources
 
     queryProjectContext
       .mockResolvedValueOnce({ data: response1 })
       .mockResolvedValueOnce({ data: response2 });
 
     render(<QueryInterface projectId={TEST_PROJECT_ID} />);
-    await waitFor(() => expect(getChatHistory).toHaveBeenCalled()); // Wait for initial load
+    await waitFor(() => expect(getChatHistory).toHaveBeenCalled());
 
     const submitButton = screen.getByRole('button', { name: /submit query/i });
     const queryInput = screen.getByPlaceholderText(/ask a question about your project/i);
@@ -219,12 +206,12 @@ describe('QueryInterface Component with History (API Persistence)', () => {
     // Submit first query
     await user.type(queryInput, query1);
     await user.click(submitButton);
-    await waitFor(() => expect(updateChatHistory).toHaveBeenCalledTimes(1)); // Wait for first save
+    await waitFor(() => expect(updateChatHistory).toHaveBeenCalledTimes(1));
 
     // Submit second query
     await user.type(queryInput, query2);
     await user.click(submitButton);
-    await waitFor(() => expect(updateChatHistory).toHaveBeenCalledTimes(2)); // Wait for second save
+    await waitFor(() => expect(updateChatHistory).toHaveBeenCalledTimes(2));
 
     // Check history display
     const historyArea = screen.getByTestId('query-history');
@@ -255,15 +242,12 @@ describe('QueryInterface Component with History (API Persistence)', () => {
     await user.type(queryInput, queryText);
     await user.click(submitButton);
 
-    // Wait for save call after error
     await waitFor(() => expect(updateChatHistory).toHaveBeenCalledTimes(1));
 
-    // Check error is displayed
     const latestEntry = getLatestHistoryEntry();
     expect(latestEntry).toBeInTheDocument();
     expect(within(latestEntry).getByTestId(/query-error-\d+/)).toHaveTextContent(errorMessage);
 
-    // Check save call content
     const expectedHistoryToSave = [
         { id: 0, query: queryText, response: null, error: errorMessage }
     ];
@@ -273,7 +257,7 @@ describe('QueryInterface Component with History (API Persistence)', () => {
   it('handles API response with "Error:" prefix and saves history with error', async () => {
     const queryText = 'Query returning error string';
     const errorMessageInAnswer = 'Error: Rate limit exceeded.';
-    queryProjectContext.mockResolvedValue({ data: { answer: errorMessageInAnswer, source_nodes: [] } });
+    queryProjectContext.mockResolvedValue({ data: { answer: errorMessageInAnswer, source_nodes: [], direct_sources: null } }); // Added direct_sources
 
     render(<QueryInterface projectId={TEST_PROJECT_ID} />);
      await waitFor(() => expect(getChatHistory).toHaveBeenCalled());
@@ -284,15 +268,12 @@ describe('QueryInterface Component with History (API Persistence)', () => {
     await user.type(queryInput, queryText);
     await user.click(submitButton);
 
-    // Wait for save call after error
     await waitFor(() => expect(updateChatHistory).toHaveBeenCalledTimes(1));
 
-    // Check error is displayed
     const latestEntry = getLatestHistoryEntry();
     expect(latestEntry).toBeInTheDocument();
     expect(within(latestEntry).getByTestId(/query-error-\d+/)).toHaveTextContent(errorMessageInAnswer);
 
-    // Check save call content
     const expectedHistoryToSave = [
         { id: 0, query: queryText, response: null, error: errorMessageInAnswer }
     ];
@@ -302,7 +283,7 @@ describe('QueryInterface Component with History (API Persistence)', () => {
   it('clears history and saves empty history on "New Chat" click', async () => {
     const queryText = 'Some query';
     const answerText = 'Some answer';
-    queryProjectContext.mockResolvedValue({ data: { answer: answerText, source_nodes: [] } });
+    queryProjectContext.mockResolvedValue({ data: { answer: answerText, source_nodes: [], direct_sources: null } }); // Added direct_sources
 
     render(<QueryInterface projectId={TEST_PROJECT_ID} />);
     await waitFor(() => expect(getChatHistory).toHaveBeenCalled());
@@ -311,20 +292,16 @@ describe('QueryInterface Component with History (API Persistence)', () => {
     const queryInput = screen.getByPlaceholderText(/ask a question about your project/i);
     const newChatButton = screen.getByRole('button', { name: /new chat/i });
 
-    // Add an entry to history and wait for save
     await user.type(queryInput, queryText);
     await user.click(submitButton);
-    await waitFor(() => expect(updateChatHistory).toHaveBeenCalledTimes(1)); // Wait for save
+    await waitFor(() => expect(updateChatHistory).toHaveBeenCalledTimes(1));
 
-    // Click New Chat
     await user.click(newChatButton);
 
-    // Verify history is gone visually
     expect(screen.queryByTestId('query-history')).not.toBeInTheDocument();
     expect(queryInput).toHaveValue('');
 
-    // Verify empty history was saved
-    await waitFor(() => expect(updateChatHistory).toHaveBeenCalledTimes(2)); // Should be called again
+    await waitFor(() => expect(updateChatHistory).toHaveBeenCalledTimes(2));
     expect(updateChatHistory).toHaveBeenLastCalledWith(TEST_PROJECT_ID, { history: [] });
   });
 
@@ -334,7 +311,7 @@ describe('QueryInterface Component with History (API Persistence)', () => {
     const sourceNodes = [
       { id: 'n1', text: 'Source snippet one.', score: 0.9, metadata: { file_path: 'plan.md' } },
     ];
-    queryProjectContext.mockResolvedValue({ data: { answer: answerText, source_nodes: sourceNodes } });
+    queryProjectContext.mockResolvedValue({ data: { answer: answerText, source_nodes: sourceNodes, direct_sources: null } }); // Added direct_sources
 
     render(<QueryInterface projectId={TEST_PROJECT_ID} />);
     await waitFor(() => expect(getChatHistory).toHaveBeenCalled());
@@ -345,27 +322,22 @@ describe('QueryInterface Component with History (API Persistence)', () => {
     await user.type(queryInput, queryText);
     await user.click(submitButton);
 
-    // Wait for save call
     await waitFor(() => expect(updateChatHistory).toHaveBeenCalledTimes(1));
 
-    // Find the summary element
     const latestEntry = getLatestHistoryEntry();
-    const summary = within(latestEntry).getByText(/sources used \(1\)/i);
+    // --- MODIFIED: Use correct text ---
+    const summary = within(latestEntry).getByText(/retrieved context snippets \(1\)/i);
+    // --- END MODIFIED ---
     expect(summary).toBeInTheDocument();
 
-    // Source content should NOT be visible initially
     const detailsContent = summary.closest('details').querySelector('div');
     expect(detailsContent).not.toBeVisible();
 
-
-    // Click the summary to expand
     await user.click(summary);
 
-    // Source content SHOULD now be visible
     expect(within(latestEntry).getByText('Source snippet one.')).toBeVisible();
     expect(within(latestEntry).getByText('plan.md (Score: 0.900)')).toBeVisible();
 
-    // Click again to collapse
     await user.click(summary);
     await waitFor(() => {
         const updatedDetailsContent = summary.closest('details').querySelector('div');
@@ -381,19 +353,15 @@ describe('QueryInterface Component with History (API Persistence)', () => {
     const queryInput = screen.getByPlaceholderText(/ask a question about your project/i);
 
     await user.type(queryInput, queryText);
-    // Simulate Ctrl+Enter press
     fireEvent.keyDown(queryInput, { key: 'Enter', ctrlKey: true });
 
-    // Check if API was called
     await waitFor(() => {
       expect(queryProjectContext).toHaveBeenCalledTimes(1);
       expect(queryProjectContext).toHaveBeenCalledWith(TEST_PROJECT_ID, { query: queryText });
     });
 
-    // Check save was triggered
     await waitFor(() => expect(updateChatHistory).toHaveBeenCalledTimes(1));
 
-    // Check if history updated (basic check)
     expect(await screen.findByTestId('query-history')).toBeInTheDocument();
     expect(screen.getByText(`You: ${queryText}`)).toBeInTheDocument();
   });
@@ -406,24 +374,16 @@ describe('QueryInterface Component with History (API Persistence)', () => {
     const queryInput = screen.getByPlaceholderText(/ask a question about your project/i);
 
     await user.type(queryInput, queryText);
-    // Simulate Enter press only
-    await user.keyboard('{Enter}'); // userEvent simulates Enter press correctly
+    await user.keyboard('{Enter}');
 
-    // Check API was NOT called
     expect(queryProjectContext).not.toHaveBeenCalled();
-    expect(updateChatHistory).not.toHaveBeenCalled(); // Save shouldn't be called either
-    // Input should contain newline potentially, but not be cleared
+    expect(updateChatHistory).not.toHaveBeenCalled();
     expect(queryInput.value).toContain(queryText);
   });
 
   it('shows loading state during processing', async () => {
-    // Split the API call process into two parts that we can control
     let resolveApi;
-    const apiPromise = new Promise(resolve => {
-      resolveApi = resolve;
-    });
-    
-    // Setup the mock with our controlled promise
+    const apiPromise = new Promise(resolve => { resolveApi = resolve; });
     queryProjectContext.mockImplementation(() => apiPromise);
     getChatHistory.mockResolvedValue({ data: { history: [] } });
 
@@ -432,35 +392,25 @@ describe('QueryInterface Component with History (API Persistence)', () => {
 
     const queryInput = screen.getByPlaceholderText(/ask a question about your project/i);
     await user.type(queryInput, 'Test processing');
-    
-    // Submit the query
+
     const submitButton = screen.getByRole('button', { name: /submit query/i });
     fireEvent.click(submitButton);
-    
-    // Verify immediate effects: button shows loading state
+
     const loadingButton = screen.getByRole('button', { name: /asking ai/i });
     expect(loadingButton).toBeInTheDocument();
-    
-    // Now complete the API call
+
     act(() => {
-      resolveApi({ data: { answer: 'Done', source_nodes: [] } });
+      resolveApi({ data: { answer: 'Done', source_nodes: [], direct_sources: null } }); // Added direct_sources
     });
-    
-    // Verify the history is updated with the response
+
     await waitFor(() => {
       expect(screen.getByTestId('query-history')).toBeInTheDocument();
     });
   });
-  
-  // This test specifically checks the UI appearance during processing,
-  // but doesn't try to check the state after processing completes
+
   it('disables UI controls during processing', async () => {
-    // This time we'll use a delayed promise to keep the app in processing state
     let resolveApi;
-    const apiPromise = new Promise(resolve => {
-      resolveApi = resolve;
-    });
-    
+    const apiPromise = new Promise(resolve => { resolveApi = resolve; });
     queryProjectContext.mockImplementation(() => apiPromise);
     getChatHistory.mockResolvedValue({ data: { history: [] } });
 
@@ -469,24 +419,20 @@ describe('QueryInterface Component with History (API Persistence)', () => {
 
     const queryInput = screen.getByPlaceholderText(/ask a question about your project/i);
     const newChatButton = screen.getByRole('button', { name: /new chat/i });
-    
-    // Make sure new chat button starts enabled
+
     expect(newChatButton).not.toBeDisabled();
-    
-    // Type and submit
+
     await user.type(queryInput, 'Test disabling');
     await user.click(screen.getByRole('button', { name: /submit query/i }));
-    
-    // ONLY verify the disabled state DURING processing
+
     expect(queryInput).toBeDisabled();
     expect(newChatButton).toBeDisabled();
     expect(screen.getByRole('button', { name: /asking ai/i })).toBeDisabled();
-    
-    // Now resolve the API call (but don't test anything after it resolves)
+
     act(() => {
-      resolveApi({ data: { answer: 'Done', source_nodes: [] } });
+      resolveApi({ data: { answer: 'Done', source_nodes: [], direct_sources: null } }); // Added direct_sources
     });
+    // No assertions after resolution in this specific test
   });
-  // --- END REVISED TEST ---
 
 });

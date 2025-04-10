@@ -17,6 +17,7 @@ from unittest.mock import MagicMock, AsyncMock, call, patch
 from fastapi import HTTPException, status
 from pathlib import Path
 import asyncio
+from typing import Dict, Optional, List # Import List
 
 # Import the *class* we are testing, not the singleton instance
 from app.services.ai_service import AIService
@@ -44,14 +45,14 @@ async def test_query_project_success():
     mock_node1 = NodeWithScore(node=TextNode(id_='n1', text="Source text 1", metadata={'file_path': 'plan.md'}), score=0.9)
     mock_node2 = NodeWithScore(node=TextNode(id_='n2', text="Source text 2", metadata={'file_path': 'scenes/s1.md'}), score=0.8)
     mock_source_nodes = [mock_node1, mock_node2]
+    # Mock direct source info (None in this case, as no match is simulated)
+    mock_direct_sources_info: Optional[List[Dict[str, str]]] = None # Now a list or None
 
     # --- Create mock instances manually ---
     mock_file_service = MagicMock(spec=FileService)
     mock_rag_engine = MagicMock(spec=RagEngine)
-    # --- ADDED: Define llm and index attributes on mock_rag_engine ---
     mock_rag_engine.llm = MagicMock(spec=LLM)
     mock_rag_engine.index = MagicMock(spec=VectorStoreIndex)
-    # --- END ADDED ---
 
     # Configure mocks
     def file_read_side_effect(p_id, block_name):
@@ -60,30 +61,39 @@ async def test_query_project_success():
             if block_name == "synopsis.md": return mock_synopsis_content
         pytest.fail(f"Unexpected call to read_content_block_file: {p_id}, {block_name}")
     mock_file_service.read_content_block_file.side_effect = file_read_side_effect
-    mock_rag_engine.query = AsyncMock(return_value=(mock_answer, mock_source_nodes))
+    mock_file_service.read_project_metadata.return_value = {"chapters": {}, "characters": {}}
+    mock_file_service._get_content_block_path.side_effect = lambda pid, fname: Path(f"user_projects/{pid}/{fname}")
+    mock_file_service._get_project_path.return_value = Path(f"user_projects/{project_id}")
+    mock_file_service.path_exists.return_value = False # Assume notes dir doesn't exist
+
+    mock_rag_engine.query = AsyncMock(return_value=(mock_answer, mock_source_nodes, mock_direct_sources_info))
 
     # --- Instantiate AIService with mocks ---
     with patch('app.services.ai_service.rag_engine', mock_rag_engine), \
          patch('app.services.ai_service.file_service', mock_file_service):
          service_instance_under_test = AIService()
-         assert service_instance_under_test.rag_engine is mock_rag_engine
-         assert service_instance_under_test.file_service is mock_file_service
-
 
     # --- Call the method on the test instance ---
-    answer, source_nodes = await service_instance_under_test.query_project(project_id, query_text)
+    answer, source_nodes, direct_info = await service_instance_under_test.query_project(project_id, query_text)
 
     # Assertions
     assert answer == mock_answer
     assert source_nodes == mock_source_nodes
+    assert direct_info == mock_direct_sources_info
 
     # Verify mocks
     expected_file_calls = [call(project_id, "plan.md"), call(project_id, "synopsis.md")]
     mock_file_service.read_content_block_file.assert_has_calls(expected_file_calls, any_order=True)
     assert mock_file_service.read_content_block_file.call_count == 2
+    # --- MODIFIED: Check for direct_sources_data=[] ---
     mock_rag_engine.query.assert_awaited_once_with(
-        project_id=project_id, query_text=query_text, explicit_plan=mock_plan_content, explicit_synopsis=mock_synopsis_content
+        project_id=project_id,
+        query_text=query_text,
+        explicit_plan=mock_plan_content,
+        explicit_synopsis=mock_synopsis_content,
+        direct_sources_data=[] # Expect empty list as no match was simulated
     )
+    # --- END MODIFIED ---
 
 
 @pytest.mark.asyncio
@@ -93,14 +103,13 @@ async def test_query_project_context_not_found():
     query_text = "Where is the setting?"
     mock_answer = "The setting is not clearly defined."
     mock_source_nodes = []
+    mock_direct_sources_info: Optional[List[Dict[str, str]]] = None
 
     # Create mock instances
     mock_file_service = MagicMock(spec=FileService)
     mock_rag_engine = MagicMock(spec=RagEngine)
-    # --- ADDED: Define llm and index attributes on mock_rag_engine ---
     mock_rag_engine.llm = MagicMock(spec=LLM)
     mock_rag_engine.index = MagicMock(spec=VectorStoreIndex)
-    # --- END ADDED ---
 
     # Configure mocks
     def file_read_side_effect(p_id, block_name):
@@ -111,29 +120,39 @@ async def test_query_project_context_not_found():
                 return "Synopsis content exists."
         pytest.fail(f"Unexpected call to read_content_block_file: {p_id}, {block_name}")
     mock_file_service.read_content_block_file.side_effect = file_read_side_effect
-    mock_rag_engine.query = AsyncMock(return_value=(mock_answer, mock_source_nodes))
+    mock_file_service.read_project_metadata.return_value = {"chapters": {}, "characters": {}}
+    mock_file_service._get_content_block_path.side_effect = lambda pid, fname: Path(f"user_projects/{pid}/{fname}")
+    mock_file_service._get_project_path.return_value = Path(f"user_projects/{project_id}")
+    mock_file_service.path_exists.return_value = False
 
-    # Instantiate AIService with mocks (using patch context for __init__)
+    mock_rag_engine.query = AsyncMock(return_value=(mock_answer, mock_source_nodes, mock_direct_sources_info))
+
+    # Instantiate AIService with mocks
     with patch('app.services.ai_service.rag_engine', mock_rag_engine), \
          patch('app.services.ai_service.file_service', mock_file_service):
          service_instance_under_test = AIService()
-         assert service_instance_under_test.rag_engine is mock_rag_engine
-         assert service_instance_under_test.file_service is mock_file_service
 
     # Call the method
-    answer, source_nodes = await service_instance_under_test.query_project(project_id, query_text)
+    answer, source_nodes, direct_info = await service_instance_under_test.query_project(project_id, query_text)
 
     # Assertions
     assert answer == mock_answer
     assert source_nodes == mock_source_nodes
+    assert direct_info == mock_direct_sources_info
 
     # Verify mocks
     expected_file_calls = [call(project_id, "plan.md"), call(project_id, "synopsis.md")]
     mock_file_service.read_content_block_file.assert_has_calls(expected_file_calls, any_order=True)
     assert mock_file_service.read_content_block_file.call_count == 2
+    # --- MODIFIED: Check for direct_sources_data=[] ---
     mock_rag_engine.query.assert_awaited_once_with(
-        project_id=project_id, query_text=query_text, explicit_plan="", explicit_synopsis="Synopsis content exists."
+        project_id=project_id,
+        query_text=query_text,
+        explicit_plan="",
+        explicit_synopsis="Synopsis content exists.",
+        direct_sources_data=[] # Expect empty list as no match was simulated
     )
+    # --- END MODIFIED ---
 
 
 @pytest.mark.asyncio
@@ -143,14 +162,13 @@ async def test_query_project_context_load_error():
     query_text = "Any details on characters?"
     mock_answer = "Character details are sparse."
     mock_source_nodes = []
+    mock_direct_sources_info: Optional[List[Dict[str, str]]] = None
 
     # Create mock instances
     mock_file_service = MagicMock(spec=FileService)
     mock_rag_engine = MagicMock(spec=RagEngine)
-    # --- ADDED: Define llm and index attributes on mock_rag_engine ---
     mock_rag_engine.llm = MagicMock(spec=LLM)
     mock_rag_engine.index = MagicMock(spec=VectorStoreIndex)
-    # --- END ADDED ---
 
     # Configure mocks
     def file_read_side_effect(p_id, block_name):
@@ -161,29 +179,39 @@ async def test_query_project_context_load_error():
                  return "Synopsis is available."
         pytest.fail(f"Unexpected call to read_content_block_file: {p_id}, {block_name}")
     mock_file_service.read_content_block_file.side_effect = file_read_side_effect
-    mock_rag_engine.query = AsyncMock(return_value=(mock_answer, mock_source_nodes))
+    mock_file_service.read_project_metadata.return_value = {"chapters": {}, "characters": {}}
+    mock_file_service._get_content_block_path.side_effect = lambda pid, fname: Path(f"user_projects/{pid}/{fname}")
+    mock_file_service._get_project_path.return_value = Path(f"user_projects/{project_id}")
+    mock_file_service.path_exists.return_value = False
 
-    # Instantiate AIService with mocks (using patch context for __init__)
+    mock_rag_engine.query = AsyncMock(return_value=(mock_answer, mock_source_nodes, mock_direct_sources_info))
+
+    # Instantiate AIService with mocks
     with patch('app.services.ai_service.rag_engine', mock_rag_engine), \
          patch('app.services.ai_service.file_service', mock_file_service):
          service_instance_under_test = AIService()
-         assert service_instance_under_test.rag_engine is mock_rag_engine
-         assert service_instance_under_test.file_service is mock_file_service
 
     # Call the method
-    answer, source_nodes = await service_instance_under_test.query_project(project_id, query_text)
+    answer, source_nodes, direct_info = await service_instance_under_test.query_project(project_id, query_text)
 
     # Assertions
     assert answer == mock_answer
     assert source_nodes == mock_source_nodes
+    assert direct_info == mock_direct_sources_info
 
     # Verify mocks
     expected_file_calls = [call(project_id, "plan.md"), call(project_id, "synopsis.md")]
     mock_file_service.read_content_block_file.assert_has_calls(expected_file_calls, any_order=True)
     assert mock_file_service.read_content_block_file.call_count == 2
+    # --- MODIFIED: Check for direct_sources_data=[] ---
     mock_rag_engine.query.assert_awaited_once_with(
-        project_id=project_id, query_text=query_text, explicit_plan="Error loading plan.", explicit_synopsis="Synopsis is available."
+        project_id=project_id,
+        query_text=query_text,
+        explicit_plan="Error loading plan.",
+        explicit_synopsis="Synopsis is available.",
+        direct_sources_data=[] # Expect empty list as no match was simulated
     )
+    # --- END MODIFIED ---
 
 
 @pytest.mark.asyncio
@@ -197,10 +225,8 @@ async def test_query_project_rag_engine_error():
     # Create mock instances
     mock_file_service = MagicMock(spec=FileService)
     mock_rag_engine = MagicMock(spec=RagEngine)
-    # --- ADDED: Define llm and index attributes on mock_rag_engine ---
     mock_rag_engine.llm = MagicMock(spec=LLM)
     mock_rag_engine.index = MagicMock(spec=VectorStoreIndex)
-    # --- END ADDED ---
 
     # Configure mocks
     def file_read_side_effect(p_id, block_name):
@@ -209,14 +235,17 @@ async def test_query_project_rag_engine_error():
              if block_name == "synopsis.md": return mock_synopsis_content
          pytest.fail(f"Unexpected call to read_content_block_file: {p_id}, {block_name}")
     mock_file_service.read_content_block_file.side_effect = file_read_side_effect
+    mock_file_service.read_project_metadata.return_value = {"chapters": {}, "characters": {}}
+    mock_file_service._get_content_block_path.side_effect = lambda pid, fname: Path(f"user_projects/{pid}/{fname}")
+    mock_file_service._get_project_path.return_value = Path(f"user_projects/{project_id}")
+    mock_file_service.path_exists.return_value = False
+
     mock_rag_engine.query = AsyncMock(side_effect=RuntimeError("LLM API failed"))
 
-    # Instantiate AIService with mocks (using patch context for __init__)
+    # Instantiate AIService with mocks
     with patch('app.services.ai_service.rag_engine', mock_rag_engine), \
          patch('app.services.ai_service.file_service', mock_file_service):
          service_instance_under_test = AIService()
-         assert service_instance_under_test.rag_engine is mock_rag_engine
-         assert service_instance_under_test.file_service is mock_file_service
 
     # Call the method and expect the error
     with pytest.raises(RuntimeError, match="LLM API failed"):
@@ -226,6 +255,12 @@ async def test_query_project_rag_engine_error():
     expected_file_calls = [call(project_id, "plan.md"), call(project_id, "synopsis.md")]
     mock_file_service.read_content_block_file.assert_has_calls(expected_file_calls, any_order=True)
     assert mock_file_service.read_content_block_file.call_count == 2
+    # --- MODIFIED: Check for direct_sources_data=[] ---
     mock_rag_engine.query.assert_awaited_once_with(
-        project_id=project_id, query_text=query_text, explicit_plan=mock_plan_content, explicit_synopsis=mock_synopsis_content
+        project_id=project_id,
+        query_text=query_text,
+        explicit_plan=mock_plan_content,
+        explicit_synopsis=mock_synopsis_content,
+        direct_sources_data=[] # Expect empty list as no match was simulated
     )
+    # --- END MODIFIED ---

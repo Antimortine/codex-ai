@@ -17,6 +17,7 @@ from unittest.mock import MagicMock, AsyncMock, call, patch
 from fastapi import HTTPException, status
 from pathlib import Path
 import asyncio
+from typing import Dict # Import Dict
 
 # Import the *class* we are testing, not the singleton instance
 from app.services.ai_service import AIService
@@ -44,7 +45,11 @@ async def test_generate_scene_draft_success_with_previous(monkeypatch): # Add mo
     mock_synopsis = "Project synopsis content."
     mock_prev_scene_id = "scene-id-2"
     mock_prev_scene_content = "## Previous Scene\nContent of the scene before."
-    mock_generated_content = "## New Scene\nThe character walked into the dimly lit room."
+    # --- MODIFIED: Mock return value as dict ---
+    mock_generated_title = "New Scene"
+    mock_generated_content = "The character walked into the dimly lit room."
+    mock_generated_dict = {"title": mock_generated_title, "content": mock_generated_content}
+    # --- END MODIFIED ---
     mock_chapter_metadata = {
         "scenes": {
             "scene-id-1": {"title": "Scene 1", "order": 1},
@@ -84,7 +89,9 @@ async def test_generate_scene_draft_success_with_previous(monkeypatch): # Add mo
     mock_file_service.read_text_file.side_effect = read_text_file_side_effect
 
     # Configure rag engine mock
-    mock_rag_engine.generate_scene = AsyncMock(return_value=mock_generated_content)
+    # --- MODIFIED: Return the dictionary ---
+    mock_rag_engine.generate_scene = AsyncMock(return_value=mock_generated_dict)
+    # --- END MODIFIED ---
 
     # --- Force PREVIOUS_SCENE_COUNT to 1 for this test ---
     monkeypatch.setattr(settings, 'RAG_GENERATION_PREVIOUS_SCENE_COUNT', 1, raising=False)
@@ -99,7 +106,11 @@ async def test_generate_scene_draft_success_with_previous(monkeypatch): # Add mo
     result = await service_instance.generate_scene_draft(project_id, chapter_id, request_data)
 
     # Assertions
-    assert result == mock_generated_content
+    # --- MODIFIED: Assert against the dictionary ---
+    assert isinstance(result, dict)
+    assert result["title"] == mock_generated_title
+    assert result["content"] == mock_generated_content
+    # --- END MODIFIED ---
     mock_file_service.read_content_block_file.assert_has_calls([call(project_id, "plan.md"), call(project_id, "synopsis.md")], any_order=True)
     mock_file_service.read_chapter_metadata.assert_called_once_with(project_id, chapter_id)
     mock_file_service._get_scene_path.assert_called_once_with(project_id, chapter_id, mock_prev_scene_id)
@@ -123,7 +134,11 @@ async def test_generate_scene_draft_success_first_scene():
     request_data = AISceneGenerationRequest(prompt_summary="The story begins.", previous_scene_order=0)
     mock_plan = "Plan for first scene."
     mock_synopsis = "Synopsis for first scene."
-    mock_generated_content = "## Chapter 1, Scene 1\nIt was a dark and stormy night."
+    # --- MODIFIED: Mock return value as dict ---
+    mock_generated_title = "Chapter 1, Scene 1"
+    mock_generated_content = "It was a dark and stormy night."
+    mock_generated_dict = {"title": mock_generated_title, "content": mock_generated_content}
+    # --- END MODIFIED ---
 
     # Mocks
     mock_file_service = MagicMock(spec=FileService)
@@ -135,7 +150,9 @@ async def test_generate_scene_draft_success_first_scene():
 
     # Configure mocks (no chapter metadata or scene read needed)
     mock_file_service.read_content_block_file.side_effect = lambda p_id, b_name: mock_plan if b_name == "plan.md" else mock_synopsis if b_name == "synopsis.md" else pytest.fail("Unexpected block read")
-    mock_rag_engine.generate_scene = AsyncMock(return_value=mock_generated_content)
+    # --- MODIFIED: Return the dictionary ---
+    mock_rag_engine.generate_scene = AsyncMock(return_value=mock_generated_dict)
+    # --- END MODIFIED ---
 
     # Instantiate AIService with mocks
     with patch('app.services.ai_service.rag_engine', mock_rag_engine), \
@@ -146,7 +163,11 @@ async def test_generate_scene_draft_success_first_scene():
     result = await service_instance.generate_scene_draft(project_id, chapter_id, request_data)
 
     # Assertions
-    assert result == mock_generated_content
+    # --- MODIFIED: Assert against the dictionary ---
+    assert isinstance(result, dict)
+    assert result["title"] == mock_generated_title
+    assert result["content"] == mock_generated_content
+    # --- END MODIFIED ---
     mock_file_service.read_content_block_file.assert_has_calls([call(project_id, "plan.md"), call(project_id, "synopsis.md")], any_order=True)
     mock_file_service.read_chapter_metadata.assert_not_called() # Shouldn't be called if previous_scene_order is 0
     mock_file_service.read_text_file.assert_not_called() # Shouldn't read previous scenes
@@ -166,7 +187,11 @@ async def test_generate_scene_draft_context_not_found():
     project_id = "gen-proj-3"
     chapter_id = "ch-2"
     request_data = AISceneGenerationRequest(prompt_summary="Something happens.", previous_scene_order=1)
-    mock_generated_content = "## Scene 2\nDespite missing context, something happened."
+    # --- MODIFIED: Mock return value as dict ---
+    mock_generated_title = "Scene 2"
+    mock_generated_content = "Despite missing context, something happened."
+    mock_generated_dict = {"title": mock_generated_title, "content": mock_generated_content}
+    # --- END MODIFIED ---
 
     # Mocks
     mock_file_service = MagicMock(spec=FileService)
@@ -179,7 +204,9 @@ async def test_generate_scene_draft_context_not_found():
     # Configure mocks
     mock_file_service.read_content_block_file.side_effect = HTTPException(status_code=404, detail="Not Found")
     mock_file_service.read_chapter_metadata.side_effect = HTTPException(status_code=404, detail="Not Found")
-    mock_rag_engine.generate_scene = AsyncMock(return_value=mock_generated_content)
+    # --- MODIFIED: Return the dictionary ---
+    mock_rag_engine.generate_scene = AsyncMock(return_value=mock_generated_dict)
+    # --- END MODIFIED ---
 
     # Instantiate AIService with mocks
     with patch('app.services.ai_service.rag_engine', mock_rag_engine), \
@@ -190,7 +217,11 @@ async def test_generate_scene_draft_context_not_found():
     result = await service_instance.generate_scene_draft(project_id, chapter_id, request_data)
 
     # Assertions
-    assert result == mock_generated_content
+    # --- MODIFIED: Assert against the dictionary ---
+    assert isinstance(result, dict)
+    assert result["title"] == mock_generated_title
+    assert result["content"] == mock_generated_content
+    # --- END MODIFIED ---
     assert mock_file_service.read_content_block_file.call_count == 2 # Called for plan and synopsis
     mock_file_service.read_chapter_metadata.assert_called_once_with(project_id, chapter_id) # Called even if 404
     mock_file_service.read_text_file.assert_not_called() # No previous scenes loaded if metadata fails
@@ -210,7 +241,11 @@ async def test_generate_scene_draft_context_load_error():
     project_id = "gen-proj-4"
     chapter_id = "ch-3"
     request_data = AISceneGenerationRequest(prompt_summary="Error handling test.", previous_scene_order=1)
-    mock_generated_content = "## Scene 2\nGenerated despite loading errors."
+    # --- MODIFIED: Mock return value as dict ---
+    mock_generated_title = "Scene 2"
+    mock_generated_content = "Generated despite loading errors."
+    mock_generated_dict = {"title": mock_generated_title, "content": mock_generated_content}
+    # --- END MODIFIED ---
 
     # Mocks
     mock_file_service = MagicMock(spec=FileService)
@@ -227,7 +262,9 @@ async def test_generate_scene_draft_context_load_error():
         pytest.fail("Unexpected block read")
     mock_file_service.read_content_block_file.side_effect = read_block_error
     mock_file_service.read_chapter_metadata.side_effect = OSError("Cannot read metadata")
-    mock_rag_engine.generate_scene = AsyncMock(return_value=mock_generated_content)
+    # --- MODIFIED: Return the dictionary ---
+    mock_rag_engine.generate_scene = AsyncMock(return_value=mock_generated_dict)
+    # --- END MODIFIED ---
 
     # Instantiate AIService with mocks
     with patch('app.services.ai_service.rag_engine', mock_rag_engine), \
@@ -238,7 +275,11 @@ async def test_generate_scene_draft_context_load_error():
     result = await service_instance.generate_scene_draft(project_id, chapter_id, request_data)
 
     # Assertions
-    assert result == mock_generated_content
+    # --- MODIFIED: Assert against the dictionary ---
+    assert isinstance(result, dict)
+    assert result["title"] == mock_generated_title
+    assert result["content"] == mock_generated_content
+    # --- END MODIFIED ---
     assert mock_file_service.read_content_block_file.call_count == 2
     mock_file_service.read_chapter_metadata.assert_called_once_with(project_id, chapter_id)
     mock_file_service.read_text_file.assert_not_called()
@@ -252,6 +293,7 @@ async def test_generate_scene_draft_context_load_error():
         explicit_previous_scenes=[] # Expect empty list due to metadata error
     )
 
+# --- Tests below this line should already pass or are unrelated to this specific error ---
 @pytest.mark.asyncio
 async def test_generate_scene_draft_rag_engine_error():
     """Test scene generation when the rag_engine itself raises an error."""
@@ -301,7 +343,10 @@ async def test_generate_scene_draft_rag_engine_returns_error_string():
     request_data = AISceneGenerationRequest(prompt_summary="Engine error string test.", previous_scene_order=0)
     mock_plan = "Plan."
     mock_synopsis = "Synopsis."
+    # --- MODIFIED: Mock return value as dict containing error ---
     error_string = "Error: Generation failed due to content policy."
+    mock_generated_dict = {"title": "Error Title", "content": error_string}
+    # --- END MODIFIED ---
 
     # Mocks
     mock_file_service = MagicMock(spec=FileService)
@@ -313,7 +358,9 @@ async def test_generate_scene_draft_rag_engine_returns_error_string():
 
     # Configure mocks
     mock_file_service.read_content_block_file.side_effect = lambda p_id, b_name: mock_plan if b_name == "plan.md" else mock_synopsis if b_name == "synopsis.md" else pytest.fail("Unexpected block read")
-    mock_rag_engine.generate_scene = AsyncMock(return_value=error_string)
+    # --- MODIFIED: Return the dictionary ---
+    mock_rag_engine.generate_scene = AsyncMock(return_value=mock_generated_dict)
+    # --- END MODIFIED ---
 
     # Instantiate AIService with mocks
     with patch('app.services.ai_service.rag_engine', mock_rag_engine), \

@@ -16,14 +16,9 @@
 
 import React, { useState, useRef, useEffect, useCallback } from 'react';
 import PropTypes from 'prop-types';
-// --- MODIFIED: Import new API functions ---
 import { queryProjectContext, getChatHistory, updateChatHistory } from '../api/codexApi';
-// --- END MODIFIED ---
 
-// --- REMOVED: LocalStorage Key ---
-// const getHistoryStorageKey = (projectId) => `codex-ai-chat-${projectId}`;
-
-// Basic styling (remains the same)
+// Basic styling
 const styles = {
     container: {
         border: '1px solid #ccc',
@@ -58,6 +53,7 @@ const styles = {
         padding: '8px',
         border: '1px solid #ccc',
         borderRadius: '3px',
+        resize: 'vertical', // Allow vertical resize
     },
     button: {
         padding: '8px 15px',
@@ -82,18 +78,22 @@ const styles = {
     },
     responseArea: {
         padding: '10px',
-        backgroundColor: 'white',
+        backgroundColor: 'white', // Changed from #f0f0f0 for better contrast
         whiteSpace: 'pre-wrap',
         wordWrap: 'break-word',
+        borderRadius: '3px', // Added border radius
+        // border: '1px solid #eee', // Optional: add subtle border
+        marginTop: '5px', // Add some space below query
     },
     sourceNodesArea: {
         fontSize: '0.9em',
         color: '#555',
+        marginTop: '10px', // Ensure space above details
     },
     detailsSummary: {
         cursor: 'pointer',
         fontWeight: 'bold',
-        marginTop: '10px',
+        // marginTop: '10px', // Removed, handled by sourceNodesArea margin
         color: '#444',
     },
     detailsContent: {
@@ -118,6 +118,8 @@ const styles = {
         backgroundColor: '#e9e9e9',
         border: '1px solid #ccc',
         borderRadius: '3px',
+        fontFamily: 'monospace', // Use monospace for code-like text
+        fontSize: '0.85em', // Slightly smaller font
     },
     error: {
         color: 'red',
@@ -126,15 +128,33 @@ const styles = {
     loading: {
         fontStyle: 'italic',
         color: '#555',
+    },
+    directSourceInfo: {
+        fontStyle: 'italic',
+        color: '#444',
+        marginTop: '10px',
+        fontSize: '0.9em',
+        borderTop: '1px dotted #ccc',
+        paddingTop: '8px',
+    },
+    directSourceList: { // Style for the list itself
+        margin: '0',
+        paddingLeft: '20px',
+        listStyleType: 'disc', // Use standard bullets
     }
 };
 
-// --- Helper Component for Rendering a Single History Entry (Unchanged) ---
+// --- Helper Component for Rendering a Single History Entry ---
 const HistoryEntry = ({ entry }) => {
     const getFilename = (filePath) => {
         if (!filePath) return 'Unknown Source';
         return filePath.split(/[\\/]/).pop();
     }
+
+    const directSources = entry.response?.direct_sources; // Use plural
+    const hasDirectSources = directSources && Array.isArray(directSources) && directSources.length > 0;
+    const retrievedSources = entry.response?.source_nodes;
+    const hasRetrievedSources = retrievedSources && Array.isArray(retrievedSources) && retrievedSources.length > 0;
 
     return (
         <div style={styles.historyEntry} data-entry-id={entry.id}>
@@ -144,12 +164,31 @@ const HistoryEntry = ({ entry }) => {
                 {entry.error && <p style={styles.error} data-testid={`query-error-${entry.id}`}>{entry.error}</p>}
                 {entry.response && !entry.error && (
                     <>
-                        <p>AI: {entry.response.answer}</p>
-                        {entry.response.source_nodes && entry.response.source_nodes.length > 0 && (
+                        {/* AI Answer */}
+                        <p style={{ marginTop: 0 }}>AI: {entry.response.answer}</p>
+
+                        {/* Direct Sources Section */}
+                        {hasDirectSources && (
+                            <div style={styles.directSourceInfo} data-testid={`direct-source-info-${entry.id}`}>
+                                <p style={{ margin: '0 0 5px 0', fontWeight: 'bold' }}>
+                                    Answer primarily based on directly requested content:
+                                </p>
+                                <ul style={styles.directSourceList}>
+                                    {directSources.map((source, index) => (
+                                        <li key={index}>{source.type}: "{source.name}"</li>
+                                    ))}
+                                </ul>
+                            </div>
+                        )}
+
+                        {/* Retrieved Sources Section */}
+                        {hasRetrievedSources && (
                             <details style={styles.sourceNodesArea}>
-                                <summary style={styles.detailsSummary}>Sources Used ({entry.response.source_nodes.length})</summary>
+                                <summary style={styles.detailsSummary}>
+                                    Retrieved Context Snippets ({retrievedSources.length})
+                                </summary>
                                 <div style={styles.detailsContent}>
-                                    {entry.response.source_nodes.map((node) => (
+                                    {retrievedSources.map((node) => (
                                         <div key={node.id} style={styles.sourceNode}>
                                             <strong>Source:</strong> {getFilename(node.metadata?.file_path)} (Score: {node.score?.toFixed(3) ?? 'N/A'})
                                             <pre style={styles.sourceNodeText}><code>{node.text}</code></pre>
@@ -158,8 +197,10 @@ const HistoryEntry = ({ entry }) => {
                                 </div>
                             </details>
                         )}
-                        {entry.response.source_nodes && entry.response.source_nodes.length === 0 && (
-                            <p style={styles.sourceNodesArea}><em>(No specific sources retrieved for this answer)</em></p>
+
+                        {/* No Sources Message */}
+                        {!hasRetrievedSources && !hasDirectSources && (
+                            <p style={styles.sourceNodesArea}><em>(No specific sources retrieved or directly requested for this answer)</em></p>
                         )}
                     </>
                 )}
@@ -172,7 +213,14 @@ HistoryEntry.propTypes = {
     entry: PropTypes.shape({
         id: PropTypes.number.isRequired,
         query: PropTypes.string.isRequired,
-        response: PropTypes.object,
+        response: PropTypes.shape({
+            answer: PropTypes.string,
+            source_nodes: PropTypes.arrayOf(PropTypes.object),
+            direct_sources: PropTypes.arrayOf(PropTypes.shape({ // Use plural
+                type: PropTypes.string,
+                name: PropTypes.string,
+            }))
+        }),
         error: PropTypes.string,
         isLoading: PropTypes.bool,
     }).isRequired,
@@ -184,34 +232,25 @@ function QueryInterface({ projectId }) {
     const [currentQuery, setCurrentQuery] = useState('');
     const [history, setHistory] = useState([]);
     const [isProcessing, setIsProcessing] = useState(false);
-    const [isLoadingHistory, setIsLoadingHistory] = useState(true); // State for initial history load
-    const [historyError, setHistoryError] = useState(null); // State for history load error
+    const [isLoadingHistory, setIsLoadingHistory] = useState(true);
+    const [historyError, setHistoryError] = useState(null);
     const nextId = useRef(0);
     const historyEndRef = useRef(null);
     const formRef = useRef(null);
-    // --- REMOVED: isInitialLoad ref ---
-    // const isInitialLoad = useRef(true);
 
-    // --- Load history from Backend on mount ---
+    // (useEffect for loading history remains unchanged)
     useEffect(() => {
         if (!projectId) return;
-
-        let isMounted = true; // Flag to prevent state update on unmounted component
+        let isMounted = true;
         setIsLoadingHistory(true);
         setHistoryError(null);
-        setHistory([]); // Clear existing history before loading
-
+        setHistory([]);
         console.log(`[QueryInterface] Load Effect: Fetching history for project: ${projectId}`);
-
         getChatHistory(projectId)
             .then(response => {
                 if (isMounted) {
                     const loadedHistory = response.data?.history || [];
-                    // Add isLoading: false to each loaded entry
-                    const historyWithLoadingState = loadedHistory.map(entry => ({
-                        ...entry,
-                        isLoading: false
-                    }));
+                    const historyWithLoadingState = loadedHistory.map(entry => ({ ...entry, isLoading: false }));
                     setHistory(historyWithLoadingState);
                     const maxId = historyWithLoadingState.reduce((max, entry) => Math.max(max, entry.id), -1);
                     nextId.current = maxId + 1;
@@ -220,143 +259,74 @@ function QueryInterface({ projectId }) {
             })
             .catch(error => {
                 console.error("[QueryInterface] Load Effect: Error fetching history:", error);
-                if (isMounted) {
-                    // Don't set history on error, show specific error message
-                    setHistoryError(`Failed to load chat history: ${error.response?.data?.detail || error.message}`);
-                }
+                if (isMounted) { setHistoryError(`Failed to load chat history: ${error.response?.data?.detail || error.message}`); }
             })
-            .finally(() => {
-                if (isMounted) {
-                    setIsLoadingHistory(false);
-                }
-            });
+            .finally(() => { if (isMounted) { setIsLoadingHistory(false); } });
+        return () => { isMounted = false; };
+    }, [projectId]);
 
-        // Cleanup function
-        return () => {
-            isMounted = false;
-        };
-    }, [projectId]); // Depend only on projectId
-
-    // --- Save history to Backend on change ---
-    // Debounce this later if needed, for now save after each query completion
+    // (useCallback for saving history remains unchanged)
     const saveHistory = useCallback(async (currentHistory) => {
-        if (!projectId) return;
-
-        // Don't save if history is currently loading or failed to load
-        if (isLoadingHistory || historyError) {
-             console.log("[QueryInterface] Save Effect: Skipping save due to loading/error state.");
-             return;
-        }
-
+        if (!projectId || isLoadingHistory || historyError) { console.log("[QueryInterface] Save Effect: Skipping save."); return; }
         console.log(`[QueryInterface] Save Effect: Saving ${currentHistory.length} history entries for project: ${projectId}`);
-        // Prepare data for backend (remove isLoading state)
         const historyToSave = currentHistory.map(({ isLoading, ...entry }) => entry);
+        try { await updateChatHistory(projectId, { history: historyToSave }); console.log(`[QueryInterface] Save Effect: History saved successfully.`); }
+        catch (error) { console.error("[QueryInterface] Save Effect: Error saving history:", error); }
+    }, [projectId, isLoadingHistory, historyError]);
 
-        try {
-            await updateChatHistory(projectId, { history: historyToSave });
-            console.log(`[QueryInterface] Save Effect: History saved successfully.`);
-        } catch (error) {
-            console.error("[QueryInterface] Save Effect: Error saving history:", error);
-            // Maybe show a non-blocking error to the user? For now, just log.
-            // setHistoryError(`Failed to save chat history: ${error.response?.data?.detail || error.message}`);
-        }
-    }, [projectId, isLoadingHistory, historyError]); // Dependencies for the save callback
+    // (useEffect for scrolling remains unchanged)
+    useEffect(() => { if (history.length > 0) { historyEndRef.current?.scrollIntoView({ behavior: "smooth" }); } }, [history]);
 
-    // --- Scroll to bottom when history updates ---
-    useEffect(() => {
-        // Only scroll if there's history to scroll to
-        if (history.length > 0) {
-            historyEndRef.current?.scrollIntoView({ behavior: "smooth" });
-        }
-    }, [history]); // Trigger scroll on history change
-
+    // (processQuery remains unchanged - it already stores the whole responseData)
     const processQuery = useCallback(async () => {
         if (!currentQuery.trim() || isProcessing) return;
-
         const queryText = currentQuery;
         const entryId = nextId.current++;
-        const newEntry = {
-            id: entryId,
-            query: queryText,
-            response: null,
-            error: null,
-            isLoading: true,
-        };
-
-        // Optimistically update UI
+        const newEntry = { id: entryId, query: queryText, response: null, error: null, isLoading: true };
         const updatedHistory = [...history, newEntry];
         setHistory(updatedHistory);
         setCurrentQuery('');
         setIsProcessing(true);
-
-        let finalHistoryState = updatedHistory; // Keep track of the state to save
-
+        let finalHistoryState = updatedHistory;
         try {
             console.log(`Sending query for project ${projectId}: "${queryText}"`);
             const apiResponse = await queryProjectContext(projectId, { query: queryText });
             console.log("[QueryInterface] Raw API Response:", apiResponse);
-
-            const answerText = apiResponse.data?.answer;
+            const responseData = apiResponse.data; // Includes answer, source_nodes, direct_sources
+            const answerText = responseData?.answer;
             const isString = typeof answerText === 'string';
             const startsWithError = isString && answerText.trim().startsWith("Error:");
-
             if (isString && startsWithError) {
                 console.warn(`[QueryInterface] Query returned an error message in the answer field.`);
-                finalHistoryState = updatedHistory.map(entry =>
-                    entry.id === entryId ? { ...entry, error: answerText, isLoading: false } : entry
-                );
+                finalHistoryState = updatedHistory.map(entry => entry.id === entryId ? { ...entry, error: answerText, isLoading: false } : entry);
                 setHistory(finalHistoryState);
             } else {
                 console.log(`[QueryInterface] Setting response state for entry ${entryId}.`);
-                finalHistoryState = updatedHistory.map(entry =>
-                    entry.id === entryId ? { ...entry, response: apiResponse.data, isLoading: false } : entry
-                );
+                finalHistoryState = updatedHistory.map(entry => entry.id === entryId ? { ...entry, response: responseData, isLoading: false } : entry);
                 setHistory(finalHistoryState);
             }
-
         } catch (err) {
             console.error("[QueryInterface] Error in API call catch block:", err);
             const errorMsg = err.response?.data?.detail || err.message || 'Failed to get response from AI.';
             console.log(`[QueryInterface] Setting error state for entry ${entryId}: "${errorMsg}"`);
-            finalHistoryState = updatedHistory.map(entry =>
-                entry.id === entryId ? { ...entry, error: errorMsg, isLoading: false } : entry
-            );
+            finalHistoryState = updatedHistory.map(entry => entry.id === entryId ? { ...entry, error: errorMsg, isLoading: false } : entry);
             setHistory(finalHistoryState);
         } finally {
             console.log("[QueryInterface] Setting isProcessing to false.");
             setIsProcessing(false);
-            // Save history after processing is complete
             await saveHistory(finalHistoryState);
         }
-    }, [currentQuery, isProcessing, projectId, history, saveHistory]); // Added history and saveHistory
+    }, [currentQuery, isProcessing, projectId, history, saveHistory]);
 
-    const handleSubmitForm = (e) => {
-        e.preventDefault();
-        processQuery();
-    };
-
-    const handleKeyDown = (e) => {
-        if (e.key === 'Enter' && e.ctrlKey && !isProcessing && currentQuery.trim()) {
-            e.preventDefault();
-            processQuery();
-        }
-    };
-
-    // --- MODIFIED: Clear state and save empty history ---
-    const handleNewChat = async () => {
-        const newHistoryState = [];
-        setHistory(newHistoryState);
-        setCurrentQuery('');
-        setIsProcessing(false);
-        nextId.current = 0;
-        // Save the cleared history to the backend
-        await saveHistory(newHistoryState);
-    };
-    // --- END MODIFIED ---
+    // (Event handlers handleSubmitForm, handleKeyDown, handleNewChat remain unchanged)
+    const handleSubmitForm = (e) => { e.preventDefault(); processQuery(); };
+    const handleKeyDown = (e) => { if (e.key === 'Enter' && e.ctrlKey && !isProcessing && currentQuery.trim()) { e.preventDefault(); processQuery(); } };
+    const handleNewChat = async () => { const newHistoryState = []; setHistory(newHistoryState); setCurrentQuery(''); setIsProcessing(false); nextId.current = 0; await saveHistory(newHistoryState); };
 
     const historyAreaId = "query-history";
     const isProcessingId = "is-processing";
 
+    // --- Main Return JSX ---
     return (
         <div style={styles.container}>
             {/* Hidden element to track processing state */}
@@ -366,19 +336,21 @@ function QueryInterface({ projectId }) {
             {isLoadingHistory && <p style={styles.loading}>Loading chat history...</p>}
             {historyError && <p style={styles.error}>{historyError}</p>}
 
-            {/* Only show history area if not loading and no error */}
+            {/* History Area */}
             {!isLoadingHistory && !historyError && history.length > 0 && (
                 <div style={styles.historyArea} data-testid={historyAreaId}>
                     {history.map(entry => (
                         <HistoryEntry key={entry.id} entry={entry} />
                     ))}
-                    <div ref={historyEndRef} />
+                    <div ref={historyEndRef} /> {/* For scrolling */}
                 </div>
             )}
+            {/* Empty History Message */}
              {!isLoadingHistory && !historyError && history.length === 0 && (
                  <p>No chat history yet. Ask a question below!</p>
              )}
 
+            {/* Input Form */}
             <form ref={formRef} onSubmit={handleSubmitForm}>
                 <textarea
                     style={styles.textarea}
@@ -386,7 +358,7 @@ function QueryInterface({ projectId }) {
                     onChange={(e) => setCurrentQuery(e.target.value)}
                     onKeyDown={handleKeyDown}
                     placeholder="Ask a question about your project plan, characters, scenes... (Ctrl+Enter to submit)"
-                    disabled={isProcessing || isLoadingHistory || !!historyError} // Disable if loading history or error occurred
+                    disabled={isProcessing || isLoadingHistory || !!historyError}
                     rows={3}
                     aria-label="AI Query Input"
                 />
@@ -394,7 +366,7 @@ function QueryInterface({ projectId }) {
                 <button
                     type="submit"
                     data-testid="submit-query-button"
-                    style={{ ...styles.button, ...((isProcessing || isLoadingHistory || !!historyError) && styles.buttonDisabled) }}
+                    style={{ ...styles.button, ...((isProcessing || isLoadingHistory || !!historyError || !currentQuery.trim()) && styles.buttonDisabled) }} // Combined disabled condition
                     disabled={isProcessing || isLoadingHistory || !!historyError || !currentQuery.trim()}
                 >
                     {isProcessing ? 'Asking AI...' : 'Submit Query'}
@@ -403,8 +375,8 @@ function QueryInterface({ projectId }) {
                     type="button"
                     data-testid="new-chat-button"
                     onClick={handleNewChat}
-                    style={styles.newChatButton}
-                    disabled={isProcessing || isLoadingHistory} // Disable while processing or loading history
+                    style={{...styles.newChatButton, ...((isProcessing || isLoadingHistory) && styles.buttonDisabled)}} // Apply disabled style
+                    disabled={isProcessing || isLoadingHistory}
                 >
                     New Chat
                 </button>

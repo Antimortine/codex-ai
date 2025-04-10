@@ -13,15 +13,18 @@
 # limitations under the License.
 
 import logging
+import re # Import re
 from llama_index.core.retrievers import VectorIndexRetriever
 from llama_index.core.vector_stores import ExactMatchFilter, MetadataFilters
 from llama_index.core.base.response.schema import Response, NodeWithScore
 from llama_index.core.indices.vector_store import VectorStoreIndex
 from llama_index.core.llms import LLM
-from typing import List, Tuple
+from typing import List, Tuple, Optional, Dict # Import Dict
 
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception, RetryError
-from google.genai.errors import ClientError
+# --- MODIFIED: Import base error and specific error ---
+from google.api_core.exceptions import GoogleAPICallError, ServiceUnavailable, ResourceExhausted # Import potential base/specific errors
+# --- END MODIFIED ---
 
 from app.core.config import settings
 
@@ -30,19 +33,22 @@ logger = logging.getLogger(__name__)
 # --- Define a retry predicate function ---
 def _is_retryable_google_api_error(exception):
     """Return True if the exception is a Google API 429 error."""
-    if isinstance(exception, ClientError):
-        status_code = None
-        try:
-            if hasattr(exception, 'response') and hasattr(exception.response, 'status_code'): status_code = exception.response.status_code
-            elif isinstance(exception.args, (list, tuple)) and len(exception.args) > 0 and isinstance(exception.args[0], int): status_code = int(exception.args[0])
-            elif isinstance(exception.args, (list, tuple)) and len(exception.args) > 0 and isinstance(exception.args[0], str) and '429' in exception.args[0]: return True
-        except (ValueError, TypeError, IndexError, AttributeError): pass
-        if status_code == 429:
-             # Log is now done within the predicate where tenacity calls it
-             # logger.warning("Google API rate limit hit (ClientError 429). Retrying query...")
+    # --- MODIFIED: Check for GoogleAPICallError base class ---
+    if isinstance(exception, GoogleAPICallError):
+    # --- END MODIFIED ---
+        # Check for status_code attribute, common in HTTP-based errors
+        if hasattr(exception, 'status_code') and exception.status_code == 429:
+            logger.warning("Google API rate limit hit (429 status code). Retrying query...")
+            return True
+        # Sometimes ResourceExhausted might be raised without a status_code but implies 429
+        if isinstance(exception, ResourceExhausted):
+             logger.warning("Google API ResourceExhausted error encountered. Retrying query...")
              return True
-    # Log is now done within the predicate where tenacity calls it
-    # logger.debug(f"Non-retryable error encountered during query: {type(exception)}")
+        # Check if the message contains '429' as a fallback
+        if hasattr(exception, 'message') and '429' in str(exception.message):
+             logger.warning("Google API rate limit hit (429 in message). Retrying query...")
+             return True
+    logger.debug(f"Non-retryable error encountered during query: {type(exception)}")
     return False
 # --- End retry predicate ---
 
@@ -68,12 +74,20 @@ class QueryProcessor:
         logger.info(f"Calling LLM with combined context for query...")
         return await self.llm.acomplete(prompt)
 
-    async def query(self, project_id: str, query_text: str, explicit_plan: str, explicit_synopsis: str) -> Tuple[str, List[NodeWithScore]]:
+    async def query(self, project_id: str, query_text: str, explicit_plan: str, explicit_synopsis: str,
+                  direct_sources_data: Optional[List[Dict]] = None # Changed from single direct_content*
+                  ) -> Tuple[str, List[NodeWithScore], Optional[List[Dict[str, str]]]]: # Return list of dicts
         logger.info(f"QueryProcessor: Received query for project '{project_id}': '{query_text}'")
         retrieved_nodes: List[NodeWithScore] = []
+        direct_sources_info_list: Optional[List[Dict[str, str]]] = None
+        if direct_sources_data:
+             direct_sources_info_list = [
+                 {"type": source.get("type", "Unknown"), "name": source.get("name", "Unknown")}
+                 for source in direct_sources_data
+             ]
 
         try:
-            # 1. Create Retriever & Retrieve Nodes
+            # 1. Create Retriever & Retrieve Nodes (Unchanged)
             logger.debug(f"Creating retriever with top_k={settings.RAG_QUERY_SIMILARITY_TOP_K} and filter for project_id='{project_id}'")
             retriever = VectorIndexRetriever(
                 index=self.index,
@@ -84,28 +98,42 @@ class QueryProcessor:
             retrieved_nodes = await retriever.aretrieve(query_text)
             logger.info(f"Retrieved {len(retrieved_nodes)} nodes for query context.")
 
-            # 2. Build Prompt
-            # ... (prompt building logic remains the same) ...
-            logger.debug("Building query prompt with explicit and retrieved context...")
+            # 2. Build Prompt (Unchanged logic, includes direct content if present)
+            logger.debug("Building query prompt with explicit, direct, and retrieved context...")
             system_prompt = (
                 "You are an AI assistant answering questions about a creative writing project. "
-                "Use the provided Project Plan, Project Synopsis, and Retrieved Context Snippets to answer the user's query accurately and concisely. "
+                "Use the provided Project Plan, Project Synopsis, Directly Requested Content section(s) (if provided), and Retrieved Context Snippets to answer the user's query accurately and concisely. "
+                "Prioritize the Directly Requested Content if it seems most relevant to the query. "
                 "If the context doesn't contain the answer, say that you cannot answer based on the provided information."
             )
-            retrieved_context_str = "\n\n---\n\n".join(
-                [f"Source: {node.metadata.get('file_path', 'N/A')}\n\n{node.get_content()}" for node in retrieved_nodes]
-            ) if retrieved_nodes else "No specific context snippets were retrieved via search."
             user_message_content = (
                 f"**User Query:**\n{query_text}\n\n"
                 f"**Project Plan:**\n```markdown\n{explicit_plan or 'Not Available'}\n```\n\n"
                 f"**Project Synopsis:**\n```markdown\n{explicit_synopsis or 'Not Available'}\n```\n\n"
-                f"**Retrieved Context Snippets:**\n```markdown\n{retrieved_context_str}\n```\n\n"
-                f"**Instruction:** Based *only* on the provided Plan, Synopsis, and Retrieved Context, answer the User Query."
+            )
+            if direct_sources_data:
+                 user_message_content += "**Directly Requested Content:**\n"
+                 for i, source_data in enumerate(direct_sources_data):
+                      source_type = source_data.get('type', 'Unknown')
+                      source_name = source_data.get('name', f'Source {i+1}')
+                      source_content = source_data.get('content', '')
+                      truncated_direct_content = source_content
+                      user_message_content += (
+                          f"--- Start Directly Requested {source_type}: \"{source_name}\" ---\n"
+                          f"```markdown\n{truncated_direct_content}\n```\n"
+                          f"--- End Directly Requested {source_type}: \"{source_name}\" ---\n\n"
+                      )
+            nodes_for_prompt = retrieved_nodes
+            retrieved_context_str = "\n\n---\n\n".join(
+                [f"Source: {node.metadata.get('file_path', 'N/A')}\n\n{node.get_content()}" for node in nodes_for_prompt]
+            ) if nodes_for_prompt else "No specific context snippets were retrieved via search."
+            user_message_content += (
+                 f"**Retrieved Context Snippets:**\n```markdown\n{retrieved_context_str}\n```\n\n"
+                 f"**Instruction:** Based *only* on the provided Plan, Synopsis, Directly Requested Content (if any), and Retrieved Context, answer the User Query."
             )
             full_prompt = f"{system_prompt}\n\nUser: {user_message_content}\n\nAssistant:"
 
-
-            # 3. Call LLM via retry helper
+            # 3. Call LLM via retry helper (Unchanged)
             llm_response = await self._execute_llm_complete(full_prompt)
             answer = llm_response.text.strip() if llm_response else ""
             logger.info("LLM call complete.")
@@ -114,30 +142,27 @@ class QueryProcessor:
                  logger.warning("LLM query returned an empty response string.")
                  answer = "(The AI did not provide an answer based on the context.)"
 
-            logger.info(f"Query successful. Returning answer and {len(retrieved_nodes)} source nodes.")
-            return answer, retrieved_nodes
+            logger.info(f"Query successful. Returning answer, {len(retrieved_nodes)} source nodes, and direct source info list (if any).")
+            return answer, retrieved_nodes, direct_sources_info_list
 
-        # --- CORRECTED Exception Handling ---
-        except ClientError as e:
-             # Catch ClientError specifically (which tenacity re-raises if it was the cause)
+        # --- Exception Handling ---
+        # --- MODIFIED: Catch GoogleAPICallError base class ---
+        except GoogleAPICallError as e:
              if _is_retryable_google_api_error(e): # Check if it's the 429 error
                   logger.error(f"Rate limit error persisted after retries for query: {e}", exc_info=False)
-                  # --- MODIFIED: Add "Error: " prefix ---
                   error_message = f"Error: Rate limit exceeded for query after multiple retries. Please wait and try again."
-                  # --- END MODIFIED ---
-                  return error_message, retrieved_nodes # Return nodes retrieved before failure
+                  # Return None for direct sources list on error
+                  return error_message, retrieved_nodes, None
              else:
-                  # Handle other non-retryable ClientErrors
-                  logger.error(f"Non-retryable ClientError during query for project '{project_id}': {e}", exc_info=True)
-                  # --- MODIFIED: Add "Error: " prefix ---
+                  # Handle other non-retryable GoogleAPICallErrors
+                  logger.error(f"Non-retryable GoogleAPICallError during query for project '{project_id}': {e}", exc_info=True)
                   error_message = f"Error: Sorry, an error occurred while communicating with the AI service for project '{project_id}'. Details: {e}"
-                  # --- END MODIFIED ---
-                  return error_message, [] # Return empty nodes
+                  # Return None for direct sources list on error
+                  return error_message, [], None
+        # --- END MODIFIED ---
         except Exception as e:
-             # Catch other errors (like retriever errors, prompt errors, etc.)
              logger.error(f"Error during RAG query for project '{project_id}': {e}", exc_info=True)
-             # --- MODIFIED: Add "Error: " prefix ---
              error_message = f"Error: Sorry, an internal error occurred processing the query. Please check logs."
-             # --- END MODIFIED ---
-             return error_message, []
-        # --- END CORRECTED ---
+             # Return None for direct sources list on error
+             return error_message, [], None
+        # --- END Exception Handling ---

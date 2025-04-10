@@ -13,7 +13,7 @@
 # limitations under the License.
 
 import logging
-from typing import List, Tuple, Optional
+from typing import List, Tuple, Optional, Dict # Added Dict
 
 # Import the individual processors
 from app.rag.query_processor import QueryProcessor
@@ -32,21 +32,15 @@ class RagEngine:
     specific processors (QueryProcessor, SceneGenerator, Rephraser).
     """
     def __init__(self):
-        """
-        Initializes the RagEngine by creating instances of the task processors,
-        passing them the shared index and LLM components from IndexManager.
-        """
+        # (Initialization unchanged)
         if not hasattr(index_manager, 'index') or not index_manager.index:
              logger.critical("IndexManager's index is not initialized! RagEngine Facade cannot function.")
              raise RuntimeError("RagEngine cannot initialize without a valid index from IndexManager.")
         if not hasattr(index_manager, 'llm') or not index_manager.llm:
              logger.critical("IndexManager's LLM is not initialized! RagEngine Facade cannot function.")
              raise RuntimeError("RagEngine cannot initialize without a valid LLM from IndexManager.")
-
         self.index = index_manager.index
         self.llm = index_manager.llm
-
-        # Instantiate processors
         try:
              self.query_processor = QueryProcessor(self.index, self.llm)
              self.scene_generator = SceneGenerator(self.index, self.llm)
@@ -56,17 +50,21 @@ class RagEngine:
              logger.critical(f"Failed to initialize RAG task processors: {e}", exc_info=True)
              raise
 
-    # --- MODIFIED: Added explicit_plan and explicit_synopsis ---
-    async def query(self, project_id: str, query_text: str, explicit_plan: str, explicit_synopsis: str) -> Tuple[str, List[NodeWithScore]]:
-        """Delegates RAG querying to QueryProcessor, passing explicit context."""
+    # --- MODIFIED: Accept list of direct sources data, return list of direct source info ---
+    async def query(self, project_id: str, query_text: str, explicit_plan: str, explicit_synopsis: str,
+                  direct_sources_data: Optional[List[Dict]] = None # Accept list of dicts
+                  ) -> Tuple[str, List[NodeWithScore], Optional[List[Dict[str, str]]]]: # Return list of dicts
+        """Delegates RAG querying to QueryProcessor, passing explicit and direct context."""
         logger.debug(f"RagEngine Facade: Delegating query for project '{project_id}' to QueryProcessor.")
+        # --- MODIFIED: Pass direct_sources_data list correctly ---
         return await self.query_processor.query(
             project_id=project_id,
             query_text=query_text,
             explicit_plan=explicit_plan,
-            explicit_synopsis=explicit_synopsis
+            explicit_synopsis=explicit_synopsis,
+            direct_sources_data=direct_sources_data # Pass the list with the correct keyword
         )
-    # --- END MODIFIED ---
+        # --- END MODIFIED ---
 
     async def generate_scene(
         self,
@@ -77,8 +75,8 @@ class RagEngine:
         explicit_plan: str,
         explicit_synopsis: str,
         explicit_previous_scenes: List[Tuple[int, str]]
-        ) -> str:
-        """Delegates scene generation to SceneGenerator, passing all context."""
+        ) -> Dict[str, str]: # Return Dict
+        # (Unchanged)
         logger.debug(f"RagEngine Facade: Delegating generate_scene for project '{project_id}', chapter '{chapter_id}' to SceneGenerator.")
         return await self.scene_generator.generate_scene(
             project_id=project_id,
@@ -91,11 +89,12 @@ class RagEngine:
         )
 
     async def rephrase(self, project_id: str, selected_text: str, context_before: Optional[str], context_after: Optional[str]) -> List[str]:
-        """Delegates rephrasing to Rephraser."""
+        # (Unchanged)
         logger.debug(f"RagEngine Facade: Delegating rephrase for project '{project_id}' to Rephraser.")
         return await self.rephraser.rephrase(project_id, selected_text, context_before, context_after)
 
 # --- Singleton Instance ---
+# (Unchanged)
 try:
      rag_engine = RagEngine()
 except Exception as e:

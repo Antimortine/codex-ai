@@ -18,30 +18,59 @@ from llama_index.core.indices.vector_store import VectorStoreIndex
 from llama_index.core.llms import LLM, CompletionResponse
 from llama_index.core.retrievers import VectorIndexRetriever
 from llama_index.core.schema import NodeWithScore, TextNode
+from typing import Optional, Dict # Import Optional, Dict
 
-from tenacity import RetryError
-from google.genai.errors import ClientError
+from tenacity import RetryError, stop_after_attempt, wait_exponential, retry, retry_if_exception # Import tenacity decorators
+# --- MODIFIED: Import base error and specific error ---
+from google.api_core.exceptions import GoogleAPICallError, ServiceUnavailable, ResourceExhausted # Import potential base/specific errors
+# --- END MODIFIED ---
 
-# Import the class we are testing
-from app.rag.query_processor import QueryProcessor
+
+# Import the class we are testing and the retry predicate
+from app.rag.query_processor import QueryProcessor, _is_retryable_google_api_error
 from app.core.config import settings
 
 # --- Fixtures (Use shared fixtures from conftest.py) ---
 
 # --- Helper to create mock ClientError ---
-def create_mock_client_error(status_code: int, message: str = "API Error") -> ClientError:
-    error_dict = {"error": {"message": message}}
-    try:
-        error = ClientError(status_code, error_dict)
-        if not hasattr(error, 'status_code') or error.status_code != status_code:
-             setattr(error, 'status_code', status_code)
-    except Exception:
-        error = ClientError(f"{status_code} {message}")
+# --- MODIFIED: Create a minimal class inheriting from GoogleAPICallError ---
+class MockGoogleAPIError(GoogleAPICallError):
+     """Minimal mock error inheriting from a base Google error."""
+     def __init__(self, message, status_code=None):
+         # Find a base class constructor that works, GoogleAPICallError might be abstract
+         # Let's try Exception as the most basic
+         super().__init__(message)
+         self.status_code = status_code
+         # Add other attributes if needed by the predicate or error handling
+         self.message = message
+
+def create_mock_client_error(status_code: int, message: str = "API Error") -> MockGoogleAPIError:
+    """Creates a mock Exception that mimics Google API errors for retry logic testing."""
+    # Use ResourceExhausted specifically for 429 if its constructor is simple enough
+    if status_code == 429:
+        try:
+            # ResourceExhausted constructor usually takes just a message
+            error = ResourceExhausted(message)
+            # Manually set status_code if the class doesn't do it automatically
+            setattr(error, 'status_code', status_code)
+        except TypeError:
+            # Fallback if ResourceExhausted constructor changed
+            error = MockGoogleAPIError(message=message, status_code=status_code)
+    else:
+        # For other codes, use the generic mock base class
+        error = MockGoogleAPIError(message=message, status_code=status_code)
+
+    # Ensure status_code attribute exists
+    if not hasattr(error, 'status_code'):
         setattr(error, 'status_code', status_code)
+    # Add a basic 'message' attribute if it doesn't exist
+    if not hasattr(error, 'message'):
+         setattr(error, 'message', message)
     return error
+# --- END MODIFIED ---
+
 
 # --- Test QueryProcessor ---
-
 @pytest.mark.asyncio
 @patch('app.rag.query_processor.VectorIndexRetriever', autospec=True)
 async def test_query_success_with_nodes(
@@ -49,7 +78,6 @@ async def test_query_success_with_nodes(
     mock_llm: MagicMock,
     mock_index: MagicMock
 ):
-    # ... (test unchanged) ...
     project_id = "proj-qp-1"
     query_text = "What is the main character's goal?"
     plan = "Plan: Reach the mountain."
@@ -62,9 +90,10 @@ async def test_query_success_with_nodes(
     mock_retriever_instance.aretrieve = AsyncMock(return_value=retrieved_nodes)
     mock_llm.acomplete = AsyncMock(return_value=CompletionResponse(text=expected_answer))
     processor = QueryProcessor(index=mock_index, llm=mock_llm)
-    answer, source_nodes = await processor.query(project_id, query_text, plan, synopsis)
+    answer, source_nodes, direct_info = await processor.query(project_id, query_text, plan, synopsis)
     assert answer == expected_answer
     assert source_nodes == retrieved_nodes
+    assert direct_info is None
     mock_retriever_class.assert_called_once_with(index=mock_index, similarity_top_k=settings.RAG_QUERY_SIMILARITY_TOP_K, filters=ANY)
     mock_retriever_instance.aretrieve.assert_awaited_once_with(query_text)
     mock_llm.acomplete.assert_awaited_once()
@@ -83,7 +112,6 @@ async def test_query_success_no_nodes(
     mock_llm: MagicMock,
     mock_index: MagicMock
 ):
-    # ... (test unchanged) ...
     project_id = "proj-qp-2"
     query_text = "Any mention of dragons?"
     plan = "No dragons here."
@@ -94,9 +122,10 @@ async def test_query_success_no_nodes(
     mock_retriever_instance.aretrieve = AsyncMock(return_value=retrieved_nodes)
     mock_llm.acomplete = AsyncMock(return_value=CompletionResponse(text=expected_answer))
     processor = QueryProcessor(index=mock_index, llm=mock_llm)
-    answer, source_nodes = await processor.query(project_id, query_text, plan, synopsis)
+    answer, source_nodes, direct_info = await processor.query(project_id, query_text, plan, synopsis)
     assert answer == expected_answer
     assert source_nodes == retrieved_nodes
+    assert direct_info is None
     mock_retriever_instance.aretrieve.assert_awaited_once_with(query_text)
     mock_llm.acomplete.assert_awaited_once()
     prompt_arg = mock_llm.acomplete.call_args[0][0]
@@ -109,7 +138,6 @@ async def test_query_retriever_error(
     mock_llm: MagicMock,
     mock_index: MagicMock
 ):
-    # ... (test unchanged) ...
     project_id = "proj-qp-3"
     query_text = "This query causes retriever error."
     plan = "Plan"
@@ -117,11 +145,10 @@ async def test_query_retriever_error(
     mock_retriever_instance = mock_retriever_class.return_value
     mock_retriever_instance.aretrieve = AsyncMock(side_effect=RuntimeError("Retriever connection failed"))
     processor = QueryProcessor(index=mock_index, llm=mock_llm)
-    answer, source_nodes = await processor.query(project_id, query_text, plan, synopsis)
-    # --- CORRECTED Assertion ---
+    answer, source_nodes, direct_info = await processor.query(project_id, query_text, plan, synopsis)
     assert "Sorry, an internal error occurred processing the query." in answer
-    # --- END CORRECTED ---
     assert source_nodes == []
+    assert direct_info is None
     mock_retriever_instance.aretrieve.assert_awaited_once_with(query_text)
     mock_llm.acomplete.assert_not_awaited()
 
@@ -132,7 +159,6 @@ async def test_query_llm_error_non_retryable(
     mock_llm: MagicMock,
     mock_index: MagicMock
 ):
-    # ... (test unchanged) ...
     project_id = "proj-qp-4"
     query_text = "This query causes LLM error."
     plan = "Plan"
@@ -143,11 +169,10 @@ async def test_query_llm_error_non_retryable(
     mock_retriever_instance.aretrieve = AsyncMock(return_value=retrieved_nodes)
     mock_llm.acomplete = AsyncMock(side_effect=ValueError("LLM prompt validation failed"))
     processor = QueryProcessor(index=mock_index, llm=mock_llm)
-    answer, source_nodes = await processor.query(project_id, query_text, plan, synopsis)
-    # --- CORRECTED Assertion ---
+    answer, source_nodes, direct_info = await processor.query(project_id, query_text, plan, synopsis)
     assert "Sorry, an internal error occurred processing the query." in answer
-    # --- END CORRECTED ---
     assert source_nodes == []
+    assert direct_info is None
     mock_retriever_instance.aretrieve.assert_awaited_once_with(query_text)
     mock_llm.acomplete.assert_awaited_once()
 
@@ -158,7 +183,6 @@ async def test_query_llm_empty_response(
     mock_llm: MagicMock,
     mock_index: MagicMock
 ):
-    # ... (test unchanged) ...
     project_id = "proj-qp-5"
     query_text = "Query leading to empty LLM response"
     plan = "Plan"
@@ -168,15 +192,15 @@ async def test_query_llm_empty_response(
     mock_retriever_instance.aretrieve = AsyncMock(return_value=retrieved_nodes)
     mock_llm.acomplete = AsyncMock(return_value=CompletionResponse(text=""))
     processor = QueryProcessor(index=mock_index, llm=mock_llm)
-    answer, source_nodes = await processor.query(project_id, query_text, plan, synopsis)
+    answer, source_nodes, direct_info = await processor.query(project_id, query_text, plan, synopsis)
     assert "(The AI did not provide an answer based on the context.)" in answer
     assert source_nodes == retrieved_nodes
+    assert direct_info is None
     mock_retriever_instance.aretrieve.assert_awaited_once_with(query_text)
     mock_llm.acomplete.assert_awaited_once()
 
 
 # --- Tests for Retry Logic ---
-
 @pytest.mark.asyncio
 async def test_query_retry_success(mock_llm: MagicMock, mock_index: MagicMock):
     """Test retry logic succeeds on the third attempt."""
@@ -184,14 +208,17 @@ async def test_query_retry_success(mock_llm: MagicMock, mock_index: MagicMock):
     prompt = "Test prompt"
     expected_response = CompletionResponse(text="Success")
 
+    # Configure the mock LLM's acomplete method directly
     mock_llm.acomplete.side_effect = [
         create_mock_client_error(429, "Rate limit 1"),
         create_mock_client_error(429, "Rate limit 2"),
-        expected_response
+        expected_response # Success on the third call
     ]
 
+    # Call the decorated method
     response = await processor._execute_llm_complete(prompt)
 
+    # Assertions remain the same
     assert response == expected_response
     assert mock_llm.acomplete.await_count == 3
     mock_llm.acomplete.assert_has_awaits([call(prompt), call(prompt), call(prompt)])
@@ -203,18 +230,21 @@ async def test_query_retry_failure(mock_llm: MagicMock, mock_index: MagicMock):
     prompt = "Test prompt"
     final_error = create_mock_client_error(429, "Rate limit final")
 
+    # Configure the mock LLM's acomplete method directly
     mock_llm.acomplete.side_effect = [
         create_mock_client_error(429, "Rate limit 1"),
         create_mock_client_error(429, "Rate limit 2"),
-        final_error
+        final_error # Final error raised by the mock on the 3rd call
     ]
 
-    # Expect tenacity to re-raise the last ClientError
-    with pytest.raises(ClientError) as exc_info:
+    # Expect tenacity to re-raise the last error
+    with pytest.raises(GoogleAPICallError) as exc_info:
         await processor._execute_llm_complete(prompt)
 
-    assert exc_info.value is final_error
-    assert mock_llm.acomplete.await_count == 3
+    # Check the raised exception
+    assert exc_info.value is final_error # Should be the exact error instance
+    assert hasattr(exc_info.value, 'status_code') and exc_info.value.status_code == 429
+    assert mock_llm.acomplete.await_count == 3 # Tenacity made 3 calls
 
 @pytest.mark.asyncio
 async def test_query_retry_non_retryable_error(mock_llm: MagicMock, mock_index: MagicMock):
@@ -250,19 +280,24 @@ async def test_query_handles_retry_failure_gracefully(
     mock_retriever_instance = mock_retriever_class.return_value
     mock_retriever_instance.aretrieve = AsyncMock(return_value=retrieved_nodes)
 
-    # Simulate LLM always raising 429 via the helper method
-    mock_llm.acomplete.side_effect = create_mock_client_error(429, "Rate limit")
-
+    # Configure the mock LLM's acomplete method to always raise the retryable error
+    final_error = create_mock_client_error(429, "Rate limit")
+    # --- MODIFIED: Patch the decorated method correctly ---
+    # We need to mock the method on the *instance* that will be used inside processor.query
+    # Since processor.query calls self._execute_llm_complete, we mock it there.
     processor = QueryProcessor(index=mock_index, llm=mock_llm)
+    with patch.object(processor, '_execute_llm_complete', side_effect=final_error) as mock_decorated_method:
+    # --- END MODIFIED ---
 
-    # Act
-    answer, source_nodes = await processor.query(project_id, query_text, plan, synopsis)
+        # Act - Call the main query method, which contains the try/except ClientError block
+        answer, source_nodes, direct_info = await processor.query(project_id, query_text, plan, synopsis)
 
-    # Assert
-    # --- CORRECTED Assertion ---
-    assert "Rate limit exceeded for query after multiple retries" in answer
-    # --- END CORRECTED ---
-    assert source_nodes == retrieved_nodes
-    assert mock_llm.acomplete.await_count == 3
+        # Assert
+        # Check the correct error message from the GoogleAPICallError handler in processor.query
+        assert "Rate limit exceeded for query after multiple retries" in answer
+        assert source_nodes == retrieved_nodes # Nodes were retrieved before LLM call failed
+        assert direct_info is None
+        # Assert that the decorated method was called (tenacity handles the retries internally)
+        mock_decorated_method.assert_awaited_once()
 
-# --- END NEW TESTS ---
+# --- END TESTS ---
