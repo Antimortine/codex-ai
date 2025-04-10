@@ -14,11 +14,14 @@
  * limitations under the License.
  */
 
-import React, { useState, useRef, useEffect, useCallback } from 'react'; // Added useCallback
+import React, { useState, useRef, useEffect, useCallback } from 'react';
 import PropTypes from 'prop-types';
 import { queryProjectContext } from '../api/codexApi';
 
-// Basic styling (can be moved to CSS file)
+// --- LocalStorage Key ---
+const getHistoryStorageKey = (projectId) => `codex-ai-chat-${projectId}`;
+
+// Basic styling (remains the same)
 const styles = {
     container: {
         border: '1px solid #ccc',
@@ -81,13 +84,10 @@ const styles = {
         whiteSpace: 'pre-wrap',
         wordWrap: 'break-word',
     },
-    // --- MODIFIED: Source Nodes Area Style ---
     sourceNodesArea: {
-        // marginTop: '10px', // Removed margin, handled by details element
         fontSize: '0.9em',
         color: '#555',
     },
-    // --- ADDED: Details/Summary Styles ---
     detailsSummary: {
         cursor: 'pointer',
         fontWeight: 'bold',
@@ -95,9 +95,8 @@ const styles = {
         color: '#444',
     },
     detailsContent: {
-        paddingTop: '5px', // Add some space below the summary
+        paddingTop: '5px',
     },
-    // --- END ADDED ---
     sourceNode: {
         borderLeft: '3px solid #ddd',
         paddingLeft: '8px',
@@ -128,7 +127,7 @@ const styles = {
     }
 };
 
-// --- Helper Component for Rendering a Single History Entry ---
+// --- Helper Component for Rendering a Single History Entry (Unchanged) ---
 const HistoryEntry = ({ entry }) => {
     const getFilename = (filePath) => {
         if (!filePath) return 'Unknown Source';
@@ -144,7 +143,6 @@ const HistoryEntry = ({ entry }) => {
                 {entry.response && !entry.error && (
                     <>
                         <p>AI: {entry.response.answer}</p>
-                        {/* --- MODIFIED: Wrap source nodes in <details> --- */}
                         {entry.response.source_nodes && entry.response.source_nodes.length > 0 && (
                             <details style={styles.sourceNodesArea}>
                                 <summary style={styles.detailsSummary}>Sources Used ({entry.response.source_nodes.length})</summary>
@@ -158,7 +156,6 @@ const HistoryEntry = ({ entry }) => {
                                 </div>
                             </details>
                         )}
-                        {/* --- END MODIFIED --- */}
                         {entry.response.source_nodes && entry.response.source_nodes.length === 0 && (
                             <p style={styles.sourceNodesArea}><em>(No specific sources retrieved for this answer)</em></p>
                         )}
@@ -173,7 +170,7 @@ HistoryEntry.propTypes = {
     entry: PropTypes.shape({
         id: PropTypes.number.isRequired,
         query: PropTypes.string.isRequired,
-        response: PropTypes.object, // AIQueryResponse structure
+        response: PropTypes.object,
         error: PropTypes.string,
         isLoading: PropTypes.bool,
     }).isRequired,
@@ -187,13 +184,83 @@ function QueryInterface({ projectId }) {
     const [isProcessing, setIsProcessing] = useState(false);
     const nextId = useRef(0);
     const historyEndRef = useRef(null);
-    const formRef = useRef(null); // Ref for the form
+    const formRef = useRef(null);
+    // --- MODIFIED: Initialize isInitialLoad to true ---
+    const isInitialLoad = useRef(true);
+    // --- END MODIFIED ---
 
+    // --- Load history from LocalStorage on mount ---
+    useEffect(() => {
+        if (!projectId) return;
+
+        console.log(`[QueryInterface] Load Effect: Attempting load for project: ${projectId}`);
+        const storageKey = getHistoryStorageKey(projectId);
+        let loadedHistoryData = []; // Default to empty
+        let loadedNextId = 0;
+
+        try {
+            const storedHistory = localStorage.getItem(storageKey);
+            if (storedHistory) {
+                const parsedHistory = JSON.parse(storedHistory);
+                if (Array.isArray(parsedHistory)) {
+                    loadedHistoryData = parsedHistory.map(entry => ({
+                        ...entry,
+                        isLoading: false // Ensure loading is false on load
+                    }));
+                    const maxId = loadedHistoryData.reduce((max, entry) => Math.max(max, entry.id), -1);
+                    loadedNextId = maxId + 1;
+                    console.log(`[QueryInterface] Load Effect: Loaded ${loadedHistoryData.length} entries. Next ID: ${loadedNextId}`);
+                } else {
+                    console.warn(`[QueryInterface] Load Effect: Invalid history data found for key ${storageKey}. Resetting.`);
+                    localStorage.removeItem(storageKey);
+                }
+            } else {
+                console.log(`[QueryInterface] Load Effect: No history found for key ${storageKey}.`);
+            }
+        } catch (error) {
+            console.error("[QueryInterface] Load Effect: Error loading/parsing history:", error);
+        }
+
+        // Set state *after* reading/parsing
+        setHistory(loadedHistoryData);
+        nextId.current = loadedNextId;
+
+        // --- MODIFIED: Set flag *after* state updates are scheduled ---
+        // Use setTimeout to ensure this runs after the current render cycle completes
+        const timerId = setTimeout(() => {
+            console.log("[QueryInterface] Load Effect: Marking initial load as complete.");
+            isInitialLoad.current = false;
+        }, 0);
+
+        // Cleanup function for the timeout
+        return () => clearTimeout(timerId);
+        // --- END MODIFIED ---
+
+    }, [projectId]); // Depend only on projectId
+
+    // --- Save history to LocalStorage on change ---
+    useEffect(() => {
+        // --- MODIFIED: Check flag *inside* the effect ---
+        if (!projectId || isInitialLoad.current) {
+            console.log(`[QueryInterface] Save Effect: Skipping save for project ${projectId}, initial load flag: ${isInitialLoad.current}`);
+            return; // Don't save during initial load phase or if projectId is missing
+        }
+        // --- END MODIFIED ---
+
+        console.log(`[QueryInterface] Save Effect: Saving ${history.length} history entries for project: ${projectId}`);
+        const storageKey = getHistoryStorageKey(projectId);
+        try {
+            localStorage.setItem(storageKey, JSON.stringify(history));
+        } catch (error) {
+            console.error("[QueryInterface] Save Effect: Error saving history:", error);
+        }
+    }, [history, projectId]); // Depend on history and projectId
+
+    // --- Scroll to bottom when history updates ---
     useEffect(() => {
         historyEndRef.current?.scrollIntoView({ behavior: "smooth" });
     }, [history]);
 
-    // --- MODIFIED: Extracted submission logic ---
     const processQuery = useCallback(async () => {
         if (!currentQuery.trim() || isProcessing) return;
 
@@ -243,30 +310,34 @@ function QueryInterface({ projectId }) {
             console.log("[QueryInterface] Setting isProcessing to false.");
             setIsProcessing(false);
         }
-    }, [currentQuery, isProcessing, projectId]); // Dependencies for the callback
-    // --- END MODIFIED ---
+    }, [currentQuery, isProcessing, projectId]);
 
-    // --- Form submit handler ---
     const handleSubmitForm = (e) => {
-        e.preventDefault(); // Prevent default form submission
-        processQuery(); // Call the extracted logic
+        e.preventDefault();
+        processQuery();
     };
-    // --- End Form submit handler ---
 
-    // --- ADDED: Ctrl+Enter handler ---
     const handleKeyDown = (e) => {
         if (e.key === 'Enter' && e.ctrlKey && !isProcessing && currentQuery.trim()) {
-            e.preventDefault(); // Prevent default Enter behavior (newline)
-            processQuery(); // Trigger submission logic
+            e.preventDefault();
+            processQuery();
         }
     };
-    // --- END ADDED ---
 
     const handleNewChat = () => {
         setHistory([]);
         setCurrentQuery('');
         setIsProcessing(false);
         nextId.current = 0;
+        if (projectId) {
+            const storageKey = getHistoryStorageKey(projectId);
+            try {
+                localStorage.removeItem(storageKey);
+                console.log(`[QueryInterface] Cleared history from LocalStorage for key ${storageKey}.`);
+            } catch (error) {
+                console.error("[QueryInterface] Error clearing history from LocalStorage:", error);
+            }
+        }
     };
 
     const historyAreaId = "query-history";
@@ -274,8 +345,8 @@ function QueryInterface({ projectId }) {
 
     return (
         <div style={styles.container}>
-        {/* Hidden element to track processing state */}
-        <div data-testid={isProcessingId} style={{ display: 'none' }} data-processing={isProcessing ? 'true' : 'false'}></div>
+            {/* Hidden element to track processing state */}
+            <div data-testid={isProcessingId} style={{ display: 'none' }} data-processing={isProcessing ? 'true' : 'false'}></div>
             {history.length > 0 && (
                 <div style={styles.historyArea} data-testid={historyAreaId}>
                     {history.map(entry => (
@@ -285,14 +356,12 @@ function QueryInterface({ projectId }) {
                 </div>
             )}
 
-            {/* --- MODIFIED: Added ref and onSubmit --- */}
             <form ref={formRef} onSubmit={handleSubmitForm}>
-            {/* --- END MODIFIED --- */}
                 <textarea
                     style={styles.textarea}
                     value={currentQuery}
                     onChange={(e) => setCurrentQuery(e.target.value)}
-                    onKeyDown={handleKeyDown} // Added keydown handler
+                    onKeyDown={handleKeyDown}
                     placeholder="Ask a question about your project plan, characters, scenes... (Ctrl+Enter to submit)"
                     disabled={isProcessing}
                     rows={3}
