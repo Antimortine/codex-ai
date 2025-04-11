@@ -22,11 +22,9 @@ import {
     listCharacters, createCharacter, deleteCharacter,
     listScenes, createScene, deleteScene,
     generateSceneDraft,
-    splitChapterIntoScenes
+    splitChapterIntoScenes,
+    rebuildProjectIndex // Import the new API function
 } from '../api/codexApi';
-// --- REMOVED: QueryInterface import ---
-// import QueryInterface from '../components/QueryInterface';
-// --- END REMOVED ---
 import ChapterSection from '../components/ChapterSection';
 
 // Styles remain the same...
@@ -44,6 +42,33 @@ const modalStyles = {
     splitCreateButton: { backgroundColor: '#28a745', color: 'white', marginRight: '10px' },
     generatedTitle: { marginTop: '0', marginBottom: '10px', borderBottom: '1px solid #ccc', paddingBottom: '5px' }
 };
+// --- ADDED: Style for rebuild button area ---
+const rebuildStyle = {
+    container: {
+        marginTop: '1rem',
+        padding: '10px',
+        border: '1px dashed #dc3545',
+        backgroundColor: '#f8d7da',
+        borderRadius: '4px',
+    },
+    button: {
+        backgroundColor: '#dc3545',
+        color: 'white',
+        marginRight: '10px',
+    },
+    message: {
+        marginLeft: '10px',
+        fontSize: '0.9em',
+        display: 'inline-block',
+    },
+    error: {
+        color: '#721c24',
+    },
+    success: {
+        color: '#155724',
+    }
+};
+// --- END ADDED ---
 
 
 function ProjectDetailPage() {
@@ -90,6 +115,11 @@ function ProjectDetailPage() {
     const [isSplittingChapter, setIsSplittingChapter] = useState(false);
     const [splittingChapterId, setSplittingChapterId] = useState(null);
     const [splitError, setSplitError] = useState(null);
+    // --- ADDED: State for Rebuild Index ---
+    const [isRebuildingIndex, setIsRebuildingIndex] = useState(false);
+    const [rebuildError, setRebuildError] = useState(null);
+    const [rebuildSuccessMessage, setRebuildSuccessMessage] = useState('');
+    // --- END ADDED ---
     // --- END State variables ---
 
 
@@ -354,22 +384,18 @@ function ProjectDetailPage() {
     const handleCreateScene = useCallback(async (chapterId) => {
         try {
              const r = await createScene(projectId, chapterId, { title: "New Scene", content: "", order: null });
-             // --- MODIFIED: Refresh only this chapter's scenes, don't refresh core data ---
              await refreshData(chapterId, { refreshChapters: false, refreshCharacters: false });
-             // --- END MODIFIED ---
         }
         catch(err) { console.error("Create scene error:", err); setError("Failed to create scene."); }
-    }, [projectId, refreshData]); // Depend on refreshData
+    }, [projectId, refreshData]);
 
     const handleDeleteScene = useCallback(async (chapterId, sceneId, sceneTitle) => {
         if (!window.confirm(`Delete scene "${sceneTitle}"?`)) return;
          try {
              await deleteScene(projectId, chapterId, sceneId);
-             // --- MODIFIED: Refresh only this chapter's scenes, don't refresh core data ---
              await refreshData(chapterId, { refreshChapters: false, refreshCharacters: false });
-             // --- END MODIFIED ---
          } catch(err) { console.error("Error deleting scene:", err); setError("Failed to delete scene."); }
-    }, [projectId, refreshData]); // Depend on refreshData
+    }, [projectId, refreshData]);
 
     // (Other handlers remain the same, calling refreshData appropriately)
     const handleEditNameClick = useCallback(() => { setEditedProjectName(project?.name || ''); setIsEditingName(true); setSaveNameError(null); setSaveNameSuccess(''); }, [project]);
@@ -454,11 +480,7 @@ function ProjectDetailPage() {
         try {
             const titleToSave = generatedSceneTitle;
             const r = await createScene(projectId, chapterIdForGeneratedScene, { title: titleToSave, content: generatedSceneContent, order: null });
-
-            // --- MODIFIED: Refresh only this chapter's scenes, don't refresh core data ---
             await refreshData(chapterIdForGeneratedScene, { refreshChapters: false, refreshCharacters: false });
-            // --- END MODIFIED ---
-
             setShowGeneratedSceneModal(false);
             setGeneratedSceneContent('');
             setGeneratedSceneTitle('');
@@ -550,11 +572,9 @@ function ProjectDetailPage() {
             catch (err) { console.error("Create scene from split error:", err); const msg = err.response?.data?.detail || err.message || `Failed to create scene for "${newSceneData.title}".`; errors.push(msg); }
         }
 
-        // --- MODIFIED: Refresh only this chapter's scenes ---
         if (createdScenes.length > 0) {
             await refreshData(chapterIdForSplits, { refreshChapters: false, refreshCharacters: false });
         }
-        // --- END MODIFIED ---
 
         setIsCreatingScenesFromSplit(false);
         if (errors.length > 0) { setCreateFromSplitError(errors.join(' | ')); }
@@ -581,9 +601,31 @@ function ProjectDetailPage() {
         }
     }, [generationError, chapterIdForGeneratedScene, generatingChapterId]);
 
+    // --- ADDED: Handler for Rebuild Index ---
+    const handleRebuildIndex = useCallback(async () => {
+        if (!window.confirm(`Rebuild the search index for project "${project?.name || projectId}"? This can take a moment and will delete the existing index first.`)) {
+            return;
+        }
+        setIsRebuildingIndex(true);
+        setRebuildError(null);
+        setRebuildSuccessMessage('');
+        try {
+            const response = await rebuildProjectIndex(projectId);
+            setRebuildSuccessMessage(response.data.message || 'Index rebuild initiated successfully!');
+            setTimeout(() => setRebuildSuccessMessage(''), 5000); // Clear message after 5s
+        } catch (err) {
+            console.error("Error rebuilding index:", err);
+            const msg = err.response?.data?.detail || err.message || 'Failed to initiate index rebuild.';
+            setRebuildError(msg);
+        } finally {
+            setIsRebuildingIndex(false);
+        }
+    }, [projectId, project?.name]);
+    // --- END ADDED ---
+
 
     // --- Combined Loading State ---
-    const isAnyOperationLoading = isSavingName || isSavingChapter || isGeneratingScene || isCreatingSceneFromDraft || isSplittingChapter || isCreatingScenesFromSplit;
+    const isAnyOperationLoading = isSavingName || isSavingChapter || isGeneratingScene || isCreatingSceneFromDraft || isSplittingChapter || isCreatingScenesFromSplit || isRebuildingIndex; // Added isRebuildingIndex
 
     // --- Rendering Logic (remains the same) ---
      if (isLoadingProject) {
@@ -640,9 +682,7 @@ function ProjectDetailPage() {
             <p>ID: {projectId}</p>
             {error && <p style={{ color: 'orange', marginTop: '0.2rem' }}>Warning: {error}</p>}
             <hr />
-            {/* --- REMOVED: QueryInterface rendering --- */}
-            {/* {projectId && <QueryInterface projectId={projectId} />} */}
-            {/* --- ADDED: Link to new Query Page --- */}
+            {/* --- Link to Query Page --- */}
             {projectId && (
                 <div style={{ marginBottom: '1rem' }}>
                     <Link to={`/projects/${projectId}/query`} style={{ fontWeight: 'bold', textDecoration: 'none', padding: '8px 12px', border: '1px solid #007bff', borderRadius: '4px', backgroundColor: '#e7f3ff' }}>
@@ -650,7 +690,6 @@ function ProjectDetailPage() {
                     </Link>
                 </div>
             )}
-            {/* --- END ADDED --- */}
             <hr />
 
             {/* --- Sections --- */}
@@ -718,6 +757,25 @@ function ProjectDetailPage() {
                  <h2>Other Content</h2>
                  <ul style={{ listStyle: 'none', paddingLeft: 0 }}> <li style={{ marginBottom: '0.5rem' }}> <Link to={`/projects/${projectId}/plan`}>Edit Plan</Link> </li> <li style={{ marginBottom: '0.5rem' }}> <Link to={`/projects/${projectId}/synopsis`}>Edit Synopsis</Link> </li> <li style={{ marginBottom: '0.5rem' }}> <Link to={`/projects/${projectId}/world`}>Edit World Info</Link> </li> </ul>
             </section>
+
+            {/* --- ADDED: Rebuild Index Section --- */}
+            <hr />
+            <section style={rebuildStyle.container}>
+                <h3>Project Index Management</h3>
+                <p style={{fontSize: '0.9em', color: '#666'}}>If search results seem outdated or incorrect, you can rebuild the project's search index.</p>
+                <button
+                    onClick={handleRebuildIndex}
+                    disabled={isAnyOperationLoading}
+                    style={rebuildStyle.button}
+                    data-testid="rebuild-index-button"
+                >
+                    {isRebuildingIndex ? 'Rebuilding Index...' : 'Rebuild Index'}
+                </button>
+                {rebuildError && <span style={{...rebuildStyle.message, ...rebuildStyle.error}} data-testid="rebuild-error">{rebuildError}</span>}
+                {rebuildSuccessMessage && <span style={{...rebuildStyle.message, ...rebuildStyle.success}} data-testid="rebuild-success">{rebuildSuccessMessage}</span>}
+            </section>
+            {/* --- END ADDED --- */}
+
         </div>
     );
 }

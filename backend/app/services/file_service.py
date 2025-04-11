@@ -20,8 +20,7 @@ from app.core.config import BASE_PROJECT_DIR
 # ---- REMOVE the direct import of index_manager here ----
 # from app.rag.index_manager import index_manager
 import logging
-# --- ADDED: Import List type hint ---
-from typing import List
+from typing import List # Import List
 
 logger = logging.getLogger(__name__)
 
@@ -58,6 +57,12 @@ class FileService:
         """Returns the path to a specific character file."""
         return self._get_characters_dir(project_id) / f"{character_id}.md"
 
+    # --- ADDED: Notes Path Helper ---
+    def _get_notes_dir(self, project_id: str) -> Path:
+        """Returns the path to the notes directory within a project."""
+        return self._get_project_path(project_id) / "notes"
+    # --- END ADDED ---
+
     def _get_content_block_path(self, project_id: str, block_name: str) -> Path:
         """Returns the path to a content block file (plan, synopsis, world)."""
         allowed_blocks = {"plan.md", "synopsis.md", "world.md"}
@@ -73,11 +78,9 @@ class FileService:
          """Path to the chapter's metadata file (contains scene info)."""
          return self._get_chapter_path(project_id, chapter_id) / "chapter_meta.json"
 
-    # --- ADDED: Chat History Path Helper ---
     def _get_chat_history_path(self, project_id: str) -> Path:
         """Path to the project's chat history file."""
         return self._get_project_path(project_id) / "chat_history.json"
-    # --- END ADDED ---
 
 
     # --- Core File Operations ---
@@ -119,14 +122,18 @@ class FileService:
                  # ---- Local Import ----
                  from app.rag.index_manager import index_manager
                  # ---------------------
-                 try:
-                     logger.info(f"Content updated for {path.name}, triggering indexing...")
-                     # Call index_file asynchronously if it becomes async, otherwise call directly
-                     # await index_manager.index_file(path) # If index_file is async
-                     index_manager.index_file(path) # If index_file is sync
-                 except Exception as e:
-                     # Log error but don't necessarily fail the write operation
-                     logger.error(f"ERROR: Failed to trigger indexing for {path.name}: {e}", exc_info=True)
+                 if index_manager: # Check if index_manager initialized successfully
+                     try:
+                         logger.info(f"Content updated for {path.name}, triggering indexing...")
+                         # Call index_file asynchronously if it becomes async, otherwise call directly
+                         # await index_manager.index_file(path) # If index_file is async
+                         index_manager.index_file(path) # If index_file is sync
+                     except Exception as e:
+                         # Log error but don't necessarily fail the write operation
+                         logger.error(f"ERROR: Failed to trigger indexing for {path.name}: {e}", exc_info=True)
+                 else:
+                     logger.error("IndexManager not available, skipping indexing trigger.")
+
 
         except IOError as e:
             logger.error(f"Error writing file {path}: {e}")
@@ -161,12 +168,16 @@ class FileService:
              # ---- Local Import ----
              from app.rag.index_manager import index_manager
              # ---------------------
-             try:
-                 logger.info(f"Attempting deletion from index before deleting file: {path}")
-                 # await index_manager.delete_doc(path) # If delete_doc is async
-                 index_manager.delete_doc(path) # If delete_doc is sync
-             except Exception as e:
-                 logger.warning(f"Error deleting document {path.name} from index during file delete: {e}")
+             if index_manager: # Check if index_manager initialized successfully
+                 try:
+                     logger.info(f"Attempting deletion from index before deleting file: {path}")
+                     # await index_manager.delete_doc(path) # If delete_doc is async
+                     index_manager.delete_doc(path) # If delete_doc is sync
+                 except Exception as e:
+                     logger.warning(f"Error deleting document {path.name} from index during file delete: {e}")
+             else:
+                 logger.error("IndexManager not available, skipping index deletion trigger.")
+
 
         if not self.path_exists(path):
              if should_delete_from_index:
@@ -191,15 +202,18 @@ class FileService:
              # ---- Local Import ----
             from app.rag.index_manager import index_manager
              # ---------------------
-            markdown_files = list(path.rglob('*.md'))
-            for md_file in markdown_files:
-                if BASE_PROJECT_DIR.resolve() in md_file.resolve().parents:
-                    try:
-                        logger.info(f"Attempting deletion from index for: {md_file}")
-                         # await index_manager.delete_doc(md_file) # If delete_doc is async
-                        index_manager.delete_doc(md_file) # If delete_doc is sync
-                    except Exception as e:
-                        logger.warning(f"Error deleting document {md_file.name} from index during directory delete: {e}")
+            if index_manager: # Check if index_manager initialized successfully
+                markdown_files = list(path.rglob('*.md'))
+                for md_file in markdown_files:
+                    if BASE_PROJECT_DIR.resolve() in md_file.resolve().parents:
+                        try:
+                            logger.info(f"Attempting deletion from index for: {md_file}")
+                            # await index_manager.delete_doc(md_file) # If delete_doc is async
+                            index_manager.delete_doc(md_file) # If delete_doc is sync
+                        except Exception as e:
+                            logger.warning(f"Error deleting document {md_file.name} from index during directory delete: {e}")
+            else:
+                logger.error("IndexManager not available, skipping index deletion during directory delete.")
 
         if not self.path_exists(path):
              logger.info(f"Directory {path.name} not found for deletion (might have been deleted after index removal attempt).")
@@ -226,6 +240,23 @@ class FileService:
         try: return [f.stem for f in path.iterdir() if f.is_file() and f.suffix.lower() == '.md']
         except OSError as e: logger.error(f"Error listing markdown files in {path}: {e}"); return []
 
+    # --- ADDED: Method to get all markdown paths ---
+    def get_all_markdown_paths(self, project_id: str) -> List[Path]:
+        """Recursively finds all .md files within a project directory."""
+        project_path = self._get_project_path(project_id)
+        if not self.path_exists(project_path) or not project_path.is_dir():
+            logger.warning(f"Project path not found or not a directory: {project_path}")
+            return []
+        try:
+            # Use rglob to find all .md files recursively
+            md_paths = list(project_path.rglob('*.md'))
+            logger.info(f"Found {len(md_paths)} markdown files in project {project_id}")
+            return md_paths
+        except Exception as e:
+            logger.error(f"Error finding markdown files in {project_path}: {e}", exc_info=True)
+            return []
+    # --- END ADDED ---
+
 
     # --- Specific Structure Creators ---
     def setup_project_structure(self, project_id: str):
@@ -234,6 +265,7 @@ class FileService:
         self.create_directory(project_path)
         self.create_directory(self._get_chapters_dir(project_id))
         self.create_directory(self._get_characters_dir(project_id))
+        self.create_directory(self._get_notes_dir(project_id)) # Create notes dir
         # Write initial files - use trigger_index=True for content blocks
         self.write_text_file(self._get_content_block_path(project_id, "plan.md"), "", trigger_index=True)
         self.write_text_file(self._get_content_block_path(project_id, "synopsis.md"), "", trigger_index=True)
@@ -310,7 +342,7 @@ class FileService:
             logger.error(f"Failed to write chapter metadata for {chapter_id} in {project_id}: {e.detail}")
             raise e
 
-    # --- ADDED: Chat History Methods ---
+    # --- Chat History Methods ---
     def read_chat_history(self, project_id: str) -> List[dict]:
         """Reads the chat_history.json file for a given project."""
         history_path = self._get_chat_history_path(project_id)
@@ -344,7 +376,6 @@ class FileService:
         except HTTPException as e:
             logger.error(f"Failed to write chat history for {project_id}: {e.detail}")
             raise e
-    # --- END ADDED ---
 
 
 # Create a single instance

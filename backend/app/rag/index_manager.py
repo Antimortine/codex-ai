@@ -16,7 +16,7 @@ import logging
 from pathlib import Path
 import os
 import torch
-from typing import Optional, Dict, Any
+from typing import Optional, Dict, Any, List # Import List
 
 from llama_index.core import (
     VectorStoreIndex,
@@ -25,14 +25,15 @@ from llama_index.core import (
     Settings as LlamaSettings,
     load_index_from_storage,
 )
+# --- ADDED: Import for metadata filtering ---
+from llama_index.core.vector_stores import ExactMatchFilter, MetadataFilters
+# --- END ADDED ---
 from llama_index.vector_stores.chroma import ChromaVectorStore
 from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 from llama_index.llms.google_genai import GoogleGenAI
 import chromadb
 from app.core.config import settings, BASE_PROJECT_DIR
-# --- MODIFIED: Import file_service instance directly ---
 from app.services.file_service import file_service
-# --- END MODIFIED ---
 
 
 logger = logging.getLogger(__name__)
@@ -136,7 +137,6 @@ class IndexManager:
         Determines the document type and title based on its path and project metadata.
         Returns a dictionary containing 'document_type' and 'document_title'.
         """
-        # Default title is now full filename for Unknown, stem for Note
         default_title = file_path.name
         details = {'document_type': 'Unknown', 'document_title': default_title}
         fs = file_service
@@ -152,7 +152,6 @@ class IndexManager:
                 details = {'document_type': 'Character', 'document_title': char_name or character_id}
             elif len(relative_path_parts) > 2 and relative_path_parts[0] == 'chapters' and relative_path_parts[2].endswith('.md'):
                 chapter_id = relative_path_parts[1]; scene_id = file_path.stem
-                # --- REVISED: Scene title logic ---
                 scene_title = scene_id # Default to ID
                 try:
                     chapter_meta = fs.read_chapter_metadata(project_id, chapter_id)
@@ -166,7 +165,6 @@ class IndexManager:
                 except Exception as e:
                     logger.warning(f"Could not read chapter metadata for {chapter_id} to get scene title for {scene_id}: {e}. Using ID '{scene_id}' as title.")
                 details = {'document_type': 'Scene', 'document_title': scene_title}
-                # --- END REVISED ---
             elif len(relative_path_parts) > 1 and relative_path_parts[0] == 'notes' and file_path.suffix == '.md':
                 details = {'document_type': 'Note', 'document_title': file_path.stem} # Use stem for Note title
         except Exception as e: logger.error(f"Error determining document details for {file_path}: {e}", exc_info=True)
@@ -205,11 +203,9 @@ class IndexManager:
             except Exception as delete_error: logger.warning(f"Could not delete nodes for doc_id {doc_id} (may not have existed): {delete_error}")
 
             logger.debug(f"Loading document content from: {file_path}")
-            # --- file_metadata_func remains the same, relying on corrected _get_document_details ---
             def file_metadata_func(file_name: str) -> Dict[str, Any]:
                  current_path = Path(file_name)
                  current_project_id = self._extract_project_id(current_path)
-                 # Call the instance method to get details
                  current_details = self._get_document_details(current_path, current_project_id) if current_project_id else {}
                  meta = {
                      "file_path": file_name,
@@ -217,14 +213,10 @@ class IndexManager:
                      "document_type": current_details.get('document_type', 'Unknown'),
                      "document_title": current_details.get('document_title', current_path.name) # Use full name as fallback
                  }
-                 # Add character_name specifically if it's a character doc
                  if meta["document_type"] == "Character":
                      meta["character_name"] = meta["document_title"]
-                 # --- ADDED: Log the generated metadata ---
                  logger.debug(f"Generated metadata for {file_name}: {meta}")
-                 # --- END ADDED ---
                  return meta
-            # --- END ---
 
             reader = SimpleDirectoryReader(input_files=[file_path], file_metadata=file_metadata_func)
             documents = reader.load_data()
@@ -253,6 +245,60 @@ class IndexManager:
             logger.info(f"Successfully deleted nodes for file {file_path} from index (if they existed).")
         except Exception as e: logger.error(f"Error deleting document from index for file {file_path} (ref_doc_id: {doc_id}): {e}", exc_info=True)
 
+    # --- ADDED: Method to delete all docs for a project ---
+    def delete_project_docs(self, project_id: str):
+        """
+        Deletes all nodes associated with a specific project_id from the index.
+        """
+        if not self.index or not self.vector_store:
+            logger.error("Index or VectorStore not initialized. Cannot delete project docs.")
+            return
+
+        logger.info(f"Attempting to delete all indexed documents for project_id: {project_id}")
+        try:
+            # We need to retrieve nodes by metadata first to get their ref_doc_ids
+            # This might be inefficient for very large projects.
+            # LlamaIndex doesn't offer a direct delete_by_metadata across the board.
+            # We query for *all* nodes matching the project_id.
+            # Note: This relies on the underlying vector store supporting metadata filtering on retrieval. Chroma does.
+            retriever = self.index.as_retriever(
+                similarity_top_k=10000, # Retrieve a large number to likely get all
+                filters=MetadataFilters(filters=[ExactMatchFilter(key="project_id", value=project_id)])
+            )
+            # Use synchronous retrieve here as this method is synchronous
+            nodes_to_delete = retriever.retrieve(f"Retrieve all documents for project {project_id}") # Query text doesn't matter much here
+
+            if not nodes_to_delete:
+                logger.info(f"No documents found in index for project_id: {project_id}. Nothing to delete.")
+                return
+
+            # Collect unique ref_doc_ids (file paths)
+            ref_doc_ids_to_delete = set()
+            for node_with_score in nodes_to_delete:
+                if node_with_score.node.ref_doc_id:
+                    ref_doc_ids_to_delete.add(node_with_score.node.ref_doc_id)
+                else:
+                    logger.warning(f"Node {node_with_score.node.node_id} found for project {project_id} but lacks ref_doc_id. Cannot guarantee full deletion.")
+
+            logger.info(f"Found {len(ref_doc_ids_to_delete)} unique ref_doc_ids (files) to delete for project {project_id}.")
+
+            deleted_count = 0
+            errors = 0
+            for ref_doc_id in ref_doc_ids_to_delete:
+                try:
+                    logger.debug(f"Deleting nodes for ref_doc_id: {ref_doc_id}")
+                    self.index.delete_ref_doc(ref_doc_id=ref_doc_id, delete_from_docstore=True)
+                    deleted_count += 1
+                except Exception as e:
+                    errors += 1
+                    logger.error(f"Error deleting document from index for ref_doc_id {ref_doc_id}: {e}", exc_info=True)
+
+            logger.info(f"Finished deleting documents for project {project_id}. Deleted nodes for {deleted_count} files with {errors} errors.")
+
+        except Exception as e:
+            logger.error(f"Unexpected error during delete_project_docs for project {project_id}: {e}", exc_info=True)
+    # --- END ADDED ---
+
 
 # --- ADDED: Instantiate Singleton ---
 try:
@@ -264,8 +310,3 @@ except Exception as e:
     # Optionally re-raise or handle differently depending on desired app behavior on init failure
     # raise RuntimeError(f"Failed to initialize IndexManager: {e}") from e
 # --- END ADDED ---
-
-# --- REMOVED Placeholder and Initializer Function ---
-# index_manager: Optional[IndexManager] = None
-# def initialize_index_manager(): ...
-# --- END REMOVED ---

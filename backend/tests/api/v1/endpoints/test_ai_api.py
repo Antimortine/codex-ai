@@ -31,6 +31,9 @@ from app.models.ai import (
     AIRephraseRequest, AIRephraseResponse,
     AIChapterSplitRequest, AIChapterSplitResponse, ProposedScene
 )
+# --- ADDED: Import Message model ---
+from app.models.common import Message
+# --- END ADDED ---
 from app.models.project import ProjectRead
 from app.models.chapter import ChapterRead
 # Import LlamaIndex types for mocking service return values
@@ -57,6 +60,7 @@ def mock_chapter_exists(*args, **kwargs):
     chapter_id_arg = kwargs.get('chapter_id')
     if chapter_id_arg == NON_EXISTENT_CHAPTER_ID:
          raise HTTPException(status_code=404, detail=f"Chapter {chapter_id_arg} not found in project {project_id_arg}")
+    # Assume project exists if chapter check is reached
     return ChapterRead(id=chapter_id_arg, project_id=project_id_arg, title=f"Mock Chapter {chapter_id_arg}", order=1)
 
 # --- Test AI Query Endpoint ---
@@ -66,17 +70,23 @@ def test_query_project_success(mock_project_dep: MagicMock, mock_ai_svc: MagicMo
     mock_project_dep.get_by_id.side_effect = mock_project_exists
     query_data = {"query": "What is the plan?"}
     mock_answer = "The plan is to succeed."
-    mock_node1 = NodeWithScore(node=TextNode(id_='n1', text="Source 1", metadata={'file_path': 'plan.md'}), score=0.9)
+    # --- MODIFIED: Expect filtered nodes ---
+    # Example: Assume node1 (plan.md) is filtered out
     mock_node2 = NodeWithScore(node=TextNode(id_='n2', text="Source 2", metadata={'file_path': 'scenes/s1.md'}), score=0.8)
-    # Mock service returns 3-tuple
+    mock_filtered_nodes = [mock_node2]
+    # --- END MODIFIED ---
     mock_direct_sources_info = [{"type": "Plan", "name": "Project Plan"}] # Now a list
-    mock_ai_svc.query_project = AsyncMock(return_value=(mock_answer, [mock_node1, mock_node2], mock_direct_sources_info))
+    # --- MODIFIED: Mock service returns filtered nodes ---
+    mock_ai_svc.query_project = AsyncMock(return_value=(mock_answer, mock_filtered_nodes, mock_direct_sources_info))
+    # --- END MODIFIED ---
     response = client.post(f"/api/v1/ai/query/{PROJECT_ID}", json=query_data)
     assert response.status_code == status.HTTP_200_OK
     response_data = response.json()
     assert response_data["answer"] == mock_answer
-    assert len(response_data["source_nodes"]) == 2
-    # Assert direct_sources (plural)
+    # --- MODIFIED: Assert based on filtered nodes ---
+    assert len(response_data["source_nodes"]) == 1
+    assert response_data["source_nodes"][0]["id"] == "n2"
+    # --- END MODIFIED ---
     assert response_data["direct_sources"] == mock_direct_sources_info
 
 @patch('app.api.v1.endpoints.ai.ai_service', autospec=True)
@@ -85,14 +95,13 @@ def test_query_project_no_sources(mock_project_dep: MagicMock, mock_ai_svc: Magi
     mock_project_dep.get_by_id.side_effect = mock_project_exists
     query_data = {"query": "Anything about dragons?"}
     mock_answer = "No mention of dragons found."
-    # Mock service returns 3-tuple (with None for direct sources list)
+    # Mock service returns 3-tuple (with empty list for nodes and None for direct sources)
     mock_ai_svc.query_project = AsyncMock(return_value=(mock_answer, [], None))
     response = client.post(f"/api/v1/ai/query/{PROJECT_ID}", json=query_data)
     assert response.status_code == status.HTTP_200_OK
     response_data = response.json()
     assert response_data["answer"] == mock_answer
     assert response_data["source_nodes"] == []
-    # Assert direct_sources is None
     assert response_data["direct_sources"] is None
 
 @patch('app.api.v1.endpoints.ai.ai_service', autospec=True)
@@ -223,3 +232,49 @@ def test_split_chapter_dependency_error(mock_chapter_dep: MagicMock, mock_ai_svc
     response = client.post(f"/api/v1/ai/split/chapter/{PROJECT_ID}/{NON_EXISTENT_CHAPTER_ID}", json=split_request_data)
     assert response.status_code == status.HTTP_404_NOT_FOUND
     assert response.json() == {"detail": error_detail}
+
+
+# --- ADDED: Tests for Rebuild Index Endpoint ---
+@patch('app.api.v1.endpoints.ai.ai_service', autospec=True)
+@patch('app.api.v1.endpoints.content_blocks.project_service', autospec=True)
+def test_rebuild_index_success(mock_project_dep: MagicMock, mock_ai_svc: MagicMock):
+    """Test successful index rebuild initiation."""
+    mock_project_dep.get_by_id.side_effect = mock_project_exists
+    mock_ai_svc.rebuild_project_index = AsyncMock(return_value=None) # AsyncMock for async endpoint
+
+    response = client.post(f"/api/v1/ai/rebuild_index/{PROJECT_ID}")
+
+    assert response.status_code == status.HTTP_200_OK
+    assert response.json() == {"message": f"Index rebuild initiated for project {PROJECT_ID}."}
+    mock_project_dep.get_by_id.assert_called_once_with(project_id=PROJECT_ID)
+    mock_ai_svc.rebuild_project_index.assert_awaited_once_with(project_id=PROJECT_ID)
+
+@patch('app.api.v1.endpoints.ai.ai_service', autospec=True)
+@patch('app.api.v1.endpoints.content_blocks.project_service', autospec=True)
+def test_rebuild_index_project_not_found(mock_project_dep: MagicMock, mock_ai_svc: MagicMock):
+    """Test index rebuild when project is not found (404 from dependency)."""
+    error_detail = f"Project {NON_EXISTENT_PROJECT_ID} not found"
+    mock_project_dep.get_by_id.side_effect = HTTPException(status_code=404, detail=error_detail)
+
+    response = client.post(f"/api/v1/ai/rebuild_index/{NON_EXISTENT_PROJECT_ID}")
+
+    assert response.status_code == status.HTTP_404_NOT_FOUND
+    assert response.json() == {"detail": error_detail}
+    mock_project_dep.get_by_id.assert_called_once_with(project_id=NON_EXISTENT_PROJECT_ID)
+    mock_ai_svc.rebuild_project_index.assert_not_awaited()
+
+@patch('app.api.v1.endpoints.ai.ai_service', autospec=True)
+@patch('app.api.v1.endpoints.content_blocks.project_service', autospec=True)
+def test_rebuild_index_service_error(mock_project_dep: MagicMock, mock_ai_svc: MagicMock):
+    """Test index rebuild when the service raises an error."""
+    mock_project_dep.get_by_id.side_effect = mock_project_exists
+    error_detail = "Failed to process index rebuild due to an internal error."
+    mock_ai_svc.rebuild_project_index = AsyncMock(side_effect=HTTPException(status_code=500, detail=error_detail))
+
+    response = client.post(f"/api/v1/ai/rebuild_index/{PROJECT_ID}")
+
+    assert response.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
+    assert response.json() == {"detail": error_detail}
+    mock_project_dep.get_by_id.assert_called_once_with(project_id=PROJECT_ID)
+    mock_ai_svc.rebuild_project_index.assert_awaited_once_with(project_id=PROJECT_ID)
+# --- END ADDED ---

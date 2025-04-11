@@ -40,8 +40,7 @@ vi.mock('../api/codexApi', async (importOriginal) => {
     generateSceneDraft: vi.fn(),
     splitChapterIntoScenes: vi.fn(),
     updateChapter: vi.fn(),
-    // --- REMOVED: queryProjectContext mock (no longer used here) ---
-    // queryProjectContext: vi.fn(),
+    rebuildProjectIndex: vi.fn(), // Mock the new API call
   };
 });
 
@@ -101,11 +100,6 @@ vi.mock('../components/ChapterSection', () => ({
     }
 }));
 
-// --- REMOVED: QueryInterface mock (no longer needed here) ---
-// vi.mock('../components/QueryInterface', () => ({
-//     default: ({ projectId }) => <div data-testid="mock-query-interface">Query for {projectId}</div>
-// }));
-
 // Import the component *after* mocks
 import ProjectDetailPage from './ProjectDetailPage';
 // Import mocked functions
@@ -124,8 +118,7 @@ import {
   generateSceneDraft,
   splitChapterIntoScenes,
   updateChapter,
-  // --- REMOVED: queryProjectContext import ---
-  // queryProjectContext,
+  rebuildProjectIndex // Import the new mock
 } from '../api/codexApi';
 
 // Helper function to flush promises
@@ -143,9 +136,7 @@ const renderWithRouterAndParams = (ui, { initialEntries, ...options } = {}) => {
         <Route path="/projects/:projectId/world" element={<div>World Mock</div>} />
         <Route path="/projects/:projectId/characters/:characterId" element={<div>Character Mock</div>} />
         <Route path="/projects/:projectId/chapters/:chapterId/scenes/:sceneId" element={<div>Scene Mock</div>} />
-        {/* --- ADDED: Route for Query Page (for link testing) --- */}
         <Route path="/projects/:projectId/query" element={<div>Query Page Mock</div>} />
-        {/* --- END ADDED --- */}
       </Routes>
     </MemoryRouter>,
     options
@@ -187,10 +178,11 @@ describe('ProjectDetailPage', () => {
     deleteScene.mockResolvedValue({});
     generateSceneDraft.mockResolvedValue({ data: { title: "Default Gen Title", content: "Default generated content." } });
     splitChapterIntoScenes.mockResolvedValue({ data: { proposed_scenes: [{suggested_title: "Scene 1", content: "Part one."},{suggested_title: "Scene 2", content: "Part two."}] } });
+    rebuildProjectIndex.mockResolvedValue({ data: { message: "Index rebuild initiated." } }); // Mock rebuild success
     window.confirm = vi.fn(() => true);
   });
 
-  // --- Basic Rendering & CRUD Tests (Mostly Unchanged) ---
+  // --- Basic Rendering & CRUD Tests (Unchanged) ---
   it('renders loading state initially', async () => { /* ... */ });
   it('renders project details after successful fetch', async () => { /* ... */ });
   it('renders error state if fetching project details fails', async () => { /* ... */ });
@@ -215,8 +207,6 @@ describe('ProjectDetailPage', () => {
     const queryLink = screen.getByRole('link', { name: /chat with ai about this project/i });
     expect(queryLink).toBeInTheDocument();
     expect(queryLink).toHaveAttribute('href', `/projects/${TEST_PROJECT_ID}/query`);
-    // --- REMOVED: Check for QueryInterface ---
-    // expect(screen.queryByTestId('mock-query-interface')).not.toBeInTheDocument();
   });
   // --- End Test for Query Link ---
 
@@ -230,5 +220,81 @@ describe('ProjectDetailPage', () => {
   // --- Test Chapter Title Editing Integration (Unchanged) ---
   it('allows editing chapter title via ChapterSection', async () => { /* ... */ });
   // --- End Chapter Title Editing ---
+
+  // --- ADDED: Tests for Rebuild Index ---
+  describe('Rebuild Index Feature', () => {
+    it('renders the rebuild index button', async () => {
+        await renderAndWaitForLoad([`/projects/${TEST_PROJECT_ID}`]);
+        expect(screen.getByTestId('rebuild-index-button')).toBeInTheDocument();
+        expect(screen.getByRole('button', { name: /rebuild index/i })).toBeEnabled();
+    });
+
+    it('calls rebuildProjectIndex API when button is clicked and confirmed', async () => {
+        const user = userEvent.setup();
+        await renderAndWaitForLoad([`/projects/${TEST_PROJECT_ID}`]);
+        const rebuildButton = screen.getByTestId('rebuild-index-button');
+
+        await user.click(rebuildButton);
+
+        expect(window.confirm).toHaveBeenCalledTimes(1);
+        expect(rebuildProjectIndex).toHaveBeenCalledTimes(1);
+        expect(rebuildProjectIndex).toHaveBeenCalledWith(TEST_PROJECT_ID);
+
+        // Check for success message
+        expect(await screen.findByTestId('rebuild-success')).toBeInTheDocument();
+        expect(screen.getByTestId('rebuild-success')).toHaveTextContent(/Index rebuild initiated/i);
+    });
+
+    it('does not call rebuildProjectIndex API when confirmation is cancelled', async () => {
+        const user = userEvent.setup();
+        window.confirm = vi.fn(() => false); // Simulate cancel
+        await renderAndWaitForLoad([`/projects/${TEST_PROJECT_ID}`]);
+        const rebuildButton = screen.getByTestId('rebuild-index-button');
+
+        await user.click(rebuildButton);
+
+        expect(window.confirm).toHaveBeenCalledTimes(1);
+        expect(rebuildProjectIndex).not.toHaveBeenCalled();
+        expect(screen.queryByTestId('rebuild-success')).not.toBeInTheDocument();
+        expect(screen.queryByTestId('rebuild-error')).not.toBeInTheDocument();
+    });
+
+    it('disables button and shows loading text during rebuild', async () => {
+        const user = userEvent.setup();
+        // Make API call take time
+        rebuildProjectIndex.mockImplementation(() => new Promise(resolve => setTimeout(() => resolve({ data: { message: 'Done' } }), 100)));
+        await renderAndWaitForLoad([`/projects/${TEST_PROJECT_ID}`]);
+        const rebuildButton = screen.getByTestId('rebuild-index-button');
+
+        await user.click(rebuildButton); // Click and confirm
+
+        // Check state during the API call
+        expect(rebuildButton).toBeDisabled();
+        expect(screen.getByRole('button', { name: /rebuilding index.../i })).toBeInTheDocument();
+
+        // Wait for the call to finish
+        await waitFor(() => {
+            expect(rebuildButton).toBeEnabled();
+        });
+        expect(screen.queryByRole('button', { name: /rebuilding index.../i })).not.toBeInTheDocument();
+        expect(screen.getByRole('button', { name: /rebuild index/i })).toBeInTheDocument();
+    });
+
+    it('displays error message if rebuild API call fails', async () => {
+        const user = userEvent.setup();
+        const errorMsg = "Index rebuild failed on server";
+        rebuildProjectIndex.mockRejectedValue({ response: { data: { detail: errorMsg } } });
+        await renderAndWaitForLoad([`/projects/${TEST_PROJECT_ID}`]);
+        const rebuildButton = screen.getByTestId('rebuild-index-button');
+
+        await user.click(rebuildButton); // Click and confirm
+
+        // Wait for error message
+        expect(await screen.findByTestId('rebuild-error')).toBeInTheDocument();
+        expect(screen.getByTestId('rebuild-error')).toHaveTextContent(errorMsg);
+        expect(screen.queryByTestId('rebuild-success')).not.toBeInTheDocument();
+    });
+  });
+  // --- END ADDED ---
 
 });

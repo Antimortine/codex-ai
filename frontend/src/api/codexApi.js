@@ -76,8 +76,11 @@ export const rephraseText = (projectId, requestData) => {
 export const splitChapterIntoScenes = (projectId, chapterId, requestData = {}) => {
     return apiClient.post(`/ai/split/chapter/${projectId}/${chapterId}`, requestData);
 };
+// --- ADDED: Rebuild Index Endpoint ---
+export const rebuildProjectIndex = (projectId) => apiClient.post(`/ai/rebuild_index/${projectId}`);
+// --- END ADDED ---
 
-// --- ADDED: Chat History Endpoints ---
+// --- Chat History Endpoints ---
 /**
  * Gets the chat history for a project.
  * @param {string} projectId - The ID of the project.
@@ -92,10 +95,16 @@ export const getChatHistory = (projectId) => apiClient.get(`/projects/${projectI
  * @returns {Promise<AxiosResponse<any>>} - Returns the saved history.
  */
 export const updateChatHistory = (projectId, data) => apiClient.put(`/projects/${projectId}/chat_history`, data);
-// --- END ADDED ---
 
 
 // Optional: Add interceptors for error handling or adding auth tokens later
-// ... (interceptor unchanged) ...
+apiClient.interceptors.response.use(
+  response => response,
+  error => {
+    // Log or handle errors globally
+    console.error('API call error:', error.response || error.message || error);
+    return Promise.reject(error);
+  }
+);
 
 export default apiClient; // Can also export individual functions

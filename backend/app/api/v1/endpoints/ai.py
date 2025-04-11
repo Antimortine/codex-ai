@@ -29,6 +29,9 @@ from app.models.ai import (
     AIChapterSplitRequest,
     AIChapterSplitResponse
 )
+# --- ADDED: Import Message model ---
+from app.models.common import Message
+# --- END ADDED ---
 # Import dependencies for checking project/chapter existence
 from app.api.v1.endpoints.content_blocks import get_project_dependency
 from app.api.v1.endpoints.scenes import get_chapter_dependency
@@ -154,3 +157,33 @@ async def split_chapter_into_scenes(
         return AIChapterSplitResponse(proposed_scenes=proposed_scenes)
     except HTTPException as http_exc: logger.warning(f"HTTPException during chapter split for project {project_id}, chapter {chapter_id}: {http_exc.status_code} - {http_exc.detail}"); raise http_exc
     except Exception as e: logger.error(f"Unexpected error processing AI chapter split for project {project_id}, chapter {chapter_id}: {e}", exc_info=True); raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to process AI chapter split for project {project_id}, chapter {chapter_id} due to an internal error.")
+
+# --- ADDED: Rebuild Index Endpoint ---
+@router.post(
+    "/rebuild_index/{project_id}",
+    response_model=Message,
+    status_code=status.HTTP_200_OK,
+    summary="Rebuild Project Index",
+    description="Deletes all existing index entries for the specified project and re-indexes all its current markdown files. Use this if you suspect the index is out of sync."
+)
+async def rebuild_project_index_endpoint(
+    project_id: str = Depends(get_project_dependency) # Ensures project exists
+):
+    """
+    Triggers a full rebuild of the vector index for a specific project.
+
+    - **project_id**: The UUID of the project to rebuild the index for.
+    """
+    logger.info(f"Received request to rebuild index for project ID: {project_id}")
+    try:
+        # Call the AIService method (assuming it's async, adjust if not)
+        await ai_service.rebuild_project_index(project_id=project_id)
+        logger.info(f"Successfully initiated index rebuild for project {project_id}")
+        return Message(message=f"Index rebuild initiated for project {project_id}.")
+    except HTTPException as http_exc:
+        logger.warning(f"HTTPException during index rebuild for project {project_id}: {http_exc.status_code} - {http_exc.detail}")
+        raise http_exc
+    except Exception as e:
+        logger.error(f"Unexpected error processing index rebuild for project {project_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to process index rebuild for project {project_id} due to an internal error.")
+# --- END ADDED ---

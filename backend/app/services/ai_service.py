@@ -227,6 +227,37 @@ class AIService:
         except HTTPException as http_exc: logger.error(f"HTTP Exception during chapter split delegation: {http_exc.detail}", exc_info=True); raise http_exc
         except Exception as e: logger.error(f"Unexpected error during chapter split delegation: {e}", exc_info=True); raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred during AI chapter splitting.")
 
+    # --- ADDED: Rebuild Index Method ---
+    async def rebuild_project_index(self, project_id: str):
+        """
+        Deletes and rebuilds the vector index for a specific project.
+        """
+        logger.info(f"AIService: Received request to rebuild index for project {project_id}")
+        if self.rag_engine is None:
+            logger.error("AIService: Cannot rebuild index, RagEngine not ready.")
+            raise HTTPException(status_code=503, detail="AI Engine not ready.")
+
+        try:
+            # 1. Get all markdown file paths for the project
+            logger.info(f"AIService: Finding all markdown files for project {project_id}...")
+            markdown_paths = self.file_service.get_all_markdown_paths(project_id)
+            if not markdown_paths:
+                logger.warning(f"AIService: No markdown files found for project {project_id}. Index rebuild might not be necessary or project is empty.")
+                # Continue to ensure deletion happens if index exists but files were removed manually
+                # return # Or maybe return early? Let's proceed to delete step.
+
+            # 2. Delegate to RagEngine to perform deletion and re-indexing
+            logger.info(f"AIService: Delegating index rebuild for {len(markdown_paths)} files to RagEngine...")
+            # Assuming RagEngine.rebuild_index is synchronous for now
+            # If it becomes async, use 'await' here.
+            self.rag_engine.rebuild_index(project_id, markdown_paths)
+            logger.info(f"AIService: Index rebuild delegation complete for project {project_id}.")
+
+        except Exception as e:
+            logger.error(f"AIService: Unexpected error during index rebuild for project {project_id}: {e}", exc_info=True)
+            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to rebuild index for project {project_id} due to an internal error.")
+    # --- END ADDED ---
+
 
 # --- Instantiate Singleton ---
 try: ai_service = AIService()
