@@ -146,10 +146,25 @@ const styles = {
 
 // --- Helper Component for Rendering a Single History Entry ---
 const HistoryEntry = ({ entry }) => {
-    const getFilename = (filePath) => {
-        if (!filePath) return 'Unknown Source';
-        return filePath.split(/[\\/]/).pop();
-    }
+    // --- MODIFIED: Helper to get display title/filename ---
+    const getSourceDisplay = (metadata) => {
+        if (!metadata) return 'Unknown Source';
+        const title = metadata.document_title;
+        const filePath = metadata.file_path;
+        const filename = filePath ? filePath.split(/[\\/]/).pop() : 'Unknown File';
+        const type = metadata.document_type || 'Unknown';
+
+        // Prioritize title if it exists and isn't just the scene ID (UUID format check)
+        const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
+        const titleIsLikelyId = title && uuidRegex.test(title);
+
+        if (title && !titleIsLikelyId) {
+            return `${type}: "${title}"`; // Use title if available and not an ID
+        }
+        // Fallback to filename
+        return `${type}: ${filename}`;
+    };
+    // --- END MODIFIED ---
 
     const directSources = entry.response?.direct_sources; // Use plural
     const hasDirectSources = directSources && Array.isArray(directSources) && directSources.length > 0;
@@ -190,7 +205,9 @@ const HistoryEntry = ({ entry }) => {
                                 <div style={styles.detailsContent}>
                                     {retrievedSources.map((node) => (
                                         <div key={node.id} style={styles.sourceNode}>
-                                            <strong>Source:</strong> {getFilename(node.metadata?.file_path)} (Score: {node.score?.toFixed(3) ?? 'N/A'})
+                                            {/* --- MODIFIED: Use getSourceDisplay --- */}
+                                            <strong>Source:</strong> {getSourceDisplay(node.metadata)} (Score: {node.score?.toFixed(3) ?? 'N/A'})
+                                            {/* --- END MODIFIED --- */}
                                             <pre style={styles.sourceNodeText}><code>{node.text}</code></pre>
                                         </div>
                                     ))}

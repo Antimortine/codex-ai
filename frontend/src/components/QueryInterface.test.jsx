@@ -309,7 +309,7 @@ describe('QueryInterface Component with History (API Persistence)', () => {
     const queryText = 'Query with sources';
     const answerText = 'Answer based on sources.';
     const sourceNodes = [
-      { id: 'n1', text: 'Source snippet one.', score: 0.9, metadata: { file_path: 'plan.md' } },
+      { id: 'n1', text: 'Source snippet one.', score: 0.9, metadata: { file_path: 'plan.md', document_type: 'Plan', document_title: 'Project Plan' } }, // Added type/title
     ];
     queryProjectContext.mockResolvedValue({ data: { answer: answerText, source_nodes: sourceNodes, direct_sources: null } }); // Added direct_sources
 
@@ -325,9 +325,7 @@ describe('QueryInterface Component with History (API Persistence)', () => {
     await waitFor(() => expect(updateChatHistory).toHaveBeenCalledTimes(1));
 
     const latestEntry = getLatestHistoryEntry();
-    // --- MODIFIED: Use correct text ---
     const summary = within(latestEntry).getByText(/retrieved context snippets \(1\)/i);
-    // --- END MODIFIED ---
     expect(summary).toBeInTheDocument();
 
     const detailsContent = summary.closest('details').querySelector('div');
@@ -336,7 +334,11 @@ describe('QueryInterface Component with History (API Persistence)', () => {
     await user.click(summary);
 
     expect(within(latestEntry).getByText('Source snippet one.')).toBeVisible();
-    expect(within(latestEntry).getByText('plan.md (Score: 0.900)')).toBeVisible();
+    // --- MODIFIED: Assert the new display format by parts ---
+    const sourceNodeDiv = within(latestEntry).getByText('Source snippet one.').closest('div'); // Find the parent div
+    expect(within(sourceNodeDiv).getByText(/Plan: "Project Plan"/)).toBeInTheDocument(); // Check for type/title part
+    expect(within(sourceNodeDiv).getByText(/\(Score: 0.900\)/)).toBeInTheDocument(); // Check for score part
+    // --- END MODIFIED ---
 
     await user.click(summary);
     await waitFor(() => {
