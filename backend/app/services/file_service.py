@@ -17,10 +17,8 @@ import json
 from pathlib import Path
 from fastapi import HTTPException, status
 from app.core.config import BASE_PROJECT_DIR
-# ---- REMOVE the direct import of index_manager here ----
-# from app.rag.index_manager import index_manager
 import logging
-from typing import List # Import List
+from typing import List, Dict, Optional # Import Dict, Optional
 
 logger = logging.getLogger(__name__)
 
@@ -57,11 +55,9 @@ class FileService:
         """Returns the path to a specific character file."""
         return self._get_characters_dir(project_id) / f"{character_id}.md"
 
-    # --- ADDED: Notes Path Helper ---
     def _get_notes_dir(self, project_id: str) -> Path:
         """Returns the path to the notes directory within a project."""
         return self._get_project_path(project_id) / "notes"
-    # --- END ADDED ---
 
     def _get_content_block_path(self, project_id: str, block_name: str) -> Path:
         """Returns the path to a content block file (plan, synopsis, world)."""
@@ -117,23 +113,16 @@ class FileService:
             path.write_text(content, encoding='utf-8')
             logger.debug(f"Wrote text file: {path}")
 
-            # --- Trigger Indexing Conditionally ---
             if trigger_index and path.suffix.lower() == '.md' and BASE_PROJECT_DIR.resolve() in path.resolve().parents:
-                 # ---- Local Import ----
                  from app.rag.index_manager import index_manager
-                 # ---------------------
-                 if index_manager: # Check if index_manager initialized successfully
+                 if index_manager:
                      try:
                          logger.info(f"Content updated for {path.name}, triggering indexing...")
-                         # Call index_file asynchronously if it becomes async, otherwise call directly
-                         # await index_manager.index_file(path) # If index_file is async
-                         index_manager.index_file(path) # If index_file is sync
+                         index_manager.index_file(path)
                      except Exception as e:
-                         # Log error but don't necessarily fail the write operation
                          logger.error(f"ERROR: Failed to trigger indexing for {path.name}: {e}", exc_info=True)
                  else:
                      logger.error("IndexManager not available, skipping indexing trigger.")
-
 
         except IOError as e:
             logger.error(f"Error writing file {path}: {e}")
@@ -143,7 +132,11 @@ class FileService:
         """Reads content from a JSON file."""
         content = self.read_text_file(path) # Handles 404
         try:
-            return json.loads(content)
+            data = json.loads(content)
+            if not isinstance(data, dict): # Ensure it's a dictionary
+                logger.warning(f"JSON file {path} did not contain a dictionary. Returning empty dict.")
+                return {}
+            return data
         except json.JSONDecodeError as e:
             logger.error(f"Error decoding JSON from {path}: {e}")
             logger.warning(f"Returning empty dict for potentially corrupt JSON file: {path}")
@@ -153,7 +146,6 @@ class FileService:
         """Writes data to a JSON file. Does NOT trigger indexing."""
         try:
             content = json.dumps(data, indent=4)
-            # Use write_text_file WITHOUT triggering index for JSON
             self.write_text_file(path, content, trigger_index=False)
             logger.debug(f"Successfully wrote JSON file: {path}")
         except TypeError as e:
@@ -165,19 +157,15 @@ class FileService:
         should_delete_from_index = path.suffix.lower() == '.md' and BASE_PROJECT_DIR.resolve() in path.resolve().parents
 
         if should_delete_from_index:
-             # ---- Local Import ----
              from app.rag.index_manager import index_manager
-             # ---------------------
-             if index_manager: # Check if index_manager initialized successfully
+             if index_manager:
                  try:
                      logger.info(f"Attempting deletion from index before deleting file: {path}")
-                     # await index_manager.delete_doc(path) # If delete_doc is async
-                     index_manager.delete_doc(path) # If delete_doc is sync
+                     index_manager.delete_doc(path)
                  except Exception as e:
                      logger.warning(f"Error deleting document {path.name} from index during file delete: {e}")
              else:
                  logger.error("IndexManager not available, skipping index deletion trigger.")
-
 
         if not self.path_exists(path):
              if should_delete_from_index:
@@ -199,17 +187,14 @@ class FileService:
         """Deletes a directory and its contents recursively, including index cleanup."""
         if self.path_exists(path) and path.is_dir():
             logger.info(f"Attempting index deletion for all .md files within directory: {path}")
-             # ---- Local Import ----
             from app.rag.index_manager import index_manager
-             # ---------------------
-            if index_manager: # Check if index_manager initialized successfully
+            if index_manager:
                 markdown_files = list(path.rglob('*.md'))
                 for md_file in markdown_files:
                     if BASE_PROJECT_DIR.resolve() in md_file.resolve().parents:
                         try:
                             logger.info(f"Attempting deletion from index for: {md_file}")
-                            # await index_manager.delete_doc(md_file) # If delete_doc is async
-                            index_manager.delete_doc(md_file) # If delete_doc is sync
+                            index_manager.delete_doc(md_file)
                         except Exception as e:
                             logger.warning(f"Error deleting document {md_file.name} from index during directory delete: {e}")
             else:
@@ -240,7 +225,6 @@ class FileService:
         try: return [f.stem for f in path.iterdir() if f.is_file() and f.suffix.lower() == '.md']
         except OSError as e: logger.error(f"Error listing markdown files in {path}: {e}"); return []
 
-    # --- ADDED: Method to get all markdown paths ---
     def get_all_markdown_paths(self, project_id: str) -> List[Path]:
         """Recursively finds all .md files within a project directory."""
         project_path = self._get_project_path(project_id)
@@ -248,14 +232,12 @@ class FileService:
             logger.warning(f"Project path not found or not a directory: {project_path}")
             return []
         try:
-            # Use rglob to find all .md files recursively
             md_paths = list(project_path.rglob('*.md'))
             logger.info(f"Found {len(md_paths)} markdown files in project {project_id}")
             return md_paths
         except Exception as e:
             logger.error(f"Error finding markdown files in {project_path}: {e}", exc_info=True)
             return []
-    # --- END ADDED ---
 
 
     # --- Specific Structure Creators ---
@@ -265,26 +247,27 @@ class FileService:
         self.create_directory(project_path)
         self.create_directory(self._get_chapters_dir(project_id))
         self.create_directory(self._get_characters_dir(project_id))
-        self.create_directory(self._get_notes_dir(project_id)) # Create notes dir
-        # Write initial files - use trigger_index=True for content blocks
+        self.create_directory(self._get_notes_dir(project_id))
         self.write_text_file(self._get_content_block_path(project_id, "plan.md"), "", trigger_index=True)
         self.write_text_file(self._get_content_block_path(project_id, "synopsis.md"), "", trigger_index=True)
         self.write_text_file(self._get_content_block_path(project_id, "world.md"), "", trigger_index=True)
-        # Write metadata (JSON files don't get indexed)
-        self.write_project_metadata(project_id, {"project_name": "", "chapters": {}, "characters": {}})
+        # --- MODIFIED: Add empty chat_sessions key ---
+        self.write_project_metadata(project_id, {"project_name": "", "chapters": {}, "characters": {}, "chat_sessions": {}})
+        # --- END MODIFIED ---
+        # Write empty chat history file
+        self.write_chat_history_file(project_id, {}) # Write empty dict initially
 
 
     def setup_chapter_structure(self, project_id: str, chapter_id: str):
          """Creates the basic directory structure for a new chapter."""
          chapter_path = self._get_chapter_path(project_id, chapter_id)
          self.create_directory(chapter_path)
-         self.write_chapter_metadata(project_id, chapter_id, {"scenes": {}}) # JSON, no index trigger
+         self.write_chapter_metadata(project_id, chapter_id, {"scenes": {}})
 
     # --- Methods for Content Blocks with Indexing ---
     def write_content_block_file(self, project_id: str, block_name: str, content: str):
         """Writes content block file AND triggers indexing."""
         path = self._get_content_block_path(project_id, block_name)
-        # Pass trigger_index=True to the core write method
         self.write_text_file(path, content, trigger_index=True)
 
     def read_content_block_file(self, project_id: str, block_name: str) -> str:
@@ -297,26 +280,32 @@ class FileService:
         """Reads the project_meta.json file for a given project."""
         metadata_path = self._get_project_metadata_path(project_id)
         try:
-            # Use the core read_json_file which handles 404 and decode errors
-            return self.read_json_file(metadata_path)
+            data = self.read_json_file(metadata_path)
+            # --- ADDED: Ensure chat_sessions key exists ---
+            if 'chat_sessions' not in data:
+                data['chat_sessions'] = {}
+            # --- END ADDED ---
+            return data
         except HTTPException as e:
-            # If meta file not found, it might be an inconsistency or first access
             if e.status_code == 404:
                  logger.warning(f"Project metadata file not found for project {project_id}. Returning default structure.")
-                 # Return default structure to allow potential recovery/creation
-                 return {"project_name": f"Project {project_id}", "chapters": {}, "characters": {}}
+                 # --- MODIFIED: Include chat_sessions in default ---
+                 return {"project_name": f"Project {project_id}", "chapters": {}, "characters": {}, "chat_sessions": {}}
+                 # --- END MODIFIED ---
             logger.error(f"Unexpected error reading project metadata for {project_id}: {e.detail}")
-            raise e # Re-raise other file read errors (like 500)
+            raise e
 
     def write_project_metadata(self, project_id: str, data: dict):
         """Writes data to the project_meta.json file."""
         metadata_path = self._get_project_metadata_path(project_id)
         try:
-            # Use the core write_json_file
+            # --- ADDED: Ensure chat_sessions key exists before writing ---
+            if 'chat_sessions' not in data:
+                data['chat_sessions'] = {}
+            # --- END ADDED ---
             self.write_json_file(metadata_path, data)
             logger.debug(f"Successfully wrote project metadata for {project_id}")
         except HTTPException as e:
-            # Log and re-raise errors from write_json_file
             logger.error(f"Failed to write project metadata for {project_id}: {e.detail}")
             raise e
 
@@ -342,40 +331,106 @@ class FileService:
             logger.error(f"Failed to write chapter metadata for {chapter_id} in {project_id}: {e.detail}")
             raise e
 
-    # --- Chat History Methods ---
-    def read_chat_history(self, project_id: str) -> List[dict]:
-        """Reads the chat_history.json file for a given project."""
+    # --- Chat History Methods (REVISED) ---
+    def read_chat_history_file(self, project_id: str) -> Dict[str, List[dict]]:
+        """Reads the entire chat_history.json file (all sessions)."""
         history_path = self._get_chat_history_path(project_id)
         try:
-            # Use read_json_file which handles 404 and decode errors
             data = self.read_json_file(history_path)
-            # Ensure the top-level structure is a list (or default to empty list)
-            if isinstance(data, list):
-                return data
-            elif isinstance(data, dict) and 'history' in data and isinstance(data['history'], list):
-                 # Handle potential old format if we saved {'history': [...]} previously
-                 logger.warning(f"Reading chat history from potentially old format for project {project_id}")
-                 return data['history']
+            # Ensure the top-level structure is a dict
+            if isinstance(data, dict):
+                # Basic validation: ensure values are lists (can add more checks)
+                validated_data = {}
+                for session_id, history_list in data.items():
+                    if isinstance(history_list, list):
+                        validated_data[session_id] = history_list
+                    else:
+                        logger.warning(f"Invalid history format for session {session_id} in project {project_id}. Skipping.")
+                return validated_data
             else:
-                 logger.warning(f"Chat history file for project {project_id} does not contain a list. Returning empty history.")
-                 return []
+                 logger.warning(f"Chat history file for project {project_id} does not contain a dictionary. Returning empty history.")
+                 return {}
         except HTTPException as e:
             if e.status_code == 404:
-                 logger.info(f"Chat history file not found for project {project_id}. Returning empty list.")
-                 return [] # Return empty list if file doesn't exist
-            logger.error(f"Unexpected error reading chat history for {project_id}: {e.detail}")
+                 logger.info(f"Chat history file not found for project {project_id}. Returning empty dict.")
+                 return {} # Return empty dict if file doesn't exist
+            logger.error(f"Unexpected error reading chat history file for {project_id}: {e.detail}")
             raise e # Re-raise other errors
 
-    def write_chat_history(self, project_id: str, history_data: List[dict]):
-        """Writes data to the chat_history.json file."""
+    def write_chat_history_file(self, project_id: str, all_sessions_data: Dict[str, List[dict]]):
+        """Writes the entire chat history data (all sessions) to chat_history.json."""
         history_path = self._get_chat_history_path(project_id)
         try:
-            # Directly write the list as the root JSON object
-            self.write_json_file(history_path, history_data)
-            logger.debug(f"Successfully wrote chat history for {project_id}")
+            # Directly write the dictionary as the root JSON object
+            self.write_json_file(history_path, all_sessions_data)
+            logger.debug(f"Successfully wrote chat history file for {project_id}")
         except HTTPException as e:
-            logger.error(f"Failed to write chat history for {project_id}: {e.detail}")
+            logger.error(f"Failed to write chat history file for {project_id}: {e.detail}")
             raise e
+
+    def read_chat_session_history(self, project_id: str, session_id: str) -> List[dict]:
+        """Reads the history list for a specific chat session."""
+        all_sessions = self.read_chat_history_file(project_id)
+        return all_sessions.get(session_id, []) # Return empty list if session_id not found
+
+    def write_chat_session_history(self, project_id: str, session_id: str, history_data: List[dict]):
+        """Writes the history list for a specific chat session."""
+        all_sessions = self.read_chat_history_file(project_id)
+        all_sessions[session_id] = history_data # Update or add the session
+        self.write_chat_history_file(project_id, all_sessions)
+
+    def delete_chat_session_history(self, project_id: str, session_id: str):
+        """Deletes the history list for a specific chat session."""
+        all_sessions = self.read_chat_history_file(project_id)
+        if session_id in all_sessions:
+            del all_sessions[session_id]
+            self.write_chat_history_file(project_id, all_sessions)
+            logger.info(f"Deleted chat history for session {session_id} in project {project_id}")
+        else:
+            logger.warning(f"Attempted to delete non-existent chat session history: {session_id} in project {project_id}")
+
+    # --- Chat Session Metadata Methods ---
+    def get_chat_sessions_metadata(self, project_id: str) -> Dict[str, Dict[str, str]]:
+        """Reads the chat session metadata (ID -> {name}) from project_meta.json."""
+        project_metadata = self.read_project_metadata(project_id)
+        # Ensure the key exists and is a dictionary
+        sessions_meta = project_metadata.get('chat_sessions', {})
+        if not isinstance(sessions_meta, dict):
+            logger.warning(f"chat_sessions in project {project_id} metadata is not a dict. Returning empty.")
+            return {}
+        return sessions_meta
+
+    def add_chat_session_metadata(self, project_id: str, session_id: str, name: str):
+        """Adds metadata for a new chat session to project_meta.json."""
+        project_metadata = self.read_project_metadata(project_id)
+        # Ensure chat_sessions key exists and is a dict
+        if 'chat_sessions' not in project_metadata or not isinstance(project_metadata['chat_sessions'], dict):
+            project_metadata['chat_sessions'] = {}
+        if session_id in project_metadata['chat_sessions']:
+            logger.warning(f"Chat session metadata for {session_id} already exists in project {project_id}. Overwriting.")
+        project_metadata['chat_sessions'][session_id] = {"name": name}
+        self.write_project_metadata(project_id, project_metadata)
+
+    def update_chat_session_metadata(self, project_id: str, session_id: str, name: str):
+        """Updates the name of an existing chat session in project_meta.json."""
+        project_metadata = self.read_project_metadata(project_id)
+        if 'chat_sessions' in project_metadata and session_id in project_metadata['chat_sessions']:
+            project_metadata['chat_sessions'][session_id]['name'] = name
+            self.write_project_metadata(project_id, project_metadata)
+        else:
+            logger.error(f"Attempted to update non-existent chat session metadata: {session_id} in project {project_id}")
+            # Optionally raise an error here? For now, just log.
+            # raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Chat session {session_id} metadata not found.")
+
+    def delete_chat_session_metadata(self, project_id: str, session_id: str):
+        """Deletes the metadata for a chat session from project_meta.json."""
+        project_metadata = self.read_project_metadata(project_id)
+        if 'chat_sessions' in project_metadata and session_id in project_metadata['chat_sessions']:
+            del project_metadata['chat_sessions'][session_id]
+            self.write_project_metadata(project_id, project_metadata)
+            logger.info(f"Deleted chat session metadata for {session_id} in project {project_id}")
+        else:
+            logger.warning(f"Attempted to delete non-existent chat session metadata: {session_id} in project {project_id}")
 
 
 # Create a single instance

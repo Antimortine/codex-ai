@@ -20,9 +20,9 @@ from app.api.v1.endpoints import scenes
 from app.api.v1.endpoints import characters
 from app.api.v1.endpoints import content_blocks
 from app.api.v1.endpoints import ai
-# --- ADDED: Import chat_history router ---
+# --- MODIFIED: Import chat_history router ---
 from app.api.v1.endpoints import chat_history
-# --- END ADDED ---
+# --- END MODIFIED ---
 
 api_router = APIRouter()
 
@@ -68,10 +68,13 @@ api_router.include_router(
     tags=["AI"]
 )
 
-# --- ADDED: Chat History routes ---
+# --- MODIFIED: Chat History & Session routes ---
+# Mount the chat_history router under the project ID prefix
+# The endpoints within chat_history.py define the rest of the path
+# e.g., /chat_sessions, /chat_history/{session_id}
 api_router.include_router(
     chat_history.router,
-    prefix="/projects/{project_id}", # Mount under project ID
-    tags=["Chat History"]
+    prefix="/projects/{project_id}",
+    # Tags are defined within the chat_history router itself now
 )
-# --- END ADDED ---
+# --- END MODIFIED ---

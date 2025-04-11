@@ -331,7 +331,7 @@ def test_setup_project_structure(mock_index_mgr: MagicMock, temp_project_dir: Pa
     assert world_path.exists() and world_path.read_text() == ""
     assert meta_path.exists()
     meta_content = json.loads(meta_path.read_text())
-    assert meta_content == {"project_name": "", "chapters": {}, "characters": {}}
+    assert meta_content == {"project_name": "", "chapters": {}, "characters": {}, "chat_sessions": {}}
 
     # Assert index_manager was called for the .md files
     expected_index_calls = [call(plan_path), call(synopsis_path), call(world_path)]
