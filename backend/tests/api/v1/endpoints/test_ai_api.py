@@ -16,6 +16,8 @@ import pytest
 from fastapi.testclient import TestClient
 from unittest.mock import patch, MagicMock, AsyncMock
 from fastapi import HTTPException, status
+from pathlib import Path # Import Path
+from typing import List, Optional, Dict # Import List, Optional, Dict
 
 # Import the FastAPI app instance
 from app.main import app
@@ -31,9 +33,7 @@ from app.models.ai import (
     AIRephraseRequest, AIRephraseResponse,
     AIChapterSplitRequest, AIChapterSplitResponse, ProposedScene
 )
-# --- ADDED: Import Message model ---
 from app.models.common import Message
-# --- END ADDED ---
 from app.models.project import ProjectRead
 from app.models.chapter import ChapterRead
 # Import LlamaIndex types for mocking service return values
@@ -71,9 +71,9 @@ def test_query_project_success(mock_project_dep: MagicMock, mock_ai_svc: MagicMo
     query_data = {"query": "What is the plan?"}
     mock_answer = "The plan is to succeed."
     # --- MODIFIED: Expect filtered nodes ---
-    # Example: Assume node1 (plan.md) is filtered out
-    mock_node2 = NodeWithScore(node=TextNode(id_='n2', text="Source 2", metadata={'file_path': 'scenes/s1.md'}), score=0.8)
-    mock_filtered_nodes = [mock_node2]
+    # Example: Assume node1 (plan.md) is filtered out by the service
+    mock_node_scene = NodeWithScore(node=TextNode(id_='n2', text="Source 2", metadata={'file_path': 'scenes/s1.md'}), score=0.8)
+    mock_filtered_nodes = [mock_node_scene]
     # --- END MODIFIED ---
     mock_direct_sources_info = [{"type": "Plan", "name": "Project Plan"}] # Now a list
     # --- MODIFIED: Mock service returns filtered nodes ---
@@ -86,6 +86,8 @@ def test_query_project_success(mock_project_dep: MagicMock, mock_ai_svc: MagicMo
     # --- MODIFIED: Assert based on filtered nodes ---
     assert len(response_data["source_nodes"]) == 1
     assert response_data["source_nodes"][0]["id"] == "n2"
+    assert response_data["source_nodes"][0]["text"] == "Source 2"
+    assert response_data["source_nodes"][0]["metadata"]["file_path"] == 'scenes/s1.md'
     # --- END MODIFIED ---
     assert response_data["direct_sources"] == mock_direct_sources_info
 
@@ -101,7 +103,7 @@ def test_query_project_no_sources(mock_project_dep: MagicMock, mock_ai_svc: Magi
     assert response.status_code == status.HTTP_200_OK
     response_data = response.json()
     assert response_data["answer"] == mock_answer
-    assert response_data["source_nodes"] == []
+    assert response_data["source_nodes"] == [] # Expect empty list
     assert response_data["direct_sources"] is None
 
 @patch('app.api.v1.endpoints.ai.ai_service', autospec=True)
@@ -234,7 +236,7 @@ def test_split_chapter_dependency_error(mock_chapter_dep: MagicMock, mock_ai_svc
     assert response.json() == {"detail": error_detail}
 
 
-# --- ADDED: Tests for Rebuild Index Endpoint ---
+# --- Tests for Rebuild Index Endpoint ---
 @patch('app.api.v1.endpoints.ai.ai_service', autospec=True)
 @patch('app.api.v1.endpoints.content_blocks.project_service', autospec=True)
 def test_rebuild_index_success(mock_project_dep: MagicMock, mock_ai_svc: MagicMock):
