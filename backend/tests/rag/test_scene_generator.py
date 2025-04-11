@@ -14,12 +14,13 @@
 
 import pytest
 from unittest.mock import MagicMock, AsyncMock, patch, ANY, call
+from pathlib import Path # Import Path
 from llama_index.core.indices.vector_store import VectorStoreIndex
 from llama_index.core.llms import LLM, CompletionResponse
 from llama_index.core.retrievers import VectorIndexRetriever
 from llama_index.core.schema import NodeWithScore, TextNode
 from llama_index.core.callbacks import CallbackManager
-from typing import Dict, List, Tuple, Optional, Any # Added List, Tuple, Optional, Any
+from typing import Dict, List, Tuple, Optional, Any, Set # Added List, Tuple, Optional, Any, Set
 
 from tenacity import RetryError
 from google.api_core.exceptions import GoogleAPICallError, ServiceUnavailable, ResourceExhausted
@@ -28,9 +29,7 @@ from fastapi import HTTPException, status
 # Import the class we are testing
 from app.rag.scene_generator import SceneGenerator, _is_retryable_google_api_error # Import predicate too
 from app.core.config import settings
-# --- ADDED: Import file_service for mocking ---
 from app.services.file_service import file_service
-# --- END ADDED ---
 
 # --- Fixtures are defined in tests/rag/conftest.py ---
 
@@ -57,7 +56,6 @@ def create_mock_client_error(status_code: int, message: str = "API Error") -> Mo
 
 
 # --- Test SceneGenerator (Single Call + Parsing) ---
-# (Non-retry tests unchanged)
 @pytest.mark.asyncio
 @patch('app.rag.scene_generator.VectorIndexRetriever', autospec=True)
 @patch('app.rag.scene_generator.file_service', autospec=True)
@@ -152,7 +150,7 @@ async def test_generate_scene_llm_bad_format_response(mock_file_svc: MagicMock, 
     generated_draft = await generator.generate_scene(project_id, chapter_id, prompt_summary, previous_scene_order, plan, synopsis, explicit_previous_scenes)
     assert generated_draft == expected_result_dict; mock_file_svc.read_project_metadata.assert_called_once_with(project_id); mock_retriever_instance.aretrieve.assert_awaited_once(); mock_llm.acomplete.assert_awaited_once()
 
-# --- MODIFIED: Retry Test ---
+# --- Retry Test ---
 @pytest.mark.asyncio
 @patch('app.rag.scene_generator.VectorIndexRetriever', autospec=True)
 @patch('app.rag.scene_generator.file_service', autospec=True) # Mock file_service used for chapter title
@@ -189,4 +187,75 @@ async def test_generate_scene_handles_retry_failure_gracefully(
     assert "Error: Rate limit exceeded after multiple retries." in exc_info.value.detail
     # Assert the underlying llm method was called 3 times by tenacity
     assert mock_llm.acomplete.await_count == 3
-# --- END MODIFIED ---
+
+# --- ADDED: Tests for Node Deduplication and Filtering ---
+
+@pytest.mark.asyncio
+@patch('app.rag.scene_generator.VectorIndexRetriever', autospec=True)
+@patch('app.rag.scene_generator.file_service', autospec=True)
+async def test_generate_scene_deduplicates_and_filters_nodes(
+    mock_file_svc: MagicMock,
+    mock_retriever_class: MagicMock,
+    mock_llm: MagicMock,
+    mock_index: MagicMock
+):
+    project_id = "proj-sg-dedup-filter"; chapter_id = "ch-sg-dedup-filter"; prompt_summary = "Test dedup/filter"; previous_scene_order = 1; plan = "Plan"; synopsis = "Synopsis"; explicit_previous_scenes = [(1, "Previous")]; chapter_title = "Dedup Chapter"
+    plan_path_str = f"user_projects/{project_id}/plan.md"
+    world_path_str = f"user_projects/{project_id}/world.md"
+    char1_path_str = f"user_projects/{project_id}/characters/c1.md"
+    char2_path_str = f"user_projects/{project_id}/characters/c2.md"
+
+    # Mock retrieved nodes:
+    # - plan node (should be filtered)
+    # - world node (duplicate 1, lower score)
+    # - world node (duplicate 2, higher score, keep this one)
+    # - char1 node (unique, keep)
+    # - char2 node (unique, keep)
+    mock_node_plan = NodeWithScore(node=TextNode(id_='n_plan', text="Plan context.", metadata={'file_path': plan_path_str, 'document_type': 'Plan'}), score=0.9)
+    mock_node_world_low = NodeWithScore(node=TextNode(id_='n_world_low', text="World info.", metadata={'file_path': world_path_str, 'document_type': 'World'}), score=0.7)
+    mock_node_world_high = NodeWithScore(node=TextNode(id_='n_world_high', text="World info.", metadata={'file_path': world_path_str, 'document_type': 'World'}), score=0.8) # Same content/path, higher score
+    mock_node_char1 = NodeWithScore(node=TextNode(id_='n_char1', text="Char 1 details.", metadata={'file_path': char1_path_str, 'document_type': 'Character'}), score=0.75)
+    mock_node_char2 = NodeWithScore(node=TextNode(id_='n_char2', text="Char 2 details.", metadata={'file_path': char2_path_str, 'document_type': 'Character'}), score=0.85)
+
+    retrieved_nodes: List[NodeWithScore] = [
+        mock_node_plan,
+        mock_node_world_low,
+        mock_node_world_high, # Duplicate content/path
+        mock_node_char1,
+        mock_node_char2,
+    ]
+
+    # Define the paths that AIService would pass for filtering
+    paths_to_filter_set = {str(Path(plan_path_str).resolve())} # Filter out the plan node
+
+    # Expected nodes *after* filtering and deduplication:
+    expected_final_nodes: List[NodeWithScore] = [
+        mock_node_world_high,
+        mock_node_char1,
+        mock_node_char2,
+    ]
+
+    mock_llm_response_title = "Filtered Scene"; mock_llm_response_content = "Generated from filtered context."; mock_llm_response_text = f"## {mock_llm_response_title}\n{mock_llm_response_content}"; expected_result_dict = {"title": mock_llm_response_title, "content": mock_llm_response_content}
+    mock_file_svc.read_project_metadata.return_value = {"chapters": {chapter_id: {"title": chapter_title}}}
+    mock_retriever_instance = mock_retriever_class.return_value; mock_retriever_instance.aretrieve = AsyncMock(return_value=retrieved_nodes)
+    mock_llm.acomplete = AsyncMock(return_value=CompletionResponse(text=mock_llm_response_text)); mock_llm.callback_manager = None
+    generator = SceneGenerator(index=mock_index, llm=mock_llm)
+
+    generated_draft = await generator.generate_scene(
+        project_id, chapter_id, prompt_summary, previous_scene_order, plan, synopsis, explicit_previous_scenes, paths_to_filter=paths_to_filter_set
+    )
+
+    assert generated_draft == expected_result_dict
+    mock_retriever_instance.aretrieve.assert_awaited_once()
+    mock_llm.acomplete.assert_awaited_once()
+    prompt_arg = mock_llm.acomplete.call_args[0][0]
+
+    # Check prompt includes only the non-filtered, non-duplicated nodes
+    assert "Plan context." not in prompt_arg        # Filtered
+    assert "World info." in prompt_arg              # Kept (from high score node)
+    assert "Char 1 details." in prompt_arg          # Kept
+    assert "Char 2 details." in prompt_arg          # Kept
+
+# --- END ADDED ---
+
+# --- END TESTS ---

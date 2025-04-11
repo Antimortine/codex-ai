@@ -15,7 +15,8 @@
 import pytest
 from unittest.mock import MagicMock, AsyncMock, patch, ANY, call
 import logging
-from typing import Optional, List
+from typing import Optional, List, Set # Import Set
+from pathlib import Path # Import Path
 
 from tenacity import RetryError
 from google.api_core.exceptions import GoogleAPICallError, ServiceUnavailable, ResourceExhausted
@@ -27,13 +28,13 @@ from app.rag.chapter_splitter import ChapterSplitter, _is_retryable_google_api_e
 # Import necessary LlamaIndex types for mocking
 from llama_index.core.llms import LLM, CompletionResponse
 from llama_index.core.indices.vector_store import VectorStoreIndex
-# --- ADDED: Imports for retrieval mocking ---
 from llama_index.core.retrievers import VectorIndexRetriever
 from llama_index.core.schema import NodeWithScore, TextNode
-# --- END ADDED ---
 
 # Import models used
 from app.models.ai import ProposedScene
+# Import settings
+from app.core.config import settings
 
 
 # --- Fixtures ---
@@ -74,7 +75,6 @@ def create_mock_client_error(status_code: int, message: str = "API Error") -> Mo
     return error
 
 # --- Test Cases ---
-# (Non-retry tests unchanged)
 @pytest.mark.asyncio
 @patch('app.rag.chapter_splitter.VectorIndexRetriever', autospec=True) # Mock retriever
 async def test_split_success(mock_retriever_class: MagicMock, chapter_splitter: ChapterSplitter, mock_llm_for_splitter: MagicMock):
@@ -136,9 +136,7 @@ async def test_split_llm_error_non_retryable(mock_retriever_class: MagicMock, ch
     mock_llm_for_splitter.acomplete = AsyncMock(side_effect=ValueError("LLM validation failed"))
     with pytest.raises(HTTPException) as exc_info: await chapter_splitter.split(project_id, chapter_id, chapter_content, plan, synopsis)
     assert exc_info.value.status_code == 500
-    # --- MODIFIED: Assert correct error message ---
     assert "Error: An unexpected error occurred during chapter splitting. Please check logs." in exc_info.value.detail
-    # --- END MODIFIED ---
     mock_retriever_instance.aretrieve.assert_awaited_once()
     mock_llm_for_splitter.acomplete.assert_awaited_once()
 
@@ -168,7 +166,7 @@ async def test_split_content_validation_warning(mock_retriever_class: MagicMock,
     mock_retriever_instance.aretrieve.assert_awaited_once()
     mock_llm_for_splitter.acomplete.assert_awaited_once()
 
-# --- Tests for Retry Logic (REVISED) ---
+# --- Tests for Retry Logic ---
 @pytest.mark.asyncio
 @patch('app.rag.chapter_splitter.VectorIndexRetriever', autospec=True) # Mock retriever
 async def test_split_retry_success(mock_retriever_class: MagicMock, chapter_splitter: ChapterSplitter, mock_llm_for_splitter: MagicMock):
@@ -227,3 +225,80 @@ async def test_split_retry_failure(mock_retriever_class: MagicMock, chapter_spli
     mock_retriever_instance.aretrieve.assert_awaited_once() # Check retrieval
     # Assert the underlying llm method was called 3 times by tenacity
     assert mock_llm_for_splitter.acomplete.await_count == 3
+
+# --- ADDED: Tests for Node Deduplication and Filtering ---
+
+@pytest.mark.asyncio
+@patch('app.rag.chapter_splitter.VectorIndexRetriever', autospec=True)
+async def test_split_deduplicates_and_filters_nodes(
+    mock_retriever_class: MagicMock,
+    chapter_splitter: ChapterSplitter,
+    mock_llm_for_splitter: MagicMock
+):
+    project_id = "proj-split-dedup-filter"; chapter_id = "ch-split-dedup-filter"
+    chapter_content = "Chapter content to split."
+    plan = "Plan"
+    synopsis = "Synopsis"
+    plan_path_str = f"user_projects/{project_id}/plan.md"
+    scene1_path_str = f"user_projects/{project_id}/scenes/s1.md"
+    scene2_path_str = f"user_projects/{project_id}/scenes/s2.md"
+    char_path_str = f"user_projects/{project_id}/characters/c1.md"
+
+    # Mock retrieved nodes:
+    # - plan node (should be filtered)
+    # - scene1 node (duplicate 1, lower score)
+    # - scene1 node (duplicate 2, higher score, keep this one)
+    # - scene2 node (unique, keep)
+    # - character node (unique, keep)
+    mock_node_plan = NodeWithScore(node=TextNode(id_='n_plan', text="Plan context.", metadata={'file_path': plan_path_str, 'document_type': 'Plan'}), score=0.9)
+    mock_node_s1_low = NodeWithScore(node=TextNode(id_='n_s1_low', text="Scene 1 context.", metadata={'file_path': scene1_path_str, 'document_type': 'Scene'}), score=0.7)
+    mock_node_s1_high = NodeWithScore(node=TextNode(id_='n_s1_high', text="Scene 1 context.", metadata={'file_path': scene1_path_str, 'document_type': 'Scene'}), score=0.8) # Same content/path, higher score
+    mock_node_s2 = NodeWithScore(node=TextNode(id_='n_s2', text="Scene 2 context.", metadata={'file_path': scene2_path_str, 'document_type': 'Scene'}), score=0.75)
+    mock_node_char = NodeWithScore(node=TextNode(id_='n_char', text="Character info.", metadata={'file_path': char_path_str, 'document_type': 'Character'}), score=0.85)
+
+    retrieved_nodes: List[NodeWithScore] = [
+        mock_node_plan,
+        mock_node_s1_low,
+        mock_node_s1_high, # Duplicate content/path
+        mock_node_s2,
+        mock_node_char,
+    ]
+
+    # Define the paths that AIService would pass for filtering
+    paths_to_filter_set = {str(Path(plan_path_str).resolve())} # Filter out the plan node
+
+    # Expected nodes *after* filtering and deduplication:
+    expected_final_nodes: List[NodeWithScore] = [
+        mock_node_s1_high,
+        mock_node_s2,
+        mock_node_char,
+    ]
+
+    # Mock LLM response (doesn't matter much for this test, just needs to be parseable)
+    mock_llm_response_text = ("<<<SCENE_START>>>\nTITLE: Split Scene 1\nCONTENT:\nPart 1.\n<<<SCENE_END>>>")
+    expected_scenes = [ProposedScene(suggested_title="Split Scene 1", content="Part 1.")]
+
+    mock_retriever_instance = mock_retriever_class.return_value
+    mock_retriever_instance.aretrieve = AsyncMock(return_value=retrieved_nodes)
+    mock_llm_for_splitter.acomplete = AsyncMock(return_value=CompletionResponse(text=mock_llm_response_text))
+
+    # Pass the filter set to the split method
+    result = await chapter_splitter.split(
+        project_id, chapter_id, chapter_content, plan, synopsis, paths_to_filter=paths_to_filter_set
+    )
+
+    # Assertions
+    assert result == expected_scenes
+    mock_retriever_instance.aretrieve.assert_awaited_once()
+    mock_llm_for_splitter.acomplete.assert_awaited_once()
+    prompt_arg = mock_llm_for_splitter.acomplete.call_args[0][0]
+
+    # Check prompt includes only the non-filtered, non-duplicated nodes
+    assert "Plan context." not in prompt_arg        # Filtered
+    assert "Scene 1 context." in prompt_arg         # Kept (from high score node)
+    assert "Scene 2 context." in prompt_arg         # Kept
+    assert "Character info." in prompt_arg         # Kept
+
+# --- END ADDED ---
+
+# --- END TESTS ---

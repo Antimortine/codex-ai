@@ -79,7 +79,9 @@ async def test_query_success_with_nodes(
     # Define the expected *filtered* nodes
     expected_filtered_nodes = [mock_node_scene]
     # Define the paths that AIService would pass for filtering
-    paths_to_filter_set = {str(plan_path)}
+    # --- MODIFIED: Resolve path ---
+    paths_to_filter_set = {str(plan_path.resolve())}
+    # --- END MODIFIED ---
 
     expected_answer = "The main character's goal is to reach the mountain summit."
     mock_retriever_instance = mock_retriever_class.return_value
@@ -93,9 +95,7 @@ async def test_query_success_with_nodes(
     )
 
     assert answer == expected_answer
-    # --- MODIFIED: Assert against filtered nodes ---
     assert source_nodes == expected_filtered_nodes
-    # --- END MODIFIED ---
     assert direct_info is None
     mock_retriever_class.assert_called_once_with(index=mock_index, similarity_top_k=settings.RAG_QUERY_SIMILARITY_TOP_K, filters=ANY)
     mock_retriever_instance.aretrieve.assert_awaited_once_with(query_text)
@@ -124,7 +124,9 @@ async def test_query_success_no_nodes(
     synopsis = "A dragon-free story."
     retrieved_nodes = [] # No nodes retrieved
     expected_filtered_nodes = [] # Still empty after filtering
-    paths_to_filter_set = {str(Path(f"user_projects/{project_id}/plan.md"))} # Example filter
+    # --- MODIFIED: Resolve path ---
+    paths_to_filter_set = {str(Path(f"user_projects/{project_id}/plan.md").resolve())} # Example filter
+    # --- END MODIFIED ---
 
     expected_answer = "Based on the plan and synopsis, there is no mention of dragons."
     mock_retriever_instance = mock_retriever_class.return_value
@@ -179,7 +181,9 @@ async def test_query_llm_error_non_retryable(
     mock_node1 = NodeWithScore(node=TextNode(id_='n1', text="Some context", metadata={'file_path': 'scenes/s1.md'}), score=0.9)
     retrieved_nodes = [mock_node1] # Assume retrieval works
     expected_filtered_nodes = [mock_node1] # Assume it wouldn't be filtered
-    paths_to_filter_set = {str(Path(f"user_projects/{project_id}/plan.md"))}
+    # --- MODIFIED: Resolve path ---
+    paths_to_filter_set = {str(Path(f"user_projects/{project_id}/plan.md").resolve())}
+    # --- END MODIFIED ---
 
     mock_retriever_instance = mock_retriever_class.return_value
     mock_retriever_instance.aretrieve = AsyncMock(return_value=retrieved_nodes)
@@ -191,10 +195,7 @@ async def test_query_llm_error_non_retryable(
     )
 
     assert "Sorry, an internal error occurred processing the query." in answer
-    # --- MODIFIED: Assert against expected filtered nodes even on error ---
-    # The filtering happens before the LLM call fails
     assert source_nodes == [] # Error handler returns empty list now
-    # --- END MODIFIED ---
     assert direct_info is None
     mock_retriever_instance.aretrieve.assert_awaited_once_with(query_text)
     mock_llm.acomplete.assert_awaited_once()
@@ -212,7 +213,9 @@ async def test_query_llm_empty_response(
     synopsis = "Synopsis"
     retrieved_nodes = []
     expected_filtered_nodes = []
-    paths_to_filter_set = {str(Path(f"user_projects/{project_id}/plan.md"))}
+    # --- MODIFIED: Resolve path ---
+    paths_to_filter_set = {str(Path(f"user_projects/{project_id}/plan.md").resolve())}
+    # --- END MODIFIED ---
 
     mock_retriever_instance = mock_retriever_class.return_value
     mock_retriever_instance.aretrieve = AsyncMock(return_value=retrieved_nodes)
@@ -304,9 +307,7 @@ async def test_query_handles_retry_failure_gracefully(
     retrieved_nodes = [mock_node_plan, mock_node_scene]
     # Define the expected *filtered* nodes (plan should be filtered)
     expected_filtered_nodes = [mock_node_scene]
-    # --- MODIFIED: Use Path object for filter set ---
-    paths_to_filter_set = {str(Path(plan_path_str))}
-    # --- END MODIFIED ---
+    paths_to_filter_set = {str(Path(plan_path_str).resolve())}
 
     mock_retriever_instance = mock_retriever_class.return_value
     mock_retriever_instance.aretrieve = AsyncMock(return_value=retrieved_nodes)
@@ -321,10 +322,8 @@ async def test_query_handles_retry_failure_gracefully(
         )
 
         assert "Rate limit exceeded for query after multiple retries" in answer
-        # --- MODIFIED: Assert against expected filtered nodes ---
         # Filtered nodes should still be returned even if LLM call fails
         assert source_nodes == expected_filtered_nodes
-        # --- END MODIFIED ---
         assert direct_info is None
         mock_decorated_method.assert_awaited_once() # The decorated method is called once by query()
 
@@ -411,5 +410,45 @@ async def test_query_deduplicates_and_filters_nodes(
     assert "Scene 2 content." in prompt_arg         # Kept
     assert "Character info." in prompt_arg         # Kept
 
+
+@pytest.mark.asyncio
+@patch('app.rag.query_processor.VectorIndexRetriever', autospec=True)
+async def test_query_node_without_filepath_is_not_filtered(
+    mock_retriever_class: MagicMock,
+    mock_llm: MagicMock,
+    mock_index: MagicMock
+):
+    """Test that nodes without a file_path are never filtered out."""
+    project_id = "proj-qp-no-path-filter"
+    query_text = "Test no path filtering"
+    plan = "Plan"
+    synopsis = "Synopsis"
+    plan_path_str = f"user_projects/{project_id}/plan.md"
+
+    mock_node_plan = NodeWithScore(node=TextNode(id_='n_plan', text="Plan context.", metadata={'file_path': plan_path_str, 'document_type': 'Plan'}), score=0.9)
+    # Node without file_path metadata
+    mock_node_no_path = NodeWithScore(node=TextNode(id_='n_no_path', text="Context without file path.", metadata={'document_type': 'Unknown'}), score=0.8)
+
+    retrieved_nodes: List[NodeWithScore] = [mock_node_plan, mock_node_no_path]
+    # Try to filter out the plan path
+    paths_to_filter_set = {str(Path(plan_path_str).resolve())}
+
+    # Expected nodes *after* filtering: Plan should be filtered, no_path should remain.
+    expected_final_nodes: List[NodeWithScore] = [mock_node_no_path]
+
+    expected_answer = "Answer based on non-filtered node."
+    mock_retriever_instance = mock_retriever_class.return_value
+    mock_retriever_instance.aretrieve = AsyncMock(return_value=retrieved_nodes)
+    mock_llm.acomplete = AsyncMock(return_value=CompletionResponse(text=expected_answer))
+    processor = QueryProcessor(index=mock_index, llm=mock_llm)
+
+    answer, source_nodes, direct_info = await processor.query(
+        project_id, query_text, plan, synopsis, paths_to_filter=paths_to_filter_set
+    )
+
+    assert source_nodes == expected_final_nodes # Only the node without path should remain
+    prompt_arg = mock_llm.acomplete.call_args[0][0]
+    assert "Plan context." not in prompt_arg # Filtered
+    assert "Context without file path." in prompt_arg # Not filtered
 
 # --- END TESTS ---
