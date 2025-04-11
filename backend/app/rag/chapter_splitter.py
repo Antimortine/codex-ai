@@ -97,9 +97,7 @@ class ChapterSplitter:
         try:
             # --- Retrieve RAG Context ---
             logger.debug("Retrieving context for chapter splitting...")
-            # --- REVISED: Retrieval query focuses more on chapter content ---
-            retrieval_query = f"Find context relevant to splitting the following chapter content into scenes: {chapter_content[:1000]}..." # Use more content
-            # --- END REVISED ---
+            retrieval_query = f"Find context relevant to splitting the following chapter content into scenes: {chapter_content[:1000]}..."
             logger.debug(f"Constructed retrieval query for chapter split: '{retrieval_query}'")
             retriever = VectorIndexRetriever(
                 index=self.index,
@@ -114,29 +112,43 @@ class ChapterSplitter:
             else:
                 logger.debug("ChapterSplitter: No nodes retrieved.")
 
-            # --- Filter retrieved nodes using Path objects ---
+            # --- ADDED: Deduplicate retrieved nodes before filtering ---
+            unique_retrieved_nodes_map = {}
             if retrieved_nodes:
+                for node_with_score in retrieved_nodes:
+                    node = node_with_score.node
+                    unique_key = (node.get_content(), node.metadata.get('file_path'))
+                    if unique_key not in unique_retrieved_nodes_map or node_with_score.score > unique_retrieved_nodes_map[unique_key].score:
+                        unique_retrieved_nodes_map[unique_key] = node_with_score
+            unique_retrieved_nodes = list(unique_retrieved_nodes_map.values())
+            if len(unique_retrieved_nodes) < len(retrieved_nodes):
+                logger.debug(f"Deduplicated {len(retrieved_nodes) - len(unique_retrieved_nodes)} nodes based on content and file path.")
+            # --- END ADDED ---
+
+            # --- Filter unique retrieved nodes using Path objects ---
+            if unique_retrieved_nodes: # Filter the deduplicated list
                 logger.debug(f"ChapterSplitter: Starting node filtering against {len(final_paths_to_filter_obj)} filter paths.")
-                for node in retrieved_nodes:
+                for node_with_score in unique_retrieved_nodes: # Iterate over unique nodes
+                    node = node_with_score.node
                     node_path_str = node.metadata.get('file_path')
                     if not node_path_str:
                         logger.warning(f"Node {node.node_id} missing 'file_path' metadata. Including in prompt.")
-                        nodes_for_prompt.append(node)
+                        nodes_for_prompt.append(node_with_score) # Append NodeWithScore
                         continue
                     try:
                         node_path_obj = Path(node_path_str).resolve()
                         is_filtered = node_path_obj in final_paths_to_filter_obj
                         logger.debug(f"  Comparing Node Path: {node_path_obj} | In Filter Set: {is_filtered}")
                         if not is_filtered:
-                            nodes_for_prompt.append(node)
+                            nodes_for_prompt.append(node_with_score) # Append NodeWithScore
                     except Exception as e:
                         logger.error(f"Error resolving or comparing path '{node_path_str}' for node {node.node_id}. Including node. Error: {e}")
-                        nodes_for_prompt.append(node) # Include if error occurs
+                        nodes_for_prompt.append(node_with_score) # Append NodeWithScore
 
-                if len(nodes_for_prompt) < len(retrieved_nodes):
-                    logger.debug(f"Filtered {len(retrieved_nodes) - len(nodes_for_prompt)} retrieved nodes based on paths_to_filter.")
+                if len(nodes_for_prompt) < len(unique_retrieved_nodes):
+                    logger.debug(f"Filtered {len(unique_retrieved_nodes) - len(nodes_for_prompt)} unique retrieved nodes based on paths_to_filter.")
                 else:
-                    logger.debug("No nodes were filtered based on paths_to_filter.")
+                    logger.debug("No unique nodes were filtered based on paths_to_filter.")
             if nodes_for_prompt:
                 log_nodes_after = [(n.node_id, n.metadata.get('file_path'), n.score) for n in nodes_for_prompt]
                 logger.debug(f"ChapterSplitter: Nodes remaining AFTER filtering (for prompt): {log_nodes_after}")

@@ -87,49 +87,56 @@ class QueryProcessor:
             logger.info(f"Retrieving nodes for query: '{query_text}'")
             retrieved_nodes = await retriever.aretrieve(query_text)
             logger.info(f"Retrieved {len(retrieved_nodes)} nodes for query context.")
-            # --- ADDED: Log retrieved nodes before filtering ---
             if retrieved_nodes:
                 log_nodes = [(n.node_id, n.metadata.get('file_path'), n.score) for n in retrieved_nodes]
                 logger.debug(f"QueryProcessor: Nodes retrieved BEFORE filtering: {log_nodes}")
             else:
                 logger.debug("QueryProcessor: No nodes retrieved.")
+
+            # --- ADDED: Deduplicate retrieved nodes before filtering ---
+            unique_retrieved_nodes_map = {}
+            if retrieved_nodes:
+                for node_with_score in retrieved_nodes:
+                    node = node_with_score.node
+                    # Use text content and file path as a key for uniqueness
+                    unique_key = (node.get_content(), node.metadata.get('file_path'))
+                    # Keep the node with the highest score if duplicates found
+                    if unique_key not in unique_retrieved_nodes_map or node_with_score.score > unique_retrieved_nodes_map[unique_key].score:
+                        unique_retrieved_nodes_map[unique_key] = node_with_score
+            unique_retrieved_nodes = list(unique_retrieved_nodes_map.values())
+            if len(unique_retrieved_nodes) < len(retrieved_nodes):
+                logger.debug(f"Deduplicated {len(retrieved_nodes) - len(unique_retrieved_nodes)} nodes based on content and file path.")
             # --- END ADDED ---
 
-            # --- Filter retrieved nodes using Path objects ---
-            if retrieved_nodes:
+            # --- Filter unique retrieved nodes using Path objects ---
+            if unique_retrieved_nodes: # Filter the deduplicated list
                 logger.debug(f"QueryProcessor: Starting node filtering against {len(final_paths_to_filter_obj)} filter paths.")
-                for node in retrieved_nodes:
+                for node_with_score in unique_retrieved_nodes: # Iterate over unique nodes
+                    node = node_with_score.node
                     node_path_str = node.metadata.get('file_path')
                     if not node_path_str:
                         logger.warning(f"Node {node.node_id} missing 'file_path' metadata. Including in prompt.")
-                        nodes_for_prompt.append(node)
+                        nodes_for_prompt.append(node_with_score) # Append NodeWithScore
                         continue
                     try:
                         node_path_obj = Path(node_path_str).resolve()
-                        # --- MODIFIED: Log comparison result ---
                         is_filtered = node_path_obj in final_paths_to_filter_obj
                         logger.debug(f"  Comparing Node Path: {node_path_obj} | In Filter Set: {is_filtered}")
-                        # --- END MODIFIED ---
                         if not is_filtered:
-                            # logger.debug(f"  Including node from path: {node_path_obj} (Not in filter set)") # Redundant with above log
-                            nodes_for_prompt.append(node)
-                        # else: # Redundant logging
-                        #     logger.debug(f"  Filtering node from path: {node_path_obj} (Found in filter set)")
+                            nodes_for_prompt.append(node_with_score) # Append NodeWithScore
                     except Exception as e:
                         logger.error(f"Error resolving or comparing path '{node_path_str}' for node {node.node_id}. Including node. Error: {e}")
-                        nodes_for_prompt.append(node) # Include if error occurs
+                        nodes_for_prompt.append(node_with_score) # Append NodeWithScore
 
-                if len(nodes_for_prompt) < len(retrieved_nodes):
-                    logger.debug(f"Filtered {len(retrieved_nodes) - len(nodes_for_prompt)} retrieved nodes based on paths_to_filter.")
+                if len(nodes_for_prompt) < len(unique_retrieved_nodes):
+                    logger.debug(f"Filtered {len(unique_retrieved_nodes) - len(nodes_for_prompt)} unique retrieved nodes based on paths_to_filter.")
                 else:
-                    logger.debug("No nodes were filtered based on paths_to_filter.")
-            # --- ADDED: Log nodes AFTER filtering ---
+                    logger.debug("No unique nodes were filtered based on paths_to_filter.")
             if nodes_for_prompt:
                 log_nodes_after = [(n.node_id, n.metadata.get('file_path'), n.score) for n in nodes_for_prompt]
                 logger.debug(f"QueryProcessor: Nodes remaining AFTER filtering (for prompt): {log_nodes_after}")
             else:
                 logger.debug("QueryProcessor: No nodes remaining after filtering.")
-            # --- END ADDED ---
 
             # 2. Build Prompt
             logger.debug("Building query prompt with explicit, direct, and retrieved context...")
@@ -164,9 +171,7 @@ class QueryProcessor:
                       truncated_content = node_content[:max_node_len] + ('...' if len(node_content) > max_node_len else '')
                       rag_context_list.append(f"{source_label}\n\n{truncated_content}")
             retrieved_context_str = "\n\n---\n\n".join(rag_context_list) if rag_context_list else "No additional relevant context snippets were retrieved via search."
-            # --- ADDED: Log final context string ---
             logger.debug(f"QueryProcessor: Final rag_context_str for prompt:\n---\n{retrieved_context_str}\n---")
-            # --- END ADDED ---
 
             user_message_content += (
                  f"**Retrieved Context Snippets:**\n```markdown\n{retrieved_context_str}\n```\n\n"

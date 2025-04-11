@@ -25,9 +25,7 @@ from llama_index.core import (
     Settings as LlamaSettings,
     load_index_from_storage,
 )
-# --- ADDED: Import for metadata filtering ---
 from llama_index.core.vector_stores import ExactMatchFilter, MetadataFilters
-# --- END ADDED ---
 from llama_index.vector_stores.chroma import ChromaVectorStore
 from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 from llama_index.llms.google_genai import GoogleGenAI
@@ -62,6 +60,9 @@ class IndexManager:
         self.embed_model: Optional[HuggingFaceEmbedding] = None
         self.storage_context: Optional[StorageContext] = None
         self.vector_store: Optional[ChromaVectorStore] = None
+        # --- ADDED: Store chroma_collection ---
+        self.chroma_collection: Optional[chromadb.Collection] = None
+        # --- END ADDED ---
 
         if not settings.GOOGLE_API_KEY:
             logger.error("GOOGLE_API_KEY not found in settings. Cannot initialize AI components.")
@@ -88,9 +89,11 @@ class IndexManager:
             os.makedirs(CHROMA_PERSIST_DIR, exist_ok=True)
             db = chromadb.PersistentClient(path=CHROMA_PERSIST_DIR)
             logger.debug(f"Getting or creating ChromaDB collection: {CHROMA_COLLECTION_NAME}")
-            chroma_collection = db.get_or_create_collection(name=CHROMA_COLLECTION_NAME)
+            # --- MODIFIED: Store collection ---
+            self.chroma_collection = db.get_or_create_collection(name=CHROMA_COLLECTION_NAME)
+            # --- END MODIFIED ---
             logger.debug("Initializing ChromaVectorStore...")
-            self.vector_store = ChromaVectorStore(chroma_collection=chroma_collection)
+            self.vector_store = ChromaVectorStore(chroma_collection=self.chroma_collection)
 
             # 3. Initialize Storage Context
             logger.debug("Initializing StorageContext...")
@@ -168,7 +171,6 @@ class IndexManager:
             elif len(relative_path_parts) > 1 and relative_path_parts[0] == 'notes' and file_path.suffix == '.md':
                 details = {'document_type': 'Note', 'document_title': file_path.stem} # Use stem for Note title
         except Exception as e: logger.error(f"Error determining document details for {file_path}: {e}", exc_info=True)
-        # logger.debug(f"Determined details for {file_path}: {details}") # Moved logging to file_metadata_func
         return details
 
     def index_file(self, file_path: Path):
@@ -245,59 +247,34 @@ class IndexManager:
             logger.info(f"Successfully deleted nodes for file {file_path} from index (if they existed).")
         except Exception as e: logger.error(f"Error deleting document from index for file {file_path} (ref_doc_id: {doc_id}): {e}", exc_info=True)
 
-    # --- ADDED: Method to delete all docs for a project ---
+    # --- REVISED: delete_project_docs using direct ChromaDB access ---
     def delete_project_docs(self, project_id: str):
         """
-        Deletes all nodes associated with a specific project_id from the index.
+        Deletes all nodes associated with a specific project_id from the index
+        by directly interacting with the ChromaDB collection.
         """
-        if not self.index or not self.vector_store:
-            logger.error("Index or VectorStore not initialized. Cannot delete project docs.")
+        if not self.chroma_collection:
+            logger.error("Chroma collection not initialized. Cannot delete project docs.")
             return
 
-        logger.info(f"Attempting to delete all indexed documents for project_id: {project_id}")
+        logger.info(f"Attempting to delete all indexed documents for project_id: {project_id} directly from ChromaDB.")
         try:
-            # We need to retrieve nodes by metadata first to get their ref_doc_ids
-            # This might be inefficient for very large projects.
-            # LlamaIndex doesn't offer a direct delete_by_metadata across the board.
-            # We query for *all* nodes matching the project_id.
-            # Note: This relies on the underlying vector store supporting metadata filtering on retrieval. Chroma does.
-            retriever = self.index.as_retriever(
-                similarity_top_k=10000, # Retrieve a large number to likely get all
-                filters=MetadataFilters(filters=[ExactMatchFilter(key="project_id", value=project_id)])
-            )
-            # Use synchronous retrieve here as this method is synchronous
-            nodes_to_delete = retriever.retrieve(f"Retrieve all documents for project {project_id}") # Query text doesn't matter much here
+            # Use ChromaDB's delete method with a 'where' filter
+            # This directly targets documents based on metadata
+            self.chroma_collection.delete(where={"project_id": project_id})
+            logger.info(f"Successfully deleted documents for project {project_id} from ChromaDB collection '{self.chroma_collection.name}'.")
 
-            if not nodes_to_delete:
-                logger.info(f"No documents found in index for project_id: {project_id}. Nothing to delete.")
-                return
-
-            # Collect unique ref_doc_ids (file paths)
-            ref_doc_ids_to_delete = set()
-            for node_with_score in nodes_to_delete:
-                if node_with_score.node.ref_doc_id:
-                    ref_doc_ids_to_delete.add(node_with_score.node.ref_doc_id)
-                else:
-                    logger.warning(f"Node {node_with_score.node.node_id} found for project {project_id} but lacks ref_doc_id. Cannot guarantee full deletion.")
-
-            logger.info(f"Found {len(ref_doc_ids_to_delete)} unique ref_doc_ids (files) to delete for project {project_id}.")
-
-            deleted_count = 0
-            errors = 0
-            for ref_doc_id in ref_doc_ids_to_delete:
-                try:
-                    logger.debug(f"Deleting nodes for ref_doc_id: {ref_doc_id}")
-                    self.index.delete_ref_doc(ref_doc_id=ref_doc_id, delete_from_docstore=True)
-                    deleted_count += 1
-                except Exception as e:
-                    errors += 1
-                    logger.error(f"Error deleting document from index for ref_doc_id {ref_doc_id}: {e}", exc_info=True)
-
-            logger.info(f"Finished deleting documents for project {project_id}. Deleted nodes for {deleted_count} files with {errors} errors.")
+            # Note: LlamaIndex's internal docstore might still hold references if not
+            # automatically cleaned up by the vector store integration.
+            # For a full cleanup, we might still need to iterate and call delete_ref_doc,
+            # but deleting from Chroma is the primary step. Let's rely on this for now.
+            # If inconsistencies arise later, we might need to add docstore cleanup.
 
         except Exception as e:
-            logger.error(f"Unexpected error during delete_project_docs for project {project_id}: {e}", exc_info=True)
-    # --- END ADDED ---
+            logger.error(f"Error during direct ChromaDB deletion for project {project_id}: {e}", exc_info=True)
+            # Depending on the error, we might want to raise it
+            # raise RuntimeError(f"Failed to delete project docs from ChromaDB for {project_id}") from e
+    # --- END REVISED ---
 
 
 # --- ADDED: Instantiate Singleton ---
@@ -305,8 +282,5 @@ try:
     index_manager = IndexManager()
 except Exception as e:
     logger.critical(f"Failed to create IndexManager instance on startup: {e}", exc_info=True)
-    # Make it None so dependent modules can check
     index_manager = None
-    # Optionally re-raise or handle differently depending on desired app behavior on init failure
-    # raise RuntimeError(f"Failed to initialize IndexManager: {e}") from e
 # --- END ADDED ---
