@@ -207,10 +207,12 @@ def test_get_document_details_unknown(patched_index_manager_instance):
     project_id = "proj_details"
     file_path = BASE_PROJECT_DIR / project_id / "other_folder" / "some_file.txt"
     details = manager._get_document_details(file_path, project_id)
+    # --- MODIFIED: Assert full filename ---
     assert details == {'document_type': 'Unknown', 'document_title': 'some_file.txt'}
+    # --- END MODIFIED ---
 
 
-# --- index_file Tests (Unchanged from previous fix) ---
+# --- index_file Tests (Corrected) ---
 @patch('pathlib.Path.is_file')
 @patch('pathlib.Path.stat')
 def test_index_file_success_normal_file(
@@ -226,16 +228,19 @@ def test_index_file_success_normal_file(
     mock_stat.return_value.st_size = 100
     mock_document = MagicMock(name="MockDocumentPlan")
     mock_simple_directory_reader_instance.load_data.return_value = [mock_document]
-    with patch.object(manager, '_get_document_details', return_value={'document_type': 'Plan', 'document_title': 'Project Plan'}) as mock_get_details:
-        manager.index_file(file_path)
-        mock_is_file.assert_called_once()
-        mock_stat.assert_called_once()
-        manager.index.delete_ref_doc.assert_called_once_with(ref_doc_id=doc_id, delete_from_docstore=True)
-        mocks["sdr_cls"].assert_called_once_with(input_files=[file_path], file_metadata=ANY)
-        assert callable(mocks["sdr_cls"].call_args.kwargs['file_metadata'])
-        mock_simple_directory_reader_instance.load_data.assert_called_once()
-        manager.index.insert_nodes.assert_called_once_with([mock_document])
-        mock_get_details.assert_called_once_with(file_path, project_id)
+
+    # --- MODIFIED: No longer need to patch _get_document_details here ---
+    manager.index_file(file_path)
+    # --- END MODIFIED ---
+
+    mock_is_file.assert_called_once()
+    mock_stat.assert_called_once()
+    manager.index.delete_ref_doc.assert_called_once_with(ref_doc_id=doc_id, delete_from_docstore=True)
+    mocks["sdr_cls"].assert_called_once_with(input_files=[file_path], file_metadata=ANY)
+    assert callable(mocks["sdr_cls"].call_args.kwargs['file_metadata'])
+    mock_simple_directory_reader_instance.load_data.assert_called_once()
+    manager.index.insert_nodes.assert_called_once_with([mock_document])
+    # --- REMOVED: Assertion for mock_get_details call ---
 
 
 @patch('pathlib.Path.is_file')
@@ -255,16 +260,23 @@ def test_index_file_success_character_file(
     mock_stat.return_value.st_size = 50
     mock_document = MagicMock(name="MockDocumentChar")
     mock_simple_directory_reader_instance.load_data.return_value = [mock_document]
-    with patch.object(manager, '_get_document_details', return_value={'document_type': 'Character', 'document_title': character_name}) as mock_get_details:
-        manager.index_file(file_path)
-        mock_is_file.assert_called_once()
-        mock_stat.assert_called_once()
-        manager.index.delete_ref_doc.assert_called_once_with(ref_doc_id=doc_id, delete_from_docstore=True)
-        mocks["sdr_cls"].assert_called_once_with(input_files=[file_path], file_metadata=ANY)
-        assert callable(mocks["sdr_cls"].call_args.kwargs['file_metadata'])
-        mock_simple_directory_reader_instance.load_data.assert_called_once()
-        manager.index.insert_nodes.assert_called_once_with([mock_document])
-        mock_get_details.assert_called_once_with(file_path, project_id)
+
+    # --- MODIFIED: No longer need to patch _get_document_details here ---
+    # Mock the internal file_service call made by _get_document_details inside file_metadata_func
+    mock_internal_file_service.read_project_metadata.return_value = {
+        "characters": {character_id: {"name": character_name}}
+    }
+    manager.index_file(file_path)
+    # --- END MODIFIED ---
+
+    mock_is_file.assert_called_once()
+    mock_stat.assert_called_once()
+    manager.index.delete_ref_doc.assert_called_once_with(ref_doc_id=doc_id, delete_from_docstore=True)
+    mocks["sdr_cls"].assert_called_once_with(input_files=[file_path], file_metadata=ANY)
+    assert callable(mocks["sdr_cls"].call_args.kwargs['file_metadata'])
+    mock_simple_directory_reader_instance.load_data.assert_called_once()
+    manager.index.insert_nodes.assert_called_once_with([mock_document])
+    # --- REMOVED: Assertion for mock_get_details call ---
 
 
 @patch('pathlib.Path.is_file')

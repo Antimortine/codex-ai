@@ -14,12 +14,13 @@
 
 import logging
 import re # Import re
+from pathlib import Path
 from llama_index.core.retrievers import VectorIndexRetriever
 from llama_index.core.vector_stores import ExactMatchFilter, MetadataFilters
 from llama_index.core.base.response.schema import Response, NodeWithScore
 from llama_index.core.indices.vector_store import VectorStoreIndex
 from llama_index.core.llms import LLM
-from typing import List, Tuple, Optional, Dict # Import Dict
+from typing import List, Tuple, Optional, Dict, Set # Import Set
 
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception, RetryError
 from google.api_core.exceptions import GoogleAPICallError, ServiceUnavailable, ResourceExhausted
@@ -29,8 +30,8 @@ from app.core.config import settings
 logger = logging.getLogger(__name__)
 
 # --- Define a retry predicate function ---
-# (Unchanged)
 def _is_retryable_google_api_error(exception):
+    """Return True if the exception is a Google API 429 error."""
     if isinstance(exception, GoogleAPICallError):
         if hasattr(exception, 'status_code') and exception.status_code == 429: logger.warning("Google API rate limit hit (429 status code). Retrying query..."); return True
         if isinstance(exception, ResourceExhausted): logger.warning("Google API ResourceExhausted error encountered. Retrying query..."); return True
@@ -44,12 +45,9 @@ class QueryProcessor:
     """Handles RAG querying logic, including explicit context."""
 
     def __init__(self, index: VectorStoreIndex, llm: LLM):
-        # (Initialization unchanged)
         if not index: raise ValueError("QueryProcessor requires a valid VectorStoreIndex instance.")
         if not llm: raise ValueError("QueryProcessor requires a valid LLM instance.")
-        self.index = index
-        self.llm = llm
-        logger.info("QueryProcessor initialized.")
+        self.index = index; self.llm = llm; logger.info("QueryProcessor initialized.")
 
     @retry(
         stop=stop_after_attempt(3),
@@ -60,16 +58,20 @@ class QueryProcessor:
     async def _execute_llm_complete(self, prompt: str):
         """Helper function to isolate the LLM call for retry logic."""
         logger.info(f"Calling LLM with combined context for query...")
+        logger.debug(f"--- Query Prompt Start ---\n{prompt}\n--- Query Prompt End ---") # Log prompt
         return await self.llm.acomplete(prompt)
 
     async def query(self, project_id: str, query_text: str, explicit_plan: str, explicit_synopsis: str,
-                  direct_sources_data: Optional[List[Dict]] = None
+                  direct_sources_data: Optional[List[Dict]] = None,
+                  paths_to_filter: Optional[Set[str]] = None
                   ) -> Tuple[str, List[NodeWithScore], Optional[List[Dict[str, str]]]]:
         logger.info(f"QueryProcessor: Received query for project '{project_id}': '{query_text}'")
         retrieved_nodes: List[NodeWithScore] = []
+        nodes_for_prompt: List[NodeWithScore] = []
         direct_sources_info_list: Optional[List[Dict[str, str]]] = None
-        # --- MODIFIED: Store file paths of directly loaded sources ---
-        direct_source_file_paths = set()
+        final_paths_to_filter_obj = {Path(p).resolve() for p in (paths_to_filter or set())}
+        logger.debug(f"QueryProcessor: Paths to filter (resolved): {final_paths_to_filter_obj}")
+
         if direct_sources_data:
              direct_sources_info_list = []
              for source in direct_sources_data:
@@ -77,22 +79,57 @@ class QueryProcessor:
                      "type": source.get("type", "Unknown"),
                      "name": source.get("name", "Unknown")
                  })
-                 # Store the file path associated with this direct source
-                 if source.get('file_path'):
-                      direct_source_file_paths.add(source['file_path'])
-        # --- END MODIFIED ---
 
         try:
-            # 1. Create Retriever & Retrieve Nodes (Unchanged)
+            # 1. Create Retriever & Retrieve Nodes
             logger.debug(f"Creating retriever with top_k={settings.RAG_QUERY_SIMILARITY_TOP_K} and filter for project_id='{project_id}'")
-            retriever = VectorIndexRetriever(
-                index=self.index,
-                similarity_top_k=settings.RAG_QUERY_SIMILARITY_TOP_K,
-                filters=MetadataFilters(filters=[ExactMatchFilter(key="project_id", value=project_id)]),
-            )
+            retriever = VectorIndexRetriever(index=self.index, similarity_top_k=settings.RAG_QUERY_SIMILARITY_TOP_K, filters=MetadataFilters(filters=[ExactMatchFilter(key="project_id", value=project_id)]))
             logger.info(f"Retrieving nodes for query: '{query_text}'")
             retrieved_nodes = await retriever.aretrieve(query_text)
             logger.info(f"Retrieved {len(retrieved_nodes)} nodes for query context.")
+            # --- ADDED: Log retrieved nodes before filtering ---
+            if retrieved_nodes:
+                log_nodes = [(n.node_id, n.metadata.get('file_path'), n.score) for n in retrieved_nodes]
+                logger.debug(f"QueryProcessor: Nodes retrieved BEFORE filtering: {log_nodes}")
+            else:
+                logger.debug("QueryProcessor: No nodes retrieved.")
+            # --- END ADDED ---
+
+            # --- Filter retrieved nodes using Path objects ---
+            if retrieved_nodes:
+                logger.debug(f"QueryProcessor: Starting node filtering against {len(final_paths_to_filter_obj)} filter paths.")
+                for node in retrieved_nodes:
+                    node_path_str = node.metadata.get('file_path')
+                    if not node_path_str:
+                        logger.warning(f"Node {node.node_id} missing 'file_path' metadata. Including in prompt.")
+                        nodes_for_prompt.append(node)
+                        continue
+                    try:
+                        node_path_obj = Path(node_path_str).resolve()
+                        # --- MODIFIED: Log comparison result ---
+                        is_filtered = node_path_obj in final_paths_to_filter_obj
+                        logger.debug(f"  Comparing Node Path: {node_path_obj} | In Filter Set: {is_filtered}")
+                        # --- END MODIFIED ---
+                        if not is_filtered:
+                            # logger.debug(f"  Including node from path: {node_path_obj} (Not in filter set)") # Redundant with above log
+                            nodes_for_prompt.append(node)
+                        # else: # Redundant logging
+                        #     logger.debug(f"  Filtering node from path: {node_path_obj} (Found in filter set)")
+                    except Exception as e:
+                        logger.error(f"Error resolving or comparing path '{node_path_str}' for node {node.node_id}. Including node. Error: {e}")
+                        nodes_for_prompt.append(node) # Include if error occurs
+
+                if len(nodes_for_prompt) < len(retrieved_nodes):
+                    logger.debug(f"Filtered {len(retrieved_nodes) - len(nodes_for_prompt)} retrieved nodes based on paths_to_filter.")
+                else:
+                    logger.debug("No nodes were filtered based on paths_to_filter.")
+            # --- ADDED: Log nodes AFTER filtering ---
+            if nodes_for_prompt:
+                log_nodes_after = [(n.node_id, n.metadata.get('file_path'), n.score) for n in nodes_for_prompt]
+                logger.debug(f"QueryProcessor: Nodes remaining AFTER filtering (for prompt): {log_nodes_after}")
+            else:
+                logger.debug("QueryProcessor: No nodes remaining after filtering.")
+            # --- END ADDED ---
 
             # 2. Build Prompt
             logger.debug("Building query prompt with explicit, direct, and retrieved context...")
@@ -110,33 +147,26 @@ class QueryProcessor:
             if direct_sources_data:
                  user_message_content += "**Directly Requested Content:**\n"
                  for i, source_data in enumerate(direct_sources_data):
-                      source_type = source_data.get('type', 'Unknown')
-                      source_name = source_data.get('name', f'Source {i+1}')
-                      source_content = source_data.get('content', '')
-                      truncated_direct_content = source_content
-                      user_message_content += (
-                          f"--- Start Directly Requested {source_type}: \"{source_name}\" ---\n"
-                          f"```markdown\n{truncated_direct_content}\n```\n"
-                          f"--- End Directly Requested {source_type}: \"{source_name}\" ---\n\n"
-                      )
+                      source_type = source_data.get('type', 'Unknown'); source_name = source_data.get('name', f'Source {i+1}'); source_content = source_data.get('content', ''); truncated_direct_content = source_content
+                      user_message_content += (f"--- Start Directly Requested {source_type}: \"{source_name}\" ---\n" f"```markdown\n{truncated_direct_content}\n```\n" f"--- End Directly Requested {source_type}: \"{source_name}\" ---\n\n")
 
-            # --- MODIFIED: Filter retrieved nodes before adding to prompt ---
-            nodes_for_prompt = []
-            if retrieved_nodes:
-                nodes_for_prompt = [
-                    node for node in retrieved_nodes
-                    if node.metadata.get('file_path') not in direct_source_file_paths
-                ]
-                if len(nodes_for_prompt) < len(retrieved_nodes):
-                    logger.debug(f"Filtered {len(retrieved_nodes) - len(nodes_for_prompt)} retrieved nodes to avoid duplicating directly loaded content in prompt.")
-            # --- END MODIFIED ---
-
-            retrieved_context_str = "\n\n---\n\n".join(
-                # --- MODIFIED: Use document_type and document_title from metadata ---
-                [f"Source ({node.metadata.get('document_type', 'Unknown')}: \"{node.metadata.get('document_title', 'Unknown Source')}\")\n\n{node.get_content()}"
-                 for node in nodes_for_prompt]
-                # --- END MODIFIED ---
-            ) if nodes_for_prompt else "No additional relevant context snippets were retrieved via search." # Modified message slightly
+            # --- Use filtered nodes_for_prompt and corrected formatting ---
+            rag_context_list = []
+            if nodes_for_prompt: # Use filtered nodes
+                 for node_with_score in nodes_for_prompt:
+                      node = node_with_score.node
+                      doc_type = node.metadata.get('document_type', 'Unknown')
+                      doc_title = node.metadata.get('document_title', 'Unknown Source')
+                      char_name = node.metadata.get('character_name')
+                      char_info = f" (Character: {char_name})" if char_name and doc_type != 'Character' else ""
+                      source_label = f"Source ({doc_type}: \"{doc_title}\"{char_info})"
+                      node_content = node.get_content(); max_node_len = 500
+                      truncated_content = node_content[:max_node_len] + ('...' if len(node_content) > max_node_len else '')
+                      rag_context_list.append(f"{source_label}\n\n{truncated_content}")
+            retrieved_context_str = "\n\n---\n\n".join(rag_context_list) if rag_context_list else "No additional relevant context snippets were retrieved via search."
+            # --- ADDED: Log final context string ---
+            logger.debug(f"QueryProcessor: Final rag_context_str for prompt:\n---\n{retrieved_context_str}\n---")
+            # --- END ADDED ---
 
             user_message_content += (
                  f"**Retrieved Context Snippets:**\n```markdown\n{retrieved_context_str}\n```\n\n"
@@ -148,27 +178,24 @@ class QueryProcessor:
             llm_response = await self._execute_llm_complete(full_prompt)
             answer = llm_response.text.strip() if llm_response else ""
             logger.info("LLM call complete.")
+            if not answer: logger.warning("LLM query returned an empty response string."); answer = "(The AI did not provide an answer based on the context.)"
 
-            if not answer:
-                 logger.warning("LLM query returned an empty response string.")
-                 answer = "(The AI did not provide an answer based on the context.)"
+            # --- Return the filtered nodes_for_prompt ---
+            logger.info(f"Query successful. Returning answer, {len(nodes_for_prompt)} filtered source nodes, and direct source info list (if any).")
+            return answer, nodes_for_prompt, direct_sources_info_list
 
-            logger.info(f"Query successful. Returning answer, {len(retrieved_nodes)} source nodes, and direct source info list (if any).")
-            # Return the original, unfiltered retrieved_nodes for UI display
-            return answer, retrieved_nodes, direct_sources_info_list
-
-        # --- Exception Handling (Unchanged from previous fix) ---
+        # --- Exception Handling ---
         except GoogleAPICallError as e:
              if _is_retryable_google_api_error(e):
-                  logger.error(f"Rate limit error persisted after retries for query: {e}", exc_info=False)
-                  error_message = f"Error: Rate limit exceeded for query after multiple retries. Please wait and try again."
-                  return error_message, retrieved_nodes, None
+                 logger.error(f"Rate limit error persisted after retries for query: {e}", exc_info=False)
+                 error_message = f"Error: Rate limit exceeded for query after multiple retries. Please wait and try again."
+                 # Return filtered nodes even on error
+                 return error_message, nodes_for_prompt, None
              else:
-                  logger.error(f"Non-retryable GoogleAPICallError during query for project '{project_id}': {e}", exc_info=True)
-                  error_message = f"Error: Sorry, an error occurred while communicating with the AI service for project '{project_id}'. Details: {e}"
-                  return error_message, [], None
+                 logger.error(f"Non-retryable GoogleAPICallError during query for project '{project_id}': {e}", exc_info=True)
+                 error_message = f"Error: Sorry, an error occurred while communicating with the AI service for project '{project_id}'. Details: {e}"
+                 return error_message, [], None
         except Exception as e:
              logger.error(f"Error during RAG query for project '{project_id}': {e}", exc_info=True)
              error_message = f"Error: Sorry, an internal error occurred processing the query. Please check logs."
              return error_message, [], None
-        # --- END Exception Handling ---

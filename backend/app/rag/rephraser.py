@@ -15,38 +15,28 @@
 import logging
 import asyncio
 import re
+from pathlib import Path
 from llama_index.core.retrievers import VectorIndexRetriever
 from llama_index.core.vector_stores import ExactMatchFilter, MetadataFilters
 from llama_index.core.base.response.schema import NodeWithScore
 from llama_index.core.indices.vector_store import VectorStoreIndex
 from llama_index.core.llms import LLM
-from typing import List, Optional
+from typing import List, Optional, Set # Import Set
 
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception, RetryError
-from google.genai.errors import ClientError
+from google.api_core.exceptions import GoogleAPICallError, ServiceUnavailable, ResourceExhausted # Import base error
 
 from app.core.config import settings # Import settings directly
 
 logger = logging.getLogger(__name__)
 
-# --- REMOVED Local Constants ---
-# REPHRASE_SIMILARITY_TOP_K = settings.RAG_GENERATION_SIMILARITY_TOP_K # Use settings.RAG_GENERATION_SIMILARITY_TOP_K directly
-# REPHRASE_SUGGESTION_COUNT = settings.RAG_REPHRASE_SUGGESTION_COUNT # Use settings.RAG_REPHRASE_SUGGESTION_COUNT directly
-# --- END REMOVED ---
-
 # --- Define a retry predicate function ---
 def _is_retryable_google_api_error(exception):
     """Return True if the exception is a Google API 429 error."""
-    if isinstance(exception, ClientError):
-        status_code = None
-        try:
-            if hasattr(exception, 'response') and hasattr(exception.response, 'status_code'): status_code = exception.response.status_code
-            elif isinstance(exception.args, (list, tuple)) and len(exception.args) > 0 and isinstance(exception.args[0], int): status_code = int(exception.args[0])
-            elif isinstance(exception.args, (list, tuple)) and len(exception.args) > 0 and isinstance(exception.args[0], str) and '429' in exception.args[0]: return True
-        except (ValueError, TypeError, IndexError, AttributeError): pass
-        if status_code == 429:
-             logger.warning("Google API rate limit hit (ClientError 429). Retrying rephrase...")
-             return True
+    if isinstance(exception, GoogleAPICallError):
+        if hasattr(exception, 'status_code') and exception.status_code == 429: logger.warning("Google API rate limit hit (429 status code). Retrying rephrase..."); return True
+        if isinstance(exception, ResourceExhausted): logger.warning("Google API ResourceExhausted error encountered. Retrying rephrase..."); return True
+        if hasattr(exception, 'message') and '429' in str(exception.message): logger.warning("Google API rate limit hit (429 in message). Retrying rephrase..."); return True
     logger.debug(f"Non-retryable error encountered during rephrase: {type(exception)}")
     return False
 # --- End retry predicate ---
@@ -70,51 +60,116 @@ class Rephraser:
     async def _execute_llm_complete(self, prompt: str):
         """Helper function to isolate the LLM call for retry logic."""
         logger.info("Calling LLM for rephrase suggestions...")
+        logger.debug(f"--- Rephrase Prompt Start ---\n{prompt}\n--- Rephrase Prompt End ---")
         return await self.llm.acomplete(prompt)
 
-    async def rephrase(self, project_id: str, selected_text: str, context_before: Optional[str], context_after: Optional[str]) -> List[str]:
+    async def rephrase(
+        self,
+        project_id: str,
+        selected_text: str,
+        context_before: Optional[str],
+        context_after: Optional[str],
+        explicit_plan: str,
+        explicit_synopsis: str,
+        paths_to_filter: Optional[Set[str]] = None
+        ) -> List[str]:
         logger.info(f"Rephraser: Starting rephrase for project '{project_id}'. Text: '{selected_text[:50]}...'")
 
         if not selected_text.strip():
              logger.warning("Rephraser: Received empty selected_text. Returning empty suggestions.")
              return []
 
+        final_paths_to_filter_obj = {Path(p).resolve() for p in (paths_to_filter or set())}
+        logger.debug(f"Rephraser: Paths to filter (resolved): {final_paths_to_filter_obj}")
+        retrieved_nodes: List[NodeWithScore] = []
+        nodes_for_prompt: List[NodeWithScore] = []
+
         try:
             # 1. Construct Retrieval Query & Retrieve Context
             retrieval_context = f"{context_before or ''} {selected_text} {context_after or ''}".strip()
-            retrieval_query = f"Context relevant to the following passage: {retrieval_context}"
+            # --- REVISED: Retrieval query focuses more on selected text and immediate context ---
+            retrieval_query = (
+                f"Find context relevant to rephrasing the specific text: '{selected_text}'. "
+                f"The surrounding passage is: '{retrieval_context}'."
+            )
+            # --- END REVISED ---
             logger.debug(f"Constructed retrieval query for rephrase: '{retrieval_query}'")
-            # --- MODIFIED: Use settings directly ---
             logger.debug(f"Creating retriever for rephrase with top_k={settings.RAG_GENERATION_SIMILARITY_TOP_K} and filter for project_id='{project_id}'")
             retriever = VectorIndexRetriever(
                 index=self.index,
-                similarity_top_k=settings.RAG_GENERATION_SIMILARITY_TOP_K, # Use setting directly
+                similarity_top_k=settings.RAG_GENERATION_SIMILARITY_TOP_K,
                 filters=MetadataFilters(filters=[ExactMatchFilter(key="project_id", value=project_id)]),
             )
-            # --- END MODIFIED ---
-            retrieved_nodes: List[NodeWithScore] = await retriever.aretrieve(retrieval_query)
+            retrieved_nodes = await retriever.aretrieve(retrieval_query)
             logger.info(f"Retrieved {len(retrieved_nodes)} nodes for rephrase context.")
-            rag_context_list = []
             if retrieved_nodes:
-                 for node in retrieved_nodes:
+                log_nodes = [(n.node_id, n.metadata.get('file_path'), n.score) for n in retrieved_nodes]
+                logger.debug(f"Rephraser: Nodes retrieved BEFORE filtering: {log_nodes}")
+            else:
+                logger.debug("Rephraser: No nodes retrieved.")
+
+            # --- Filter retrieved nodes using Path objects ---
+            if retrieved_nodes:
+                logger.debug(f"Rephraser: Starting node filtering against {len(final_paths_to_filter_obj)} filter paths.")
+                for node in retrieved_nodes:
+                    node_path_str = node.metadata.get('file_path')
+                    if not node_path_str:
+                        logger.warning(f"Node {node.node_id} missing 'file_path' metadata. Including in prompt.")
+                        nodes_for_prompt.append(node)
+                        continue
+                    try:
+                        node_path_obj = Path(node_path_str).resolve()
+                        is_filtered = node_path_obj in final_paths_to_filter_obj
+                        logger.debug(f"  Comparing Node Path: {node_path_obj} | In Filter Set: {is_filtered}")
+                        if not is_filtered:
+                            nodes_for_prompt.append(node)
+                    except Exception as e:
+                        logger.error(f"Error resolving or comparing path '{node_path_str}' for node {node.node_id}. Including node. Error: {e}")
+                        nodes_for_prompt.append(node) # Include if error occurs
+
+                if len(nodes_for_prompt) < len(retrieved_nodes):
+                    logger.debug(f"Filtered {len(retrieved_nodes) - len(nodes_for_prompt)} retrieved nodes based on paths_to_filter.")
+                else:
+                    logger.debug("No nodes were filtered based on paths_to_filter.")
+            if nodes_for_prompt:
+                log_nodes_after = [(n.node_id, n.metadata.get('file_path'), n.score) for n in nodes_for_prompt]
+                logger.debug(f"Rephraser: Nodes remaining AFTER filtering (for prompt): {log_nodes_after}")
+            else:
+                logger.debug("Rephraser: No nodes remaining after filtering.")
+
+            # --- Format context using type and title (using filtered nodes) ---
+            rag_context_list = []
+            if nodes_for_prompt: # Use filtered nodes
+                 for node_with_score in nodes_for_prompt:
+                      node = node_with_score.node
+                      doc_type = node.metadata.get('document_type', 'Unknown')
+                      doc_title = node.metadata.get('document_title', 'Unknown Source')
                       char_name = node.metadata.get('character_name')
-                      char_info = f" [Character: {char_name}]" if char_name else ""
-                      rag_context_list.append(f"Source: {node.metadata.get('file_path', 'N/A')}{char_info}\n\n{node.get_content()}")
+                      char_info = f" (Character: {char_name})" if char_name and doc_type != 'Character' else ""
+                      source_label = f"Source ({doc_type}: \"{doc_title}\"{char_info})"
+                      node_content = node.get_content(); max_node_len = 500
+                      truncated_content = node_content[:max_node_len] + ('...' if len(node_content) > max_node_len else '')
+                      rag_context_list.append(f"{source_label}\n\n{truncated_content}")
             rag_context_str = "\n\n---\n\n".join(rag_context_list) if rag_context_list else "No specific context was retrieved via search."
+            logger.debug(f"Rephraser: Final rag_context_str for prompt:\n---\n{rag_context_str}\n---")
 
 
-            # 2. Build Rephrase Prompt
+            # 2. Build Rephrase Prompt (Uses updated rag_context_str and adds Plan/Synopsis)
             logger.debug("Building rephrase prompt...")
             system_prompt = (
                 "You are an expert writing assistant. Your task is to rephrase the user's selected text, providing several alternative phrasings. "
-                "Use the surrounding text and the broader project context provided to ensure the suggestions fit naturally and maintain consistency with the overall narrative style and tone."
+                "Use the surrounding text and the broader project context provided (Plan, Synopsis, Retrieved Snippets) to ensure the suggestions fit naturally and maintain consistency with the overall narrative style and tone."
             )
-            # --- MODIFIED: Use settings directly ---
+            max_plan_synopsis_len = 1000
+            truncated_plan = (explicit_plan or '')[:max_plan_synopsis_len] + ('...' if len(explicit_plan or '') > max_plan_synopsis_len else '')
+            truncated_synopsis = (explicit_synopsis or '')[:max_plan_synopsis_len] + ('...' if len(explicit_synopsis or '') > max_plan_synopsis_len else '')
+
             user_message_content = (
-                f"Please provide {settings.RAG_REPHRASE_SUGGESTION_COUNT} alternative ways to phrase the 'Text to Rephrase' below, considering the context.\n\n" # Use setting directly
-                f"**Broader Project Context:**\n```markdown\n{rag_context_str}\n```\n\n"
+                f"Please provide {settings.RAG_REPHRASE_SUGGESTION_COUNT} alternative ways to phrase the 'Text to Rephrase' below, considering the context.\n\n"
+                f"**Project Plan:**\n```markdown\n{truncated_plan or 'Not Available'}\n```\n\n"
+                f"**Project Synopsis:**\n```markdown\n{truncated_synopsis or 'Not Available'}\n```\n\n"
+                f"**Additional Retrieved Context:**\n```markdown\n{rag_context_str}\n```\n\n" # This now uses titles/types and filtered nodes
             )
-            # --- END MODIFIED ---
             if context_before or context_after:
                  user_message_content += "**Surrounding Text:**\n```\n"
                  if context_before: user_message_content += f"{context_before}\n"
@@ -123,21 +178,19 @@ class Rephraser:
                  user_message_content += "```\n\n"
             else:
                  user_message_content += f"**Text to Rephrase:**\n```\n{selected_text}\n```\n\n"
-            # --- MODIFIED: Use settings directly ---
             user_message_content += (
                 f"**Instructions:**\n"
-                f"- Provide exactly {settings.RAG_REPHRASE_SUGGESTION_COUNT} distinct suggestions.\n" # Use setting directly
+                f"- Provide exactly {settings.RAG_REPHRASE_SUGGESTION_COUNT} distinct suggestions.\n"
                 f"- Each suggestion should be a direct replacement for the 'Text to Rephrase'.\n"
                 f"- Maintain the original meaning and approximate length.\n"
                 f"- Match the tone and style suggested by the surrounding text and context.\n"
-                f"- Output the suggestions as a simple numbered list (e.g., '1. Suggestion one\n2. Suggestion two').\n"
+                f"- Output the suggestions as a simple numbered list (e.g., '1. Suggestion one\\n2. Suggestion two').\n"
                 f"- Just output the numbered list of suggestions."
             )
-            # --- END MODIFIED ---
             full_prompt = f"{system_prompt}\n\nUser: {user_message_content}\n\nAssistant:"
 
 
-            # 3. Call LLM via retry helper
+            # 3. Call LLM via retry helper (Unchanged)
             llm_response = await self._execute_llm_complete(full_prompt)
             generated_text = llm_response.text.strip() if llm_response else ""
 
@@ -145,29 +198,28 @@ class Rephraser:
                  logger.warning("LLM returned an empty response for rephrase.")
                  return ["Error: The AI failed to generate suggestions. Please try again."]
 
-            # 4. Parse the Numbered List Response
+            # 4. Parse the Numbered List Response (Unchanged)
             logger.debug(f"Raw LLM response for parsing:\n{generated_text}")
             suggestions = re.findall(r"^\s*\d+\.\s*(.*)", generated_text, re.MULTILINE)
             if not suggestions:
                 logger.warning(f"Could not parse numbered list from LLM response. Response was:\n{generated_text}")
+                # Fallback parsing: split by lines, remove empty, take first N
                 suggestions = [line.strip() for line in generated_text.splitlines() if line.strip()]
                 if not suggestions: return [f"Error: Could not parse suggestions. Raw response: {generated_text}"]
                 logger.warning(f"Fallback parsing used (split by newline), got {len(suggestions)} potential suggestions.")
 
-            # --- MODIFIED: Use settings directly ---
-            suggestions = [s.strip() for s in suggestions if s.strip()][:settings.RAG_REPHRASE_SUGGESTION_COUNT] # Use setting directly
-            # --- END MODIFIED ---
+            suggestions = [s.strip() for s in suggestions if s.strip()][:settings.RAG_REPHRASE_SUGGESTION_COUNT]
 
             logger.info(f"Successfully parsed {len(suggestions)} rephrase suggestions for project '{project_id}'.")
             return suggestions
 
-        # Exception Handling (remains the same)
-        except ClientError as e:
+        # --- Exception Handling (Catch GoogleAPICallError) ---
+        except GoogleAPICallError as e:
              if _is_retryable_google_api_error(e):
                   logger.error(f"Rate limit error persisted after retries for rephrase: {e}", exc_info=False)
                   return [f"Error: Rate limit exceeded after multiple retries. Please wait and try again."]
              else:
-                  logger.error(f"Non-retryable ClientError during rephrase for project '{project_id}': {e}", exc_info=True)
+                  logger.error(f"Non-retryable GoogleAPICallError during rephrase for project '{project_id}': {e}", exc_info=True)
                   return [f"Error: An unexpected error occurred while communicating with the AI service. Details: {e}"]
         except Exception as e:
              logger.error(f"Error during rephrase for project '{project_id}': {e}", exc_info=True)

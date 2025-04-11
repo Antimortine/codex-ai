@@ -1,4 +1,3 @@
-
 # Copyright 2025 Antimortine
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
@@ -20,6 +19,9 @@ from unittest.mock import MagicMock, AsyncMock
 from llama_index.core.llms import LLM
 from llama_index.core.retrievers import VectorIndexRetriever
 from llama_index.core.indices.vector_store import VectorStoreIndex
+# --- ADDED: Import BaseEmbedding ---
+from llama_index.core.embeddings import BaseEmbedding
+# --- END ADDED ---
 
 # --- Shared Fixtures for RAG Processor Tests ---
 
@@ -47,4 +49,11 @@ def mock_index(mock_retriever): # Depends on mock_retriever if needed
     index = MagicMock(spec=VectorStoreIndex)
     # Example: If processors called index.as_retriever()
     # index.as_retriever.return_value = mock_retriever
+
+    # --- ADDED: Mock the _embed_model attribute ---
+    # Create a simple mock for the embedding model
+    mock_embed_model = MagicMock(spec=BaseEmbedding)
+    index._embed_model = mock_embed_model
+    # --- END ADDED ---
+
     return index
