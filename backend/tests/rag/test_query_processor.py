@@ -19,7 +19,7 @@ from llama_index.core.indices.vector_store import VectorStoreIndex
 from llama_index.core.llms import LLM, CompletionResponse
 from llama_index.core.retrievers import VectorIndexRetriever
 from llama_index.core.schema import NodeWithScore, TextNode
-from typing import Optional, Dict, Set # Import Optional, Dict, Set
+from typing import Optional, Dict, Set, List # Import Optional, Dict, Set, List
 
 from tenacity import RetryError, stop_after_attempt, wait_exponential, retry, retry_if_exception # Import tenacity decorators
 from google.api_core.exceptions import GoogleAPICallError, ServiceUnavailable, ResourceExhausted # Import potential base/specific errors
@@ -297,12 +297,16 @@ async def test_query_handles_retry_failure_gracefully(
     query_text = "Query that hits rate limit."
     plan = "Plan"
     synopsis = "Synopsis"
-    mock_node_plan = NodeWithScore(node=TextNode(id_='n1', text="Plan context", metadata={'file_path': f'user_projects/{project_id}/plan.md'}), score=0.9)
-    mock_node_scene = NodeWithScore(node=TextNode(id_='n2', text="Scene context", metadata={'file_path': f'user_projects/{project_id}/scenes/s1.md'}), score=0.8)
+    plan_path_str = f'user_projects/{project_id}/plan.md' # Define path str
+    scene_path_str = f'user_projects/{project_id}/scenes/s1.md' # Define path str
+    mock_node_plan = NodeWithScore(node=TextNode(id_='n1', text="Plan context", metadata={'file_path': plan_path_str}), score=0.9)
+    mock_node_scene = NodeWithScore(node=TextNode(id_='n2', text="Scene context", metadata={'file_path': scene_path_str}), score=0.8)
     retrieved_nodes = [mock_node_plan, mock_node_scene]
     # Define the expected *filtered* nodes (plan should be filtered)
     expected_filtered_nodes = [mock_node_scene]
-    paths_to_filter_set = {str(Path(f"user_projects/{project_id}/plan.md"))}
+    # --- MODIFIED: Use Path object for filter set ---
+    paths_to_filter_set = {str(Path(plan_path_str))}
+    # --- END MODIFIED ---
 
     mock_retriever_instance = mock_retriever_class.return_value
     mock_retriever_instance.aretrieve = AsyncMock(return_value=retrieved_nodes)
@@ -318,9 +322,94 @@ async def test_query_handles_retry_failure_gracefully(
 
         assert "Rate limit exceeded for query after multiple retries" in answer
         # --- MODIFIED: Assert against expected filtered nodes ---
+        # Filtered nodes should still be returned even if LLM call fails
         assert source_nodes == expected_filtered_nodes
         # --- END MODIFIED ---
         assert direct_info is None
         mock_decorated_method.assert_awaited_once() # The decorated method is called once by query()
+
+
+# --- Tests for Node Deduplication and Filtering ---
+
+@pytest.mark.asyncio
+@patch('app.rag.query_processor.VectorIndexRetriever', autospec=True)
+async def test_query_deduplicates_and_filters_nodes(
+    mock_retriever_class: MagicMock,
+    mock_llm: MagicMock,
+    mock_index: MagicMock
+):
+    project_id = "proj-qp-dedup-filter"
+    query_text = "Deduplicate and filter test"
+    plan = "Plan"
+    synopsis = "Synopsis"
+    plan_path_str = f"user_projects/{project_id}/plan.md"
+    scene1_path_str = f"user_projects/{project_id}/scenes/s1.md"
+    scene2_path_str = f"user_projects/{project_id}/scenes/s2.md"
+    char_path_str = f"user_projects/{project_id}/characters/c1.md"
+
+    # Mock retrieved nodes:
+    # - plan node (should be filtered)
+    # - scene1 node (duplicate 1, lower score)
+    # - scene1 node (duplicate 2, higher score, keep this one)
+    # - scene2 node (unique, keep)
+    # - character node (unique, keep)
+    mock_node_plan = NodeWithScore(node=TextNode(id_='n_plan', text="Plan context.", metadata={'file_path': plan_path_str, 'document_type': 'Plan'}), score=0.9)
+    mock_node_s1_low = NodeWithScore(node=TextNode(id_='n_s1_low', text="Scene 1 content.", metadata={'file_path': scene1_path_str, 'document_type': 'Scene'}), score=0.7)
+    mock_node_s1_high = NodeWithScore(node=TextNode(id_='n_s1_high', text="Scene 1 content.", metadata={'file_path': scene1_path_str, 'document_type': 'Scene'}), score=0.8) # Same content/path, higher score
+    mock_node_s2 = NodeWithScore(node=TextNode(id_='n_s2', text="Scene 2 content.", metadata={'file_path': scene2_path_str, 'document_type': 'Scene'}), score=0.75)
+    mock_node_char = NodeWithScore(node=TextNode(id_='n_char', text="Character info.", metadata={'file_path': char_path_str, 'document_type': 'Character'}), score=0.85)
+
+    retrieved_nodes: List[NodeWithScore] = [
+        mock_node_plan,
+        mock_node_s1_low,
+        mock_node_s1_high, # Duplicate content/path
+        mock_node_s2,
+        mock_node_char,
+    ]
+
+    # Define the paths that AIService would pass for filtering
+    paths_to_filter_set = {str(Path(plan_path_str).resolve())} # Filter out the plan node
+
+    # Expected nodes *after* filtering and deduplication:
+    # - mock_node_plan is filtered out.
+    # - mock_node_s1_low is deduplicated (mock_node_s1_high kept).
+    # - mock_node_s1_high is kept.
+    # - mock_node_s2 is kept.
+    # - mock_node_char is kept.
+    expected_final_nodes: List[NodeWithScore] = [
+        mock_node_s1_high,
+        mock_node_s2,
+        mock_node_char,
+    ]
+
+    expected_answer = "Answer based on filtered and deduplicated context."
+    mock_retriever_instance = mock_retriever_class.return_value
+    mock_retriever_instance.aretrieve = AsyncMock(return_value=retrieved_nodes)
+    mock_llm.acomplete = AsyncMock(return_value=CompletionResponse(text=expected_answer))
+    processor = QueryProcessor(index=mock_index, llm=mock_llm)
+
+    # Pass the filter set to the query method
+    answer, source_nodes, direct_info = await processor.query(
+        project_id, query_text, plan, synopsis, paths_to_filter=paths_to_filter_set
+    )
+
+    # Assertions
+    assert answer == expected_answer
+    # Assert against the final filtered and deduplicated nodes
+    # Compare based on node IDs for simplicity, assuming IDs are unique after dedup
+    assert sorted([n.node.node_id for n in source_nodes]) == sorted([n.node.node_id for n in expected_final_nodes])
+    assert len(source_nodes) == len(expected_final_nodes)
+
+    assert direct_info is None
+    mock_retriever_instance.aretrieve.assert_awaited_once_with(query_text)
+    mock_llm.acomplete.assert_awaited_once()
+    prompt_arg = mock_llm.acomplete.call_args[0][0]
+
+    # Check prompt includes only the non-filtered, non-duplicated nodes
+    assert "Plan context." not in prompt_arg        # Filtered
+    assert "Scene 1 content." in prompt_arg         # Kept (from high score node)
+    assert "Scene 2 content." in prompt_arg         # Kept
+    assert "Character info." in prompt_arg         # Kept
+
 
 # --- END TESTS ---
