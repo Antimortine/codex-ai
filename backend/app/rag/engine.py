@@ -22,6 +22,9 @@ from app.rag.rephraser import Rephraser
 from app.rag.chapter_splitter import ChapterSplitter
 from app.rag.index_manager import index_manager
 from llama_index.core.base.response.schema import NodeWithScore
+# --- ADDED: Import ProposedScene for type hint ---
+from app.models.ai import ProposedScene
+# --- END ADDED ---
 
 logger = logging.getLogger(__name__)
 
@@ -29,47 +32,101 @@ class RagEngine:
     def __init__(self):
         if index_manager is None or not index_manager.index or not index_manager.llm: raise RuntimeError("RagEngine requires an initialized IndexManager.")
         self.index = index_manager.index; self.llm = index_manager.llm
-        # --- ADDED: Store index_manager instance ---
         self.index_manager = index_manager
-        # --- END ADDED ---
         try: self.query_processor = QueryProcessor(self.index, self.llm); self.scene_generator = SceneGenerator(self.index, self.llm); self.rephraser = Rephraser(self.index, self.llm); self.chapter_splitter = ChapterSplitter(self.index, self.llm); logger.info("RagEngine Facade initialized with task processors.")
         except Exception as e: logger.critical(f"Failed to initialize RAG task processors: {e}", exc_info=True); raise
 
-    async def query(self, project_id: str, query_text: str, explicit_plan: str, explicit_synopsis: str, direct_sources_data: Optional[List[Dict]] = None, paths_to_filter: Optional[Set[str]] = None) -> Tuple[str, List[NodeWithScore], Optional[List[Dict[str, str]]]]:
+    # --- MODIFIED: Added direct_chapter_context parameter ---
+    async def query(self,
+                  project_id: str,
+                  query_text: str,
+                  explicit_plan: Optional[str],
+                  explicit_synopsis: Optional[str],
+                  direct_sources_data: Optional[List[Dict]] = None,
+                  direct_chapter_context: Optional[Dict[str, Optional[str]]] = None, # Added
+                  paths_to_filter: Optional[Set[str]] = None
+                  ) -> Tuple[str, List[NodeWithScore], Optional[List[Dict[str, str]]]]:
         logger.debug(f"RagEngine Facade: Delegating query for project '{project_id}' to QueryProcessor.")
-        return await self.query_processor.query(project_id=project_id, query_text=query_text, explicit_plan=explicit_plan, explicit_synopsis=explicit_synopsis, direct_sources_data=direct_sources_data, paths_to_filter=paths_to_filter)
+        return await self.query_processor.query(
+            project_id=project_id,
+            query_text=query_text,
+            explicit_plan=explicit_plan,
+            explicit_synopsis=explicit_synopsis,
+            direct_sources_data=direct_sources_data,
+            direct_chapter_context=direct_chapter_context, # Pass through
+            paths_to_filter=paths_to_filter
+        )
+    # --- END MODIFIED ---
 
-    async def generate_scene(self, project_id: str, chapter_id: str, prompt_summary: Optional[str], previous_scene_order: Optional[int], explicit_plan: str, explicit_synopsis: str, explicit_previous_scenes: List[Tuple[int, str]], paths_to_filter: Optional[Set[str]] = None) -> Dict[str, str]:
+    # --- MODIFIED: Added chapter context parameters ---
+    async def generate_scene(self,
+                             project_id: str,
+                             chapter_id: str,
+                             prompt_summary: Optional[str],
+                             previous_scene_order: Optional[int],
+                             explicit_plan: Optional[str],
+                             explicit_synopsis: Optional[str],
+                             explicit_chapter_plan: Optional[str], # Added
+                             explicit_chapter_synopsis: Optional[str], # Added
+                             explicit_previous_scenes: List[Tuple[int, str]],
+                             paths_to_filter: Optional[Set[str]] = None
+                             ) -> Dict[str, str]:
         logger.debug(f"RagEngine Facade: Delegating generate_scene for project '{project_id}', chapter '{chapter_id}' to SceneGenerator.")
         return await self.scene_generator.generate_scene(
             project_id=project_id, chapter_id=chapter_id, prompt_summary=prompt_summary,
-            previous_scene_order=previous_scene_order, explicit_plan=explicit_plan,
-            explicit_synopsis=explicit_synopsis, explicit_previous_scenes=explicit_previous_scenes,
+            previous_scene_order=previous_scene_order,
+            explicit_plan=explicit_plan,
+            explicit_synopsis=explicit_synopsis,
+            explicit_chapter_plan=explicit_chapter_plan, # Pass through
+            explicit_chapter_synopsis=explicit_chapter_synopsis, # Pass through
+            explicit_previous_scenes=explicit_previous_scenes,
             paths_to_filter=paths_to_filter
         )
+    # --- END MODIFIED ---
 
-    async def rephrase(self, project_id: str, selected_text: str, context_before: Optional[str], context_after: Optional[str],
-                     explicit_plan: str, explicit_synopsis: str,
+    # --- MODIFIED: Made plan/synopsis optional ---
+    async def rephrase(self,
+                     project_id: str,
+                     selected_text: str,
+                     context_before: Optional[str],
+                     context_after: Optional[str],
+                     explicit_plan: Optional[str], # Optional
+                     explicit_synopsis: Optional[str], # Optional
                      paths_to_filter: Optional[Set[str]] = None
                      ) -> List[str]:
         logger.debug(f"RagEngine Facade: Delegating rephrase for project '{project_id}' to Rephraser.")
         return await self.rephraser.rephrase(
             project_id=project_id, selected_text=selected_text, context_before=context_before,
-            context_after=context_after, explicit_plan=explicit_plan, explicit_synopsis=explicit_synopsis,
+            context_after=context_after,
+            explicit_plan=explicit_plan, # Pass through
+            explicit_synopsis=explicit_synopsis, # Pass through
             paths_to_filter=paths_to_filter
         )
+    # --- END MODIFIED ---
 
-    async def split_chapter(self, project_id: str, chapter_id: str, chapter_content: str, explicit_plan: str, explicit_synopsis: str, paths_to_filter: Optional[Set[str]] = None) -> List:
+    # --- MODIFIED: Added chapter context parameters ---
+    async def split_chapter(self,
+                            project_id: str,
+                            chapter_id: str,
+                            chapter_content: str,
+                            explicit_plan: Optional[str], # Optional
+                            explicit_synopsis: Optional[str], # Optional
+                            explicit_chapter_plan: Optional[str], # Added
+                            explicit_chapter_synopsis: Optional[str], # Added
+                            paths_to_filter: Optional[Set[str]] = None
+                            ) -> List[ProposedScene]: # Corrected return type hint
         logger.debug(f"RagEngine Facade: Delegating split_chapter for project '{project_id}', chapter '{chapter_id}' to ChapterSplitter.")
         return await self.chapter_splitter.split(
             project_id=project_id, chapter_id=chapter_id, chapter_content=chapter_content,
-            explicit_plan=explicit_plan, explicit_synopsis=explicit_synopsis,
+            explicit_plan=explicit_plan, # Pass through
+            explicit_synopsis=explicit_synopsis, # Pass through
+            explicit_chapter_plan=explicit_chapter_plan, # Pass through
+            explicit_chapter_synopsis=explicit_chapter_synopsis, # Pass through
             paths_to_filter=paths_to_filter
         )
+    # --- END MODIFIED ---
 
-    # --- ADDED: Rebuild Index Method ---
-    # Note: This is synchronous because index_file and delete_project_docs are currently synchronous.
-    # If they become async, this should be async too.
+    # (rebuild_index remains unchanged)
     def rebuild_index(self, project_id: str, file_paths: List[Path]):
         """
         Deletes all existing index entries for a project and re-indexes the provided file paths.
@@ -102,7 +159,6 @@ class RagEngine:
                 error_count += 1
 
         logger.info(f"RagEngine Facade: Finished index rebuild for project '{project_id}'. Indexed: {indexed_count}, Errors: {error_count}.")
-    # --- END ADDED ---
 
 
 # --- Instantiate Singleton ---
