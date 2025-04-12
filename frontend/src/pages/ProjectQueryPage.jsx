@@ -14,7 +14,7 @@
  * limitations under the License.
  */
 
-import React, { useState, useEffect, useCallback, useRef } from 'react'; // Import useRef
+import React, { useState, useEffect, useCallback, useRef } from 'react';
 import { useParams, Link } from 'react-router-dom';
 import QueryInterface from '../components/QueryInterface';
 import {
@@ -71,16 +71,16 @@ function ProjectQueryPage() {
     const [isLoadingSessions, setIsLoadingSessions] = useState(true);
     const [sessionError, setSessionError] = useState(null);
     const [isProcessingSessionAction, setIsProcessingSessionAction] = useState(false);
-    // --- Use a ref to track if the initial session load/check is done ---
     const initialSessionCheckDone = useRef(false);
-    // ---
+    const defaultSessionCreationAttempted = useRef(false);
 
-    // Fetch project name (no changes)
+    // Fetch project name
     useEffect(() => {
         let isMounted = true;
         setIsLoadingProject(true);
         setProjectError(null);
-        initialSessionCheckDone.current = false; // Reset check when project changes
+        initialSessionCheckDone.current = false;
+        defaultSessionCreationAttempted.current = false;
         if (!projectId) { if (isMounted) { setProjectError("Project ID not found in URL."); setIsLoadingProject(false); } return; }
         getProject(projectId)
             .then(response => { if (isMounted) { setProjectName(response.data.name || 'Unknown Project'); } })
@@ -89,105 +89,78 @@ function ProjectQueryPage() {
         return () => { isMounted = false; };
     }, [projectId]);
 
-    // --- REVISED: fetchSessions focuses only on fetching and setting state ---
+    // Fetch Sessions - Simplified dependencies
     const fetchSessions = useCallback(async (selectSessionId = null) => {
         if (!projectId) return Promise.resolve([]);
-        // Don't reset loading if already processing an action that will call fetch again
+        // Set loading true only if not already processing another session action
         if (!isProcessingSessionAction) {
-            setIsLoadingSessions(true);
+             setIsLoadingSessions(true);
         }
         setSessionError(null);
         let fetchedSessions = [];
         try {
             const response = await listChatSessions(projectId);
             fetchedSessions = response.data?.sessions || [];
-            setSessions(fetchedSessions); // Update sessions list
+            setSessions(fetchedSessions);
             console.log("[ProjectQueryPage] Fetched sessions:", fetchedSessions);
 
-            // Determine the session to activate
             let sessionToActivate = null;
+            const currentActiveId = activeSessionId; // Read current value from state closure
             if (selectSessionId && fetchedSessions.some(s => s.id === selectSessionId)) {
-                sessionToActivate = selectSessionId; // Activate the requested one if valid
+                sessionToActivate = selectSessionId;
             } else if (fetchedSessions.length > 0) {
-                 // Keep current active session if it still exists in the fetched list
-                const currentActiveStillExists = activeSessionId && fetchedSessions.some(s => s.id === activeSessionId);
-                sessionToActivate = currentActiveStillExists ? activeSessionId : fetchedSessions[0].id;
+                const currentActiveStillExists = currentActiveId && fetchedSessions.some(s => s.id === currentActiveId);
+                sessionToActivate = currentActiveStillExists ? currentActiveId : fetchedSessions[0].id;
             }
 
-            setActiveSessionId(sessionToActivate); // Set to null if no sessions
-            console.log(`[ProjectQueryPage] Set active session to: ${sessionToActivate}`);
-            return fetchedSessions; // Return the fetched sessions
+            // Only update activeSessionId if it's different or null initially
+            if (sessionToActivate !== currentActiveId) {
+                 setActiveSessionId(sessionToActivate);
+                 console.log(`[ProjectQueryPage] Set active session to: ${sessionToActivate}`);
+            } else {
+                 console.log(`[ProjectQueryPage] Active session remains: ${currentActiveId}`);
+            }
+            return fetchedSessions;
 
         } catch (err) {
             console.error("[ProjectQueryPage] Error fetching sessions:", err);
             setSessionError(`Failed to load chat sessions: ${err.response?.data?.detail || err.message}`);
             setActiveSessionId(null);
             setSessions([]);
-            return []; // Return empty array on error
+            return [];
         } finally {
-            setIsLoadingSessions(false); // Ensure loading is set to false
-            // Mark initial check done AFTER the first successful/failed fetch
+            setIsLoadingSessions(false); // Always set loading false here
             if (!initialSessionCheckDone.current) {
                 initialSessionCheckDone.current = true;
             }
         }
-    // --- REMOVED activeSessionId from dependency array ---
-    }, [projectId, isProcessingSessionAction]); // Depend on projectId and processing flag
-    // --- END REVISED ---
-
-    // --- REVISED: useEffect for initial fetch ---
-    useEffect(() => {
-        // Fetch initially when project is ready
-        if (projectId && !isLoadingProject && !projectError) {
-            fetchSessions();
-        }
-    }, [projectId, isLoadingProject, projectError, fetchSessions]);
-    // --- END REVISED ---
+    }, [projectId]); // Removed activeSessionId and isProcessingSessionAction
 
     // --- Session Action Handlers ---
-    // --- REVISED: handleCreateSession simplified ---
+    // handleCreateSession now manages its own processing state fully
     const handleCreateSession = useCallback(async (defaultName = null) => {
         const newSessionName = defaultName || window.prompt("Enter name for the new chat session:");
-        if (!newSessionName || !newSessionName.trim()) return;
+        if (!newSessionName || !newSessionName.trim()) return null;
 
-        setIsProcessingSessionAction(true);
+        setIsProcessingSessionAction(true); // Set processing TRUE
         setSessionError(null);
         let newSessionId = null;
         try {
             const response = await createChatSession(projectId, { name: newSessionName.trim() });
             newSessionId = response.data.id;
             console.log("[ProjectQueryPage] Created new session:", response.data);
-            // Fetch sessions again, activating the new one
-            await fetchSessions(newSessionId);
+            await fetchSessions(newSessionId); // Fetch sessions again, activating the new one
+            return newSessionId;
         } catch (err) {
             console.error("[ProjectQueryPage] Error creating session:", err);
             setSessionError(`Failed to create session: ${err.response?.data?.detail || err.message}`);
-            setIsProcessingSessionAction(false); // Ensure flag is reset on error
+            return null;
         } finally {
-            // setIsLoadingProcessing(false) is handled by fetchSessions if successful
+            setIsProcessingSessionAction(false); // Reset processing FALSE in finally
         }
     }, [projectId, fetchSessions]); // Depends on fetchSessions
 
-    // --- REVISED: Separate useEffect for default creation ---
-    useEffect(() => {
-        // Only run this check *after* the initial load is marked complete
-        // and if no sessions were found/activated and no error occurred.
-        if (initialSessionCheckDone.current && 
-            !isLoadingSessions && 
-            sessions.length === 0 && 
-            !activeSessionId && 
-            !sessionError && 
-            !isProcessingSessionAction) {
-            
-            console.log("[ProjectQueryPage] useEffect (Default Create Check): Triggering default session creation.");
-            // Prevent this effect from running again immediately
-            initialSessionCheckDone.current = false; // Reset flag temporarily during creation
-            handleCreateSession("Main Chat");
-        }
-    }, [isLoadingSessions, sessions, activeSessionId, sessionError, isProcessingSessionAction, handleCreateSession]);
-    // --- END REVISED ---
-    // --- END REVISED ---
-
+    // Rename Handler - manages its own processing state
     const handleRenameSession = useCallback(async () => {
         if (!activeSessionId) return;
         const currentSession = sessions.find(s => s.id === activeSessionId);
@@ -203,12 +176,12 @@ function ProjectQueryPage() {
         } catch (err) {
             console.error("[ProjectQueryPage] Error renaming session:", err);
             setSessionError(`Failed to rename session: ${err.response?.data?.detail || err.message}`);
-            setIsProcessingSessionAction(false); // Reset on error
         } finally {
-             // setIsLoadingProcessing(false) handled by fetchSessions
+            setIsProcessingSessionAction(false); // Reset processing FALSE in finally
         }
     }, [projectId, activeSessionId, sessions, fetchSessions]);
 
+    // Delete Handler - manages its own processing state
     const handleDeleteSession = useCallback(async () => {
         if (!activeSessionId || sessions.length <= 1) {
             return;
@@ -221,45 +194,55 @@ function ProjectQueryPage() {
         setIsProcessingSessionAction(true);
         setSessionError(null);
         const sessionToDeleteId = activeSessionId;
-        
         try {
-            // Find the session to switch to after deletion
-            const remainingSessionId = sessions.find(s => s.id !== sessionToDeleteId)?.id;
-            
-            // Delete the current session
             await deleteChatSession(projectId, sessionToDeleteId);
-            console.log(`[ProjectQueryPage] Deleted session ${sessionToDeleteId}, switching to ${remainingSessionId}`);
-            
-            // Set active session to another one before fetching
-            if (remainingSessionId) {
-                setActiveSessionId(remainingSessionId);
-            } else {
-                setActiveSessionId(null);
-            }
-            
-            // Re-fetch sessions to update the list
-            await fetchSessions(remainingSessionId);
+            console.log(`[ProjectQueryPage] Deleted session ${sessionToDeleteId}`);
+            setActiveSessionId(null); // Reset active session ID temporarily
+            await fetchSessions(); // Re-fetch sessions, which will select the new first one
         } catch (err) {
             console.error("[ProjectQueryPage] Error deleting session:", err);
             setSessionError(`Failed to delete session: ${err.response?.data?.detail || err.message}`);
             setActiveSessionId(sessionToDeleteId); // Restore active ID if delete failed
-            setIsProcessingSessionAction(false); // Reset on error
+        } finally {
+             setIsProcessingSessionAction(false); // Reset processing FALSE in finally
         }
-        // setIsLoadingProcessing(false) handled by fetchSessions
     }, [projectId, activeSessionId, sessions, fetchSessions]);
 
+
+    // Initial fetch useEffect
+    useEffect(() => {
+        if (projectId && !isLoadingProject && !projectError) {
+            console.log("[ProjectQueryPage] Initial fetch effect triggered.");
+            fetchSessions();
+        }
+    }, [projectId, isLoadingProject, projectError, fetchSessions]);
+
+    // Default creation useEffect
+    useEffect(() => {
+        // Check conditions *after* initial load is complete
+        // Use the ref to ensure it only runs once per project load.
+        if (initialSessionCheckDone.current && !isLoadingSessions && sessions.length === 0 && !activeSessionId && !sessionError && !isProcessingSessionAction && !defaultSessionCreationAttempted.current) {
+            console.log("[ProjectQueryPage] useEffect (Default Create Check): Triggering default session creation.");
+            defaultSessionCreationAttempted.current = true; // Mark as attempted
+            // Call handleCreateSession - it manages its own processing state now
+            handleCreateSession("Main Chat");
+        }
+    // Removed handleCreateSession from deps, use ref instead
+    }, [initialSessionCheckDone.current, isLoadingSessions, sessions, activeSessionId, sessionError, isProcessingSessionAction]);
+
+
+    // handleSessionChange (no changes)
     const handleSessionChange = (event) => {
         const newSessionId = event.target.value;
         console.log(`[ProjectQueryPage] Session changed to: ${newSessionId}`);
-        // Ensure we set a session ID only if it's valid
-        if (newSessionId && sessions.some(s => s.id === newSessionId)) {
-            setActiveSessionId(newSessionId);
-        }
+        setActiveSessionId(newSessionId);
     };
 
 
+    // Combined disable flag remains the same
     const disableSessionControls = isLoadingProject || isLoadingSessions || isProcessingSessionAction;
 
+    // --- Rendering logic remains the same ---
     return (
         <div>
             <nav style={{ marginBottom: '1rem' }}>
@@ -281,9 +264,9 @@ function ProjectQueryPage() {
 
             {/* Session Management UI */}
             <h3>Chat Sessions</h3>
-             {isLoadingSessions && !initialSessionCheckDone.current && <p style={sessionStyles.loading}>Loading sessions...</p>} {/* Show loading only initially */}
+             {isLoadingSessions && !initialSessionCheckDone.current && <p style={sessionStyles.loading}>Loading sessions...</p>}
              {sessionError && <p style={sessionStyles.error}>{sessionError}</p>}
-             {!isLoadingProject && ( // Render controls once project is loaded
+             {!isLoadingProject && (
                 <div style={sessionStyles.container}>
                     <label htmlFor="session-select" style={{whiteSpace: 'nowrap'}}>Active Session:</label>
                     <select
@@ -294,13 +277,11 @@ function ProjectQueryPage() {
                         style={sessionStyles.select}
                         aria-label="Select Chat Session"
                     >
-                        {/* Render options only if not loading sessions */}
                         {!isLoadingSessions && sessions.map(session => (
                             <option key={session.id} value={session.id}>
                                 {session.name} ({session.id.substring(0, 6)}...)
                             </option>
                         ))}
-                        {/* Show placeholder if loading or if loading finished and no sessions */}
                         {(isLoadingSessions || (!isLoadingSessions && sessions.length === 0)) && (
                             <option value="" disabled>
                                 {isLoadingSessions ? 'Loading...' : 'No sessions available'}
@@ -321,10 +302,9 @@ function ProjectQueryPage() {
             )}
 
             {/* Query Interface */}
-            {/* Render only when everything is loaded and an active session exists */}
             {projectId && !isLoadingProject && !projectError && !isLoadingSessions && !sessionError && activeSessionId && (
                 <QueryInterface
-                    key={activeSessionId} // Keep key to force remount on session change
+                    key={activeSessionId}
                     projectId={projectId}
                     activeSessionId={activeSessionId}
                 />
