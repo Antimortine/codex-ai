@@ -17,6 +17,7 @@ from unittest.mock import MagicMock, patch, call, ANY # Import ANY
 from fastapi import HTTPException, status
 from pathlib import Path
 import uuid # Import uuid
+import time # Import time for timestamps
 
 # Import the class we are testing
 from app.services.project_service import ProjectService
@@ -39,7 +40,7 @@ def project_service_with_mocks():
         yield service_instance, mock_file_service_instance
 
 # --- Tests for create ---
-
+# (Unchanged - Omitted for brevity)
 @patch('app.services.project_service.generate_uuid', return_value="new-uuid-123") # Mock UUID generation
 def test_create_project_success(mock_uuid, project_service_with_mocks):
     """Test successful project creation."""
@@ -100,7 +101,7 @@ def test_create_project_collision(mock_uuid, project_service_with_mocks):
     mock_file_service.write_json_file.assert_not_called()
 
 # --- Tests for get_by_id ---
-
+# (Unchanged - Omitted for brevity)
 @patch('pathlib.Path.is_dir', return_value=True)
 def test_get_project_by_id_success(mock_is_dir, project_service_with_mocks): # Add mock_is_dir arg
     """Test successfully getting a project by ID."""
@@ -184,29 +185,49 @@ def test_get_project_by_id_metadata_missing(mock_is_dir, project_service_with_mo
 
 # --- Tests for get_all ---
 
-def test_get_all_projects_success(project_service_with_mocks):
-    """Test listing projects successfully."""
+def test_get_all_projects_success_and_sorted(project_service_with_mocks):
+    """Test listing projects successfully and verifying sorting by last content mtime."""
     service, mock_file_service = project_service_with_mocks
-    proj1_id = str(uuid.uuid4())
-    proj2_id = str(uuid.uuid4())
+    proj1_id = str(uuid.uuid4()) # Oldest
+    proj2_id = str(uuid.uuid4()) # Newest
+    proj3_id = str(uuid.uuid4()) # Middle
     invalid_dir_name = "not-a-uuid"
-    proj_missing_meta_id = str(uuid.uuid4())
-    mock_subdirs = [proj1_id, proj2_id, invalid_dir_name, proj_missing_meta_id]
+    proj_missing_meta_id = str(uuid.uuid4()) # Oldest missing meta
+
+    mock_subdirs = [proj1_id, proj2_id, invalid_dir_name, proj3_id, proj_missing_meta_id]
+
+    # Mock paths
+    path1 = Path(f"user_projects/{proj1_id}")
+    path2 = Path(f"user_projects/{proj2_id}")
+    path3 = Path(f"user_projects/{proj3_id}")
+    path_missing = Path(f"user_projects/{proj_missing_meta_id}")
+
+    # Mock timestamps (Unix epoch floats)
+    time_now = time.time()
+    ts1 = time_now - 2000 # Oldest
+    ts2 = time_now # Newest
+    ts3 = time_now - 1000 # Middle
+    ts_missing = time_now - 3000 # Oldest missing meta
 
     # Configure mocks
     mock_file_service.list_subdirectories.return_value = mock_subdirs
+    mock_file_service._get_project_path.side_effect = lambda pid: {
+        proj1_id: path1, proj2_id: path2, proj3_id: path3, proj_missing_meta_id: path_missing
+    }.get(pid)
+
+    # --- MODIFIED: Mock get_project_last_content_modification ---
+    mock_file_service.get_project_last_content_modification.side_effect = lambda p: {
+        path1: ts1, path2: ts2, path3: ts3, path_missing: ts_missing
+    }.get(p)
+    # --- END MODIFIED ---
 
     # Mock the behavior of get_by_id called internally
     def mock_get_by_id(pid):
-        if pid == proj1_id:
-            return ProjectRead(id=pid, name="Project One")
-        elif pid == proj2_id:
-            return ProjectRead(id=pid, name="Project Two")
-        elif pid == proj_missing_meta_id:
-            # Simulate case where get_by_id returns default name due to missing meta
-            return ProjectRead(id=pid, name=f"Project {pid}")
-        else:
-            raise ValueError(f"get_by_id called unexpectedly for {pid}")
+        if pid == proj1_id: return ProjectRead(id=pid, name="Project One")
+        if pid == proj2_id: return ProjectRead(id=pid, name="Project Two")
+        if pid == proj3_id: return ProjectRead(id=pid, name="Project Three")
+        if pid == proj_missing_meta_id: return ProjectRead(id=pid, name=f"Project {pid}") # Default name
+        raise ValueError(f"get_by_id called unexpectedly for {pid}")
 
     # Patch the service's *own* get_by_id method for this test
     with patch.object(service, 'get_by_id', side_effect=mock_get_by_id) as mock_internal_get:
@@ -214,15 +235,19 @@ def test_get_all_projects_success(project_service_with_mocks):
 
         # Assertions
         assert isinstance(project_list, ProjectList)
-        assert len(project_list.projects) == 3 # proj1, proj2, proj_missing_meta
-        projects_sorted = sorted(project_list.projects, key=lambda p: p.id)
-        assert projects_sorted[0].id in [proj1_id, proj2_id, proj_missing_meta_id]
-        assert projects_sorted[1].id in [proj1_id, proj2_id, proj_missing_meta_id]
-        assert projects_sorted[2].id in [proj1_id, proj2_id, proj_missing_meta_id]
+        assert len(project_list.projects) == 4 # proj1, proj2, proj3, proj_missing_meta
+        # Verify the order is descending by timestamp (ts2 > ts3 > ts1 > ts_missing)
+        assert project_list.projects[0].id == proj2_id # Newest
+        assert project_list.projects[1].id == proj3_id # Middle
+        assert project_list.projects[2].id == proj1_id # Oldest with meta
+        assert project_list.projects[3].id == proj_missing_meta_id # Oldest missing meta
 
         # Verify mocks
         mock_file_service.list_subdirectories.assert_called_once_with(ANY)
-        assert mock_internal_get.call_count == 3
+        assert mock_internal_get.call_count == 4
+        # --- MODIFIED: Verify new method call ---
+        assert mock_file_service.get_project_last_content_modification.call_count == 4 # Called for each valid UUID dir
+        # --- END MODIFIED ---
 
 def test_get_all_projects_empty(project_service_with_mocks):
     """Test listing projects when the base directory is empty."""
@@ -234,6 +259,9 @@ def test_get_all_projects_empty(project_service_with_mocks):
     assert isinstance(project_list, ProjectList)
     assert len(project_list.projects) == 0
     mock_file_service.list_subdirectories.assert_called_once_with(ANY)
+    # --- MODIFIED: Verify new method not called ---
+    mock_file_service.get_project_last_content_modification.assert_not_called()
+    # --- END MODIFIED ---
 
 def test_get_all_projects_list_dir_error(project_service_with_mocks):
     """Test listing projects when listing subdirectories fails."""
@@ -245,9 +273,12 @@ def test_get_all_projects_list_dir_error(project_service_with_mocks):
 
     assert exc_info.value.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
     assert "Error reading project directory" in exc_info.value.detail
+    # --- MODIFIED: Verify new method not called ---
+    mock_file_service.get_project_last_content_modification.assert_not_called()
+    # --- END MODIFIED ---
 
 # --- Tests for update ---
-
+# (Unchanged - Omitted for brevity)
 @patch('pathlib.Path.is_dir', return_value=True)
 def test_update_project_success(mock_is_dir, project_service_with_mocks): # Add mock_is_dir arg
     """Test successfully updating a project name."""
@@ -332,7 +363,7 @@ def test_update_project_not_found(project_service_with_mocks):
         mock_file_service.write_json_file.assert_not_called()
 
 # --- Tests for delete ---
-
+# (Unchanged - Omitted for brevity)
 @patch('pathlib.Path.is_dir', return_value=True)
 def test_delete_project_success(mock_is_dir, project_service_with_mocks): # Add mock_is_dir arg
     """Test successfully deleting a project."""

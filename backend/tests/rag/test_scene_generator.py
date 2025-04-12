@@ -28,7 +28,7 @@ from fastapi import HTTPException, status
 
 # Import the class we are testing
 from app.rag.scene_generator import SceneGenerator, _is_retryable_google_api_error # Import predicate too
-from app.core.config import settings
+from app.core.config import settings # Import settings
 from app.services.file_service import file_service
 
 # --- Fixtures are defined in tests/rag/conftest.py ---
@@ -56,6 +56,7 @@ def create_mock_client_error(status_code: int, message: str = "API Error") -> Mo
 
 
 # --- Test SceneGenerator (Single Call + Parsing) ---
+# (Unchanged tests omitted for brevity)
 @pytest.mark.asyncio
 @patch('app.rag.scene_generator.VectorIndexRetriever', autospec=True)
 @patch('app.rag.scene_generator.file_service', autospec=True)
@@ -67,9 +68,12 @@ async def test_generate_scene_success_with_context(mock_file_svc: MagicMock, moc
     mock_retriever_instance = mock_retriever_class.return_value; mock_retriever_instance.aretrieve = AsyncMock(return_value=retrieved_nodes)
     mock_llm.acomplete = AsyncMock(return_value=CompletionResponse(text=mock_llm_response_text)); mock_llm.callback_manager = None
     generator = SceneGenerator(index=mock_index, llm=mock_llm)
-    generated_draft = await generator.generate_scene(project_id, chapter_id, prompt_summary, previous_scene_order, plan, synopsis, explicit_previous_scenes)
-    assert generated_draft == expected_result_dict; mock_file_svc.read_project_metadata.assert_called_once_with(project_id); mock_retriever_instance.aretrieve.assert_awaited_once(); mock_llm.acomplete.assert_awaited_once()
-    prompt_arg = mock_llm.acomplete.call_args[0][0]; assert prompt_summary in prompt_arg; assert plan in prompt_arg; assert synopsis in prompt_arg; assert prev_scene_content in prompt_arg; assert f"Chapter '{chapter_title}'" in prompt_arg; assert 'Source (World: "World Info")' in prompt_arg; assert "Tavern description." in prompt_arg; assert 'file_path' not in prompt_arg; assert "Output Format Requirement:" in prompt_arg
+    # Patch the internal helper to check args
+    with patch.object(generator, '_execute_llm_complete', wraps=generator._execute_llm_complete) as mock_execute_llm:
+        generated_draft = await generator.generate_scene(project_id, chapter_id, prompt_summary, previous_scene_order, plan, synopsis, explicit_previous_scenes)
+        assert generated_draft == expected_result_dict; mock_file_svc.read_project_metadata.assert_called_once_with(project_id); mock_retriever_instance.aretrieve.assert_awaited_once();
+        mock_execute_llm.assert_awaited_once()
+        prompt_arg = mock_execute_llm.call_args[0][0]; assert prompt_summary in prompt_arg; assert plan in prompt_arg; assert synopsis in prompt_arg; assert prev_scene_content in prompt_arg; assert f"Chapter '{chapter_title}'" in prompt_arg; assert 'Source (World: "World Info")' in prompt_arg; assert "Tavern description." in prompt_arg; assert 'file_path' not in prompt_arg; assert "Output Format Requirement:" in prompt_arg
 
 @pytest.mark.asyncio
 @patch('app.rag.scene_generator.VectorIndexRetriever', autospec=True)
@@ -81,13 +85,13 @@ async def test_generate_scene_success_first_scene(mock_file_svc: MagicMock, mock
     mock_retriever_instance = mock_retriever_class.return_value; mock_retriever_instance.aretrieve = AsyncMock(return_value=retrieved_nodes)
     mock_llm.acomplete = AsyncMock(return_value=CompletionResponse(text=mock_llm_response_text)); mock_llm.callback_manager = None
     generator = SceneGenerator(index=mock_index, llm=mock_llm)
-    generated_draft = await generator.generate_scene(project_id, chapter_id, prompt_summary, previous_scene_order, plan, synopsis, explicit_previous_scenes)
-    assert generated_draft == expected_result_dict; mock_file_svc.read_project_metadata.assert_called_once_with(project_id); mock_retriever_instance.aretrieve.assert_awaited_once(); mock_llm.acomplete.assert_awaited_once()
-    prompt_arg = mock_llm.acomplete.call_args[0][0]; assert f"Chapter '{chapter_title}'" in prompt_arg;
-    # --- MODIFIED: Assert new prompt text ---
-    assert f"N/A (Generating the first scene of chapter '{chapter_title}')" in prompt_arg;
-    # --- END MODIFIED ---
-    assert "No additional context retrieved" in prompt_arg
+    with patch.object(generator, '_execute_llm_complete', wraps=generator._execute_llm_complete) as mock_execute_llm:
+        generated_draft = await generator.generate_scene(project_id, chapter_id, prompt_summary, previous_scene_order, plan, synopsis, explicit_previous_scenes)
+        assert generated_draft == expected_result_dict; mock_file_svc.read_project_metadata.assert_called_once_with(project_id); mock_retriever_instance.aretrieve.assert_awaited_once();
+        mock_execute_llm.assert_awaited_once()
+        prompt_arg = mock_execute_llm.call_args[0][0]; assert f"Chapter '{chapter_title}'" in prompt_arg;
+        assert f"N/A (Generating the first scene of chapter '{chapter_title}')" in prompt_arg;
+        assert "No additional context retrieved" in prompt_arg
 
 @pytest.mark.asyncio
 @patch('app.rag.scene_generator.VectorIndexRetriever', autospec=True)
@@ -99,9 +103,11 @@ async def test_generate_scene_success_no_rag_nodes(mock_file_svc: MagicMock, moc
     mock_retriever_instance = mock_retriever_class.return_value; mock_retriever_instance.aretrieve = AsyncMock(return_value=retrieved_nodes)
     mock_llm.acomplete = AsyncMock(return_value=CompletionResponse(text=mock_llm_response_text)); mock_llm.callback_manager = None
     generator = SceneGenerator(index=mock_index, llm=mock_llm)
-    generated_draft = await generator.generate_scene(project_id, chapter_id, prompt_summary, previous_scene_order, plan, synopsis, explicit_previous_scenes)
-    assert generated_draft == expected_result_dict; mock_file_svc.read_project_metadata.assert_called_once_with(project_id); mock_retriever_instance.aretrieve.assert_awaited_once(); mock_llm.acomplete.assert_awaited_once()
-    prompt_arg = mock_llm.acomplete.call_args[0][0]; assert f"Chapter '{chapter_title}'" in prompt_arg; assert "No additional context retrieved" in prompt_arg
+    with patch.object(generator, '_execute_llm_complete', wraps=generator._execute_llm_complete) as mock_execute_llm:
+        generated_draft = await generator.generate_scene(project_id, chapter_id, prompt_summary, previous_scene_order, plan, synopsis, explicit_previous_scenes)
+        assert generated_draft == expected_result_dict; mock_file_svc.read_project_metadata.assert_called_once_with(project_id); mock_retriever_instance.aretrieve.assert_awaited_once();
+        mock_execute_llm.assert_awaited_once()
+        prompt_arg = mock_execute_llm.call_args[0][0]; assert f"Chapter '{chapter_title}'" in prompt_arg; assert "No additional context retrieved" in prompt_arg
 
 @pytest.mark.asyncio
 @patch('app.rag.scene_generator.VectorIndexRetriever', autospec=True)
@@ -122,11 +128,13 @@ async def test_generate_scene_llm_error(mock_file_svc: MagicMock, mock_retriever
     project_id = "proj-sg-5"; chapter_id = "ch-sg-5"; prompt_summary = "Summary"; previous_scene_order = 1; plan = "Plan"; synopsis = "Synopsis"; explicit_previous_scenes = [(1, "Previous")]; chapter_title = "LLM Error Chapter"; retrieved_nodes = []
     mock_file_svc.read_project_metadata.return_value = {"chapters": {chapter_id: {"title": chapter_title}}}
     mock_retriever_instance = mock_retriever_class.return_value; mock_retriever_instance.aretrieve = AsyncMock(return_value=retrieved_nodes)
-    mock_llm.acomplete = AsyncMock(side_effect=ValueError("LLM failed validation")); mock_llm.callback_manager = None
     generator = SceneGenerator(index=mock_index, llm=mock_llm)
-    with pytest.raises(HTTPException) as exc_info: await generator.generate_scene(project_id, chapter_id, prompt_summary, previous_scene_order, plan, synopsis, explicit_previous_scenes)
-    assert exc_info.value.status_code == 500; assert "Error: An unexpected error occurred during scene generation. Please check logs." in exc_info.value.detail
-    mock_file_svc.read_project_metadata.assert_called_once_with(project_id); mock_retriever_instance.aretrieve.assert_awaited_once(); mock_llm.acomplete.assert_awaited_once()
+    # Patch the internal helper to raise the error
+    with patch.object(generator, '_execute_llm_complete', side_effect=ValueError("LLM failed validation")) as mock_execute_llm:
+        with pytest.raises(HTTPException) as exc_info: await generator.generate_scene(project_id, chapter_id, prompt_summary, previous_scene_order, plan, synopsis, explicit_previous_scenes)
+        assert exc_info.value.status_code == 500; assert "Error: An unexpected error occurred during scene generation. Please check logs." in exc_info.value.detail
+        mock_file_svc.read_project_metadata.assert_called_once_with(project_id); mock_retriever_instance.aretrieve.assert_awaited_once();
+        mock_execute_llm.assert_awaited_once() # Check helper was called
 
 @pytest.mark.asyncio
 @patch('app.rag.scene_generator.VectorIndexRetriever', autospec=True)
@@ -135,11 +143,13 @@ async def test_generate_scene_llm_empty_response(mock_file_svc: MagicMock, mock_
     project_id = "proj-sg-6"; chapter_id = "ch-sg-6"; prompt_summary = "Summary"; previous_scene_order = 1; plan = "Plan"; synopsis = "Synopsis"; explicit_previous_scenes = [(1, "Previous")]; chapter_title = "Empty Response Chapter"; retrieved_nodes = []
     mock_file_svc.read_project_metadata.return_value = {"chapters": {chapter_id: {"title": chapter_title}}}
     mock_retriever_instance = mock_retriever_class.return_value; mock_retriever_instance.aretrieve = AsyncMock(return_value=retrieved_nodes)
-    mock_llm.acomplete = AsyncMock(return_value=CompletionResponse(text="")); mock_llm.callback_manager = None
     generator = SceneGenerator(index=mock_index, llm=mock_llm)
-    with pytest.raises(HTTPException) as exc_info: await generator.generate_scene(project_id, chapter_id, prompt_summary, previous_scene_order, plan, synopsis, explicit_previous_scenes)
-    assert exc_info.value.status_code == 500; assert "Error: The AI failed to generate a scene draft." in exc_info.value.detail
-    mock_file_svc.read_project_metadata.assert_called_once_with(project_id); mock_retriever_instance.aretrieve.assert_awaited_once(); mock_llm.acomplete.assert_awaited_once()
+    # Patch the internal helper to return empty text
+    with patch.object(generator, '_execute_llm_complete', return_value=CompletionResponse(text="")) as mock_execute_llm:
+        with pytest.raises(HTTPException) as exc_info: await generator.generate_scene(project_id, chapter_id, prompt_summary, previous_scene_order, plan, synopsis, explicit_previous_scenes)
+        assert exc_info.value.status_code == 500; assert "Error: The AI failed to generate a scene draft." in exc_info.value.detail
+        mock_file_svc.read_project_metadata.assert_called_once_with(project_id); mock_retriever_instance.aretrieve.assert_awaited_once();
+        mock_execute_llm.assert_awaited_once() # Check helper was called
 
 @pytest.mark.asyncio
 @patch('app.rag.scene_generator.VectorIndexRetriever', autospec=True)
@@ -151,8 +161,10 @@ async def test_generate_scene_llm_bad_format_response(mock_file_svc: MagicMock, 
     mock_retriever_instance = mock_retriever_class.return_value; mock_retriever_instance.aretrieve = AsyncMock(return_value=retrieved_nodes)
     mock_llm.acomplete = AsyncMock(return_value=CompletionResponse(text=mock_llm_response_text)); mock_llm.callback_manager = None
     generator = SceneGenerator(index=mock_index, llm=mock_llm)
-    generated_draft = await generator.generate_scene(project_id, chapter_id, prompt_summary, previous_scene_order, plan, synopsis, explicit_previous_scenes)
-    assert generated_draft == expected_result_dict; mock_file_svc.read_project_metadata.assert_called_once_with(project_id); mock_retriever_instance.aretrieve.assert_awaited_once(); mock_llm.acomplete.assert_awaited_once()
+    with patch.object(generator, '_execute_llm_complete', wraps=generator._execute_llm_complete) as mock_execute_llm:
+        generated_draft = await generator.generate_scene(project_id, chapter_id, prompt_summary, previous_scene_order, plan, synopsis, explicit_previous_scenes)
+        assert generated_draft == expected_result_dict; mock_file_svc.read_project_metadata.assert_called_once_with(project_id); mock_retriever_instance.aretrieve.assert_awaited_once();
+        mock_execute_llm.assert_awaited_once()
 
 # --- Retry Test ---
 @pytest.mark.asyncio
@@ -174,13 +186,14 @@ async def test_generate_scene_handles_retry_failure_gracefully(
     mock_retriever_instance = mock_retriever_class.return_value
     mock_retriever_instance.aretrieve = AsyncMock(return_value=retrieved_nodes)
 
-    # Configure the mock LLM's acomplete method to always raise the retryable error
+    # --- MODIFIED: Configure the underlying llm.acomplete mock ---
     final_error = create_mock_client_error(429, "Rate limit")
-    mock_llm.acomplete.side_effect = final_error # This will be raised by _execute_llm_complete after retries
+    mock_llm.acomplete.side_effect = final_error # Always raise
+    # --- END MODIFIED ---
 
     generator = SceneGenerator(index=mock_index, llm=mock_llm)
 
-    # Call the main method, which contains the try/except block
+    # Call the main method, which contains the try/except block for the helper
     with pytest.raises(HTTPException) as exc_info:
          await generator.generate_scene(
              project_id, chapter_id, prompt_summary, previous_scene_order, plan, synopsis, explicit_previous_scenes
@@ -191,9 +204,17 @@ async def test_generate_scene_handles_retry_failure_gracefully(
     assert "Error: Rate limit exceeded after multiple retries." in exc_info.value.detail
     # Assert the underlying llm method was called 3 times by tenacity
     assert mock_llm.acomplete.await_count == 3
+    # --- ADDED: Assert temperature in awaits ---
+    expected_calls = [
+        call(ANY, temperature=settings.LLM_TEMPERATURE),
+        call(ANY, temperature=settings.LLM_TEMPERATURE),
+        call(ANY, temperature=settings.LLM_TEMPERATURE)
+    ]
+    mock_llm.acomplete.assert_has_awaits(expected_calls)
+    # --- END ADDED ---
 
 # --- ADDED: Tests for Node Deduplication and Filtering ---
-
+# (Unchanged tests omitted for brevity)
 @pytest.mark.asyncio
 @patch('app.rag.scene_generator.VectorIndexRetriever', autospec=True)
 @patch('app.rag.scene_generator.file_service', autospec=True)
@@ -244,21 +265,22 @@ async def test_generate_scene_deduplicates_and_filters_nodes(
     mock_retriever_instance = mock_retriever_class.return_value; mock_retriever_instance.aretrieve = AsyncMock(return_value=retrieved_nodes)
     mock_llm.acomplete = AsyncMock(return_value=CompletionResponse(text=mock_llm_response_text)); mock_llm.callback_manager = None
     generator = SceneGenerator(index=mock_index, llm=mock_llm)
+    with patch.object(generator, '_execute_llm_complete', wraps=generator._execute_llm_complete) as mock_execute_llm:
 
-    generated_draft = await generator.generate_scene(
-        project_id, chapter_id, prompt_summary, previous_scene_order, plan, synopsis, explicit_previous_scenes, paths_to_filter=paths_to_filter_set
-    )
+        generated_draft = await generator.generate_scene(
+            project_id, chapter_id, prompt_summary, previous_scene_order, plan, synopsis, explicit_previous_scenes, paths_to_filter=paths_to_filter_set
+        )
 
-    assert generated_draft == expected_result_dict
-    mock_retriever_instance.aretrieve.assert_awaited_once()
-    mock_llm.acomplete.assert_awaited_once()
-    prompt_arg = mock_llm.acomplete.call_args[0][0]
+        assert generated_draft == expected_result_dict
+        mock_retriever_instance.aretrieve.assert_awaited_once()
+        mock_execute_llm.assert_awaited_once()
+        prompt_arg = mock_execute_llm.call_args[0][0]
 
-    # Check prompt includes only the non-filtered, non-duplicated nodes
-    assert "Plan context." not in prompt_arg        # Filtered
-    assert "World info." in prompt_arg              # Kept (from high score node)
-    assert "Char 1 details." in prompt_arg          # Kept
-    assert "Char 2 details." in prompt_arg          # Kept
+        # Check prompt includes only the non-filtered, non-duplicated nodes
+        assert "Plan context." not in prompt_arg        # Filtered
+        assert "World info." in prompt_arg              # Kept (from high score node)
+        assert "Char 1 details." in prompt_arg          # Kept
+        assert "Char 2 details." in prompt_arg          # Kept
 
 # --- END ADDED ---
 

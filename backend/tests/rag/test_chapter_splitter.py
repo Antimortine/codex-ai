@@ -34,7 +34,7 @@ from llama_index.core.schema import NodeWithScore, TextNode
 # Import models used
 from app.models.ai import ProposedScene
 # Import settings
-from app.core.config import settings
+from app.core.config import settings # Import settings
 
 
 # --- Fixtures ---
@@ -75,6 +75,7 @@ def create_mock_client_error(status_code: int, message: str = "API Error") -> Mo
     return error
 
 # --- Test Cases ---
+# (Unchanged tests omitted for brevity)
 @pytest.mark.asyncio
 @patch('app.rag.chapter_splitter.VectorIndexRetriever', autospec=True) # Mock retriever
 async def test_split_success(mock_retriever_class: MagicMock, chapter_splitter: ChapterSplitter, mock_llm_for_splitter: MagicMock):
@@ -86,10 +87,11 @@ async def test_split_success(mock_retriever_class: MagicMock, chapter_splitter: 
     mock_retriever_instance.aretrieve = AsyncMock(return_value=[]) # Return empty nodes for simplicity
     # Mock LLM
     mock_llm_for_splitter.acomplete = AsyncMock(return_value=CompletionResponse(text=mock_llm_response_text))
-    result = await chapter_splitter.split(project_id, chapter_id, chapter_content, plan, synopsis)
-    assert result == expected_scenes
-    mock_retriever_instance.aretrieve.assert_awaited_once() # Check retrieval was called
-    mock_llm_for_splitter.acomplete.assert_awaited_once(); prompt_arg = mock_llm_for_splitter.acomplete.call_args[0][0]; assert chapter_content in prompt_arg; assert "<<<SCENE_START>>>" in prompt_arg
+    with patch.object(chapter_splitter, '_execute_llm_complete', wraps=chapter_splitter._execute_llm_complete) as mock_execute_llm:
+        result = await chapter_splitter.split(project_id, chapter_id, chapter_content, plan, synopsis)
+        assert result == expected_scenes
+        mock_retriever_instance.aretrieve.assert_awaited_once() # Check retrieval was called
+        mock_execute_llm.assert_awaited_once(); prompt_arg = mock_execute_llm.call_args[0][0]; assert chapter_content in prompt_arg; assert "<<<SCENE_START>>>" in prompt_arg
 
 @pytest.mark.asyncio
 @patch('app.rag.chapter_splitter.VectorIndexRetriever', autospec=True) # Mock retriever
@@ -108,10 +110,11 @@ async def test_split_llm_returns_malformed_response(mock_retriever_class: MagicM
     mock_retriever_instance = mock_retriever_class.return_value
     mock_retriever_instance.aretrieve = AsyncMock(return_value=[])
     mock_llm_for_splitter.acomplete = AsyncMock(return_value=CompletionResponse(text=mock_llm_response_text))
-    result = await chapter_splitter.split(project_id, chapter_id, chapter_content, plan, synopsis)
-    assert result == []
-    mock_retriever_instance.aretrieve.assert_awaited_once()
-    mock_llm_for_splitter.acomplete.assert_awaited_once()
+    with patch.object(chapter_splitter, '_execute_llm_complete', wraps=chapter_splitter._execute_llm_complete) as mock_execute_llm:
+        result = await chapter_splitter.split(project_id, chapter_id, chapter_content, plan, synopsis)
+        assert result == []
+        mock_retriever_instance.aretrieve.assert_awaited_once()
+        mock_execute_llm.assert_awaited_once()
 
 @pytest.mark.asyncio
 @patch('app.rag.chapter_splitter.VectorIndexRetriever', autospec=True) # Mock retriever
@@ -122,10 +125,11 @@ async def test_split_llm_returns_partial_match(mock_retriever_class: MagicMock, 
     mock_retriever_instance = mock_retriever_class.return_value
     mock_retriever_instance.aretrieve = AsyncMock(return_value=[])
     mock_llm_for_splitter.acomplete = AsyncMock(return_value=CompletionResponse(text=mock_llm_response_text))
-    result = await chapter_splitter.split(project_id, chapter_id, chapter_content, plan, synopsis)
-    assert result == expected_scenes
-    mock_retriever_instance.aretrieve.assert_awaited_once()
-    mock_llm_for_splitter.acomplete.assert_awaited_once()
+    with patch.object(chapter_splitter, '_execute_llm_complete', wraps=chapter_splitter._execute_llm_complete) as mock_execute_llm:
+        result = await chapter_splitter.split(project_id, chapter_id, chapter_content, plan, synopsis)
+        assert result == expected_scenes
+        mock_retriever_instance.aretrieve.assert_awaited_once()
+        mock_execute_llm.assert_awaited_once()
 
 @pytest.mark.asyncio
 @patch('app.rag.chapter_splitter.VectorIndexRetriever', autospec=True) # Mock retriever
@@ -133,12 +137,13 @@ async def test_split_llm_error_non_retryable(mock_retriever_class: MagicMock, ch
     project_id = "proj-split-llm-error"; chapter_id = "ch-split-llm-error"; chapter_content = "Some content."; plan = "Plan"; synopsis = "Synopsis"
     mock_retriever_instance = mock_retriever_class.return_value
     mock_retriever_instance.aretrieve = AsyncMock(return_value=[])
-    mock_llm_for_splitter.acomplete = AsyncMock(side_effect=ValueError("LLM validation failed"))
-    with pytest.raises(HTTPException) as exc_info: await chapter_splitter.split(project_id, chapter_id, chapter_content, plan, synopsis)
-    assert exc_info.value.status_code == 500
-    assert "Error: An unexpected error occurred during chapter splitting. Please check logs." in exc_info.value.detail
-    mock_retriever_instance.aretrieve.assert_awaited_once()
-    mock_llm_for_splitter.acomplete.assert_awaited_once()
+    # Patch the internal helper to raise the error
+    with patch.object(chapter_splitter, '_execute_llm_complete', side_effect=ValueError("LLM validation failed")) as mock_execute_llm:
+        with pytest.raises(HTTPException) as exc_info: await chapter_splitter.split(project_id, chapter_id, chapter_content, plan, synopsis)
+        assert exc_info.value.status_code == 500
+        assert "Error: An unexpected error occurred during chapter splitting. Please check logs." in exc_info.value.detail
+        mock_retriever_instance.aretrieve.assert_awaited_once()
+        mock_execute_llm.assert_awaited_once()
 
 @pytest.mark.asyncio
 @patch('app.rag.chapter_splitter.VectorIndexRetriever', autospec=True) # Mock retriever
@@ -146,11 +151,12 @@ async def test_split_llm_empty_response(mock_retriever_class: MagicMock, chapter
     project_id = "proj-split-llm-empty"; chapter_id = "ch-split-llm-empty"; chapter_content = "Some content."; plan = "Plan"; synopsis = "Synopsis"
     mock_retriever_instance = mock_retriever_class.return_value
     mock_retriever_instance.aretrieve = AsyncMock(return_value=[])
-    mock_llm_for_splitter.acomplete = AsyncMock(return_value=CompletionResponse(text=""))
-    with pytest.raises(HTTPException) as exc_info: await chapter_splitter.split(project_id, chapter_id, chapter_content, plan, synopsis)
-    assert exc_info.value.status_code == 500; assert "Error: The AI failed to propose scene splits." in exc_info.value.detail
-    mock_retriever_instance.aretrieve.assert_awaited_once()
-    mock_llm_for_splitter.acomplete.assert_awaited_once()
+    # Patch the internal helper to return empty text
+    with patch.object(chapter_splitter, '_execute_llm_complete', return_value=CompletionResponse(text="")) as mock_execute_llm:
+        with pytest.raises(HTTPException) as exc_info: await chapter_splitter.split(project_id, chapter_id, chapter_content, plan, synopsis)
+        assert exc_info.value.status_code == 500; assert "Error: The AI failed to propose scene splits." in exc_info.value.detail
+        mock_retriever_instance.aretrieve.assert_awaited_once()
+        mock_execute_llm.assert_awaited_once()
 
 @pytest.mark.asyncio
 @patch('app.rag.chapter_splitter.VectorIndexRetriever', autospec=True) # Mock retriever
@@ -161,10 +167,11 @@ async def test_split_content_validation_warning(mock_retriever_class: MagicMock,
     mock_retriever_instance = mock_retriever_class.return_value
     mock_retriever_instance.aretrieve = AsyncMock(return_value=[])
     mock_llm_for_splitter.acomplete = AsyncMock(return_value=CompletionResponse(text=mock_llm_response_text))
-    with caplog.at_level(logging.WARNING): result = await chapter_splitter.split(project_id, chapter_id, chapter_content, plan, synopsis)
-    assert result == short_scenes; assert len(caplog.records) >= 1; assert any("Concatenated split content length" in rec.message and "significantly differs from original" in rec.message for rec in caplog.records)
-    mock_retriever_instance.aretrieve.assert_awaited_once()
-    mock_llm_for_splitter.acomplete.assert_awaited_once()
+    with patch.object(chapter_splitter, '_execute_llm_complete', wraps=chapter_splitter._execute_llm_complete) as mock_execute_llm:
+        with caplog.at_level(logging.WARNING): result = await chapter_splitter.split(project_id, chapter_id, chapter_content, plan, synopsis)
+        assert result == short_scenes; assert len(caplog.records) >= 1; assert any("Concatenated split content length" in rec.message and "significantly differs from original" in rec.message for rec in caplog.records)
+        mock_retriever_instance.aretrieve.assert_awaited_once()
+        mock_execute_llm.assert_awaited_once()
 
 # --- Tests for Retry Logic ---
 @pytest.mark.asyncio
@@ -201,6 +208,14 @@ async def test_split_retry_success(mock_retriever_class: MagicMock, chapter_spli
     assert result == expected_scenes
     mock_retriever_instance.aretrieve.assert_awaited_once() # Check retrieval
     assert mock_llm_for_splitter.acomplete.await_count == 3
+    # --- CORRECTED: Assert with temperature ---
+    expected_calls = [
+        call(ANY, temperature=settings.LLM_TEMPERATURE),
+        call(ANY, temperature=settings.LLM_TEMPERATURE),
+        call(ANY, temperature=settings.LLM_TEMPERATURE)
+    ]
+    mock_llm_for_splitter.acomplete.assert_has_awaits(expected_calls)
+    # --- END CORRECTED ---
 
 
 @pytest.mark.asyncio
@@ -213,8 +228,9 @@ async def test_split_retry_failure(mock_retriever_class: MagicMock, chapter_spli
     final_error = create_mock_client_error(429, "Rate limit final")
     mock_retriever_instance = mock_retriever_class.return_value
     mock_retriever_instance.aretrieve = AsyncMock(return_value=[]) # Mock retrieval call
-    # Configure the underlying llm.acomplete mock
-    mock_llm_for_splitter.acomplete.side_effect = final_error # Always raise
+    # --- MODIFIED: Mock llm.acomplete directly ---
+    mock_llm_for_splitter.acomplete.side_effect = final_error
+    # --- END MODIFIED ---
 
     # Act & Assert - Expect the main split method to raise HTTPException 429
     with pytest.raises(HTTPException) as exc_info:
@@ -223,11 +239,19 @@ async def test_split_retry_failure(mock_retriever_class: MagicMock, chapter_spli
     assert exc_info.value.status_code == status.HTTP_429_TOO_MANY_REQUESTS
     assert "Error: Rate limit exceeded after multiple retries" in exc_info.value.detail
     mock_retriever_instance.aretrieve.assert_awaited_once() # Check retrieval
-    # Assert the underlying llm method was called 3 times by tenacity
+    # Assert the direct llm.acomplete was called 3 times by tenacity
     assert mock_llm_for_splitter.acomplete.await_count == 3
+    # --- CORRECTED: Assert with temperature ---
+    expected_calls = [
+        call(ANY, temperature=settings.LLM_TEMPERATURE),
+        call(ANY, temperature=settings.LLM_TEMPERATURE),
+        call(ANY, temperature=settings.LLM_TEMPERATURE)
+    ]
+    mock_llm_for_splitter.acomplete.assert_has_awaits(expected_calls)
+    # --- END CORRECTED ---
 
 # --- ADDED: Tests for Node Deduplication and Filtering ---
-
+# (Unchanged tests omitted for brevity)
 @pytest.mark.asyncio
 @patch('app.rag.chapter_splitter.VectorIndexRetriever', autospec=True)
 async def test_split_deduplicates_and_filters_nodes(
@@ -281,23 +305,24 @@ async def test_split_deduplicates_and_filters_nodes(
     mock_retriever_instance = mock_retriever_class.return_value
     mock_retriever_instance.aretrieve = AsyncMock(return_value=retrieved_nodes)
     mock_llm_for_splitter.acomplete = AsyncMock(return_value=CompletionResponse(text=mock_llm_response_text))
+    with patch.object(chapter_splitter, '_execute_llm_complete', wraps=chapter_splitter._execute_llm_complete) as mock_execute_llm:
 
-    # Pass the filter set to the split method
-    result = await chapter_splitter.split(
-        project_id, chapter_id, chapter_content, plan, synopsis, paths_to_filter=paths_to_filter_set
-    )
+        # Pass the filter set to the split method
+        result = await chapter_splitter.split(
+            project_id, chapter_id, chapter_content, plan, synopsis, paths_to_filter=paths_to_filter_set
+        )
 
-    # Assertions
-    assert result == expected_scenes
-    mock_retriever_instance.aretrieve.assert_awaited_once()
-    mock_llm_for_splitter.acomplete.assert_awaited_once()
-    prompt_arg = mock_llm_for_splitter.acomplete.call_args[0][0]
+        # Assertions
+        assert result == expected_scenes
+        mock_retriever_instance.aretrieve.assert_awaited_once()
+        mock_execute_llm.assert_awaited_once()
+        prompt_arg = mock_execute_llm.call_args[0][0]
 
-    # Check prompt includes only the non-filtered, non-duplicated nodes
-    assert "Plan context." not in prompt_arg        # Filtered
-    assert "Scene 1 context." in prompt_arg         # Kept (from high score node)
-    assert "Scene 2 context." in prompt_arg         # Kept
-    assert "Character info." in prompt_arg         # Kept
+        # Check prompt includes only the non-filtered, non-duplicated nodes
+        assert "Plan context." not in prompt_arg        # Filtered
+        assert "Scene 1 context." in prompt_arg         # Kept (from high score node)
+        assert "Scene 2 context." in prompt_arg         # Kept
+        assert "Character info." in prompt_arg         # Kept
 
 # --- END ADDED ---
 

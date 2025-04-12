@@ -26,7 +26,7 @@ from google.api_core.exceptions import GoogleAPICallError, ServiceUnavailable, R
 
 # Import the class we are testing
 from app.rag.rephraser import Rephraser, _is_retryable_google_api_error
-from app.core.config import settings
+from app.core.config import settings # Import settings
 
 # --- Fixtures (Use shared fixtures from conftest.py) ---
 
@@ -51,6 +51,7 @@ def create_mock_client_error(status_code: int, message: str = "API Error") -> Mo
     return error
 
 # --- Test Rephraser ---
+# (Unchanged tests omitted for brevity)
 @pytest.mark.asyncio
 @patch('app.rag.rephraser.VectorIndexRetriever', autospec=True)
 async def test_rephrase_success_with_context(mock_retriever_class: MagicMock, mock_llm: MagicMock, mock_index: MagicMock):
@@ -60,18 +61,19 @@ async def test_rephrase_success_with_context(mock_retriever_class: MagicMock, mo
     mock_retriever_instance = mock_retriever_class.return_value; mock_retriever_instance.aretrieve = AsyncMock(return_value=retrieved_nodes)
     mock_llm.acomplete = AsyncMock(return_value=CompletionResponse(text=llm_response_text))
     rephraser = Rephraser(index=mock_index, llm=mock_llm)
-    suggestions = await rephraser.rephrase(project_id, selected_text, context_before, context_after, plan, synopsis)
-    assert suggestions == expected_suggestions[:settings.RAG_REPHRASE_SUGGESTION_COUNT]
-    mock_retriever_class.assert_called_once_with(index=mock_index, similarity_top_k=settings.RAG_GENERATION_SIMILARITY_TOP_K, filters=ANY)
-    mock_retriever_instance.aretrieve.assert_awaited_once()
-    mock_llm.acomplete.assert_awaited_once()
-    prompt_arg = mock_llm.acomplete.call_args[0][0]
-    assert selected_text in prompt_arg
-    assert 'Source (Character: "Hero")' in prompt_arg
-    assert "Heroes often hurry." in prompt_arg
-    assert 'file_path' not in prompt_arg
-    assert plan in prompt_arg
-    assert synopsis in prompt_arg
+    with patch.object(rephraser, '_execute_llm_complete', wraps=rephraser._execute_llm_complete) as mock_execute_llm:
+        suggestions = await rephraser.rephrase(project_id, selected_text, context_before, context_after, plan, synopsis)
+        assert suggestions == expected_suggestions[:settings.RAG_REPHRASE_SUGGESTION_COUNT]
+        mock_retriever_class.assert_called_once_with(index=mock_index, similarity_top_k=settings.RAG_GENERATION_SIMILARITY_TOP_K, filters=ANY)
+        mock_retriever_instance.aretrieve.assert_awaited_once()
+        mock_execute_llm.assert_awaited_once()
+        prompt_arg = mock_execute_llm.call_args[0][0]
+        assert selected_text in prompt_arg
+        assert 'Source (Character: "Hero")' in prompt_arg
+        assert "Heroes often hurry." in prompt_arg
+        assert 'file_path' not in prompt_arg
+        assert plan in prompt_arg
+        assert synopsis in prompt_arg
 
 @pytest.mark.asyncio
 @patch('app.rag.rephraser.VectorIndexRetriever', autospec=True)
@@ -81,11 +83,12 @@ async def test_rephrase_success_no_context(mock_retriever_class: MagicMock, mock
     mock_retriever_instance = mock_retriever_class.return_value; mock_retriever_instance.aretrieve = AsyncMock(return_value=retrieved_nodes)
     mock_llm.acomplete = AsyncMock(return_value=CompletionResponse(text=llm_response_text))
     rephraser = Rephraser(index=mock_index, llm=mock_llm)
-    suggestions = await rephraser.rephrase(project_id, selected_text, None, None, plan, synopsis)
-    assert suggestions == expected_suggestions[:settings.RAG_REPHRASE_SUGGESTION_COUNT]
-    mock_retriever_instance.aretrieve.assert_awaited_once()
-    mock_llm.acomplete.assert_awaited_once()
-    prompt_arg = mock_llm.acomplete.call_args[0][0]; assert "No specific context was retrieved via search." in prompt_arg; assert plan in prompt_arg; assert synopsis in prompt_arg
+    with patch.object(rephraser, '_execute_llm_complete', wraps=rephraser._execute_llm_complete) as mock_execute_llm:
+        suggestions = await rephraser.rephrase(project_id, selected_text, None, None, plan, synopsis)
+        assert suggestions == expected_suggestions[:settings.RAG_REPHRASE_SUGGESTION_COUNT]
+        mock_retriever_instance.aretrieve.assert_awaited_once()
+        mock_execute_llm.assert_awaited_once()
+        prompt_arg = mock_execute_llm.call_args[0][0]; assert "No specific context was retrieved via search." in prompt_arg; assert plan in prompt_arg; assert synopsis in prompt_arg
 
 @pytest.mark.asyncio
 @patch('app.rag.rephraser.VectorIndexRetriever', autospec=True)
@@ -103,25 +106,27 @@ async def test_rephrase_retriever_error(mock_retriever_class: MagicMock, mock_ll
 async def test_rephrase_llm_error_non_retryable(mock_retriever_class: MagicMock, mock_llm: MagicMock, mock_index: MagicMock):
     project_id = "proj-rp-4"; selected_text = "text"; retrieved_nodes = []; plan = "Plan"; synopsis = "Synopsis"
     mock_retriever_instance = mock_retriever_class.return_value; mock_retriever_instance.aretrieve = AsyncMock(return_value=retrieved_nodes)
-    mock_llm.acomplete = AsyncMock(side_effect=ValueError("LLM failed")) # Non-retryable error
     rephraser = Rephraser(index=mock_index, llm=mock_llm)
-    suggestions = await rephraser.rephrase(project_id, selected_text, None, None, plan, synopsis)
-    assert len(suggestions) == 1
-    assert "Error: An unexpected internal error occurred while rephrasing." in suggestions[0]
-    mock_retriever_instance.aretrieve.assert_awaited_once()
-    mock_llm.acomplete.assert_awaited_once() # Called once
+    # Patch the internal helper to raise the error
+    with patch.object(rephraser, '_execute_llm_complete', side_effect=ValueError("LLM failed")) as mock_execute_llm:
+        suggestions = await rephraser.rephrase(project_id, selected_text, None, None, plan, synopsis)
+        assert len(suggestions) == 1
+        assert "Error: An unexpected internal error occurred while rephrasing." in suggestions[0]
+        mock_retriever_instance.aretrieve.assert_awaited_once()
+        mock_execute_llm.assert_awaited_once() # Called once
 
 @pytest.mark.asyncio
 @patch('app.rag.rephraser.VectorIndexRetriever', autospec=True)
 async def test_rephrase_llm_empty_response(mock_retriever_class: MagicMock, mock_llm: MagicMock, mock_index: MagicMock):
     project_id = "proj-rp-5"; selected_text = "text"; retrieved_nodes = []; plan = "Plan"; synopsis = "Synopsis"
     mock_retriever_instance = mock_retriever_class.return_value; mock_retriever_instance.aretrieve = AsyncMock(return_value=retrieved_nodes)
-    mock_llm.acomplete = AsyncMock(return_value=CompletionResponse(text=""))
     rephraser = Rephraser(index=mock_index, llm=mock_llm)
-    suggestions = await rephraser.rephrase(project_id, selected_text, None, None, plan, synopsis)
-    assert len(suggestions) == 1; assert "Error: The AI failed to generate suggestions." in suggestions[0]
-    mock_retriever_instance.aretrieve.assert_awaited_once()
-    mock_llm.acomplete.assert_awaited_once()
+    # Patch the internal helper to return empty text
+    with patch.object(rephraser, '_execute_llm_complete', return_value=CompletionResponse(text="")) as mock_execute_llm:
+        suggestions = await rephraser.rephrase(project_id, selected_text, None, None, plan, synopsis)
+        assert len(suggestions) == 1; assert "Error: The AI failed to generate suggestions." in suggestions[0]
+        mock_retriever_instance.aretrieve.assert_awaited_once()
+        mock_execute_llm.assert_awaited_once()
 
 @pytest.mark.asyncio
 @patch('app.rag.rephraser.VectorIndexRetriever', autospec=True)
@@ -131,12 +136,13 @@ async def test_rephrase_llm_unparseable_response(mock_retriever_class: MagicMock
     mock_retriever_instance = mock_retriever_class.return_value; mock_retriever_instance.aretrieve = AsyncMock(return_value=retrieved_nodes)
     mock_llm.acomplete = AsyncMock(return_value=CompletionResponse(text=llm_response_text))
     rephraser = Rephraser(index=mock_index, llm=mock_llm)
-    suggestions = await rephraser.rephrase(project_id, selected_text, None, None, plan, synopsis)
-    # Fallback parsing now splits by line
-    expected_suggestions = ["Here are some ideas: idea one, idea two, idea three."]
-    assert suggestions == expected_suggestions
-    mock_retriever_instance.aretrieve.assert_awaited_once()
-    mock_llm.acomplete.assert_awaited_once()
+    with patch.object(rephraser, '_execute_llm_complete', wraps=rephraser._execute_llm_complete) as mock_execute_llm:
+        suggestions = await rephraser.rephrase(project_id, selected_text, None, None, plan, synopsis)
+        # Fallback parsing now splits by line
+        expected_suggestions = ["Here are some ideas: idea one, idea two, idea three."]
+        assert suggestions == expected_suggestions
+        mock_retriever_instance.aretrieve.assert_awaited_once()
+        mock_execute_llm.assert_awaited_once()
 
 @pytest.mark.asyncio
 async def test_rephrase_empty_input(mock_llm: MagicMock, mock_index: MagicMock):
@@ -175,6 +181,14 @@ async def test_rephrase_retry_success(mock_retriever_class: MagicMock, mock_llm:
 
     assert suggestions == ["Success"]
     assert mock_llm.acomplete.await_count == 3
+    # --- ADDED: Assert with temperature ---
+    expected_calls = [
+        call(ANY, temperature=settings.LLM_TEMPERATURE),
+        call(ANY, temperature=settings.LLM_TEMPERATURE),
+        call(ANY, temperature=settings.LLM_TEMPERATURE)
+    ]
+    mock_llm.acomplete.assert_has_awaits(expected_calls)
+    # --- END ADDED ---
 
 @pytest.mark.asyncio
 @patch('app.rag.rephraser.VectorIndexRetriever', autospec=True) # Need retriever mock for main call
@@ -193,6 +207,14 @@ async def test_rephrase_retry_failure(mock_retriever_class: MagicMock, mock_llm:
     assert len(suggestions) == 1
     assert "Error: Rate limit exceeded after multiple retries." in suggestions[0]
     assert mock_llm.acomplete.await_count == 3
+    # --- ADDED: Assert with temperature ---
+    expected_calls = [
+        call(ANY, temperature=settings.LLM_TEMPERATURE),
+        call(ANY, temperature=settings.LLM_TEMPERATURE),
+        call(ANY, temperature=settings.LLM_TEMPERATURE)
+    ]
+    mock_llm.acomplete.assert_has_awaits(expected_calls)
+    # --- END ADDED ---
 
 @pytest.mark.asyncio
 @patch('app.rag.rephraser.VectorIndexRetriever', autospec=True) # Need retriever mock for main call
@@ -211,9 +233,12 @@ async def test_rephrase_retry_non_retryable_error(mock_retriever_class: MagicMoc
     assert len(suggestions) == 1
     assert "Error: An unexpected internal error occurred while rephrasing." in suggestions[0]
     assert mock_llm.acomplete.await_count == 1
+    # --- ADDED: Assert with temperature ---
+    mock_llm.acomplete.assert_awaited_once_with(ANY, temperature=settings.LLM_TEMPERATURE)
+    # --- END ADDED ---
 
 # --- ADDED: Tests for Node Deduplication and Filtering ---
-
+# (Unchanged tests omitted for brevity)
 @pytest.mark.asyncio
 @patch('app.rag.rephraser.VectorIndexRetriever', autospec=True)
 async def test_rephrase_deduplicates_and_filters_nodes(
@@ -239,7 +264,7 @@ async def test_rephrase_deduplicates_and_filters_nodes(
     mock_node_plan = NodeWithScore(node=TextNode(id_='n_plan', text="Plan context.", metadata={'file_path': plan_path_str, 'document_type': 'Plan'}), score=0.9)
     mock_node_s1_low = NodeWithScore(node=TextNode(id_='n_s1_low', text="Scene 1 context.", metadata={'file_path': scene1_path_str, 'document_type': 'Scene'}), score=0.7)
     mock_node_s1_high = NodeWithScore(node=TextNode(id_='n_s1_high', text="Scene 1 context.", metadata={'file_path': scene1_path_str, 'document_type': 'Scene'}), score=0.8) # Same content/path, higher score
-    mock_node_s2 = NodeWithScore(node=TextNode(id_='n_s2', text="Scene 2 context.", metadata={'file_path': scene2_path_str, 'document_type': 'Scene'}), score=0.75)
+    mock_node_s2 = NodeWithScore(node=TextNode(id_='n_s2', text="Scene 2 content.", metadata={'file_path': scene2_path_str, 'document_type': 'Scene'}), score=0.75)
     mock_node_char = NodeWithScore(node=TextNode(id_='n_char', text="Character info.", metadata={'file_path': char_path_str, 'document_type': 'Character'}), score=0.85)
 
     retrieved_nodes: List[NodeWithScore] = [
@@ -265,23 +290,24 @@ async def test_rephrase_deduplicates_and_filters_nodes(
     mock_retriever_instance.aretrieve = AsyncMock(return_value=retrieved_nodes)
     mock_llm.acomplete = AsyncMock(return_value=CompletionResponse(text=llm_response_text))
     rephraser = Rephraser(index=mock_index, llm=mock_llm)
+    with patch.object(rephraser, '_execute_llm_complete', wraps=rephraser._execute_llm_complete) as mock_execute_llm:
 
-    # Pass the filter set to the rephrase method
-    suggestions = await rephraser.rephrase(
-        project_id, selected_text, None, None, plan, synopsis, paths_to_filter=paths_to_filter_set
-    )
+        # Pass the filter set to the rephrase method
+        suggestions = await rephraser.rephrase(
+            project_id, selected_text, None, None, plan, synopsis, paths_to_filter=paths_to_filter_set
+        )
 
-    # Assertions
-    assert suggestions == expected_suggestions[:settings.RAG_REPHRASE_SUGGESTION_COUNT]
-    mock_retriever_instance.aretrieve.assert_awaited_once()
-    mock_llm.acomplete.assert_awaited_once()
-    prompt_arg = mock_llm.acomplete.call_args[0][0]
+        # Assertions
+        assert suggestions == expected_suggestions[:settings.RAG_REPHRASE_SUGGESTION_COUNT]
+        mock_retriever_instance.aretrieve.assert_awaited_once()
+        mock_execute_llm.assert_awaited_once()
+        prompt_arg = mock_execute_llm.call_args[0][0]
 
-    # Check prompt includes only the non-filtered, non-duplicated nodes
-    assert "Plan context." not in prompt_arg        # Filtered
-    assert "Scene 1 context." in prompt_arg         # Kept (from high score node)
-    assert "Scene 2 context." in prompt_arg         # Kept
-    assert "Character info." in prompt_arg         # Kept
+        # Check prompt includes only the non-filtered, non-duplicated nodes
+        assert "Plan context." not in prompt_arg        # Filtered
+        assert "Scene 1 context." in prompt_arg         # Kept (from high score node)
+        assert "Scene 2 content." in prompt_arg         # Kept
+        assert "Character info." in prompt_arg         # Kept
 
 # --- END ADDED ---
 

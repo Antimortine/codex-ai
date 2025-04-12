@@ -14,6 +14,7 @@
 
 import shutil
 import json
+import os # Import os for path.getmtime
 from pathlib import Path
 from fastapi import HTTPException, status
 from app.core.config import BASE_PROJECT_DIR
@@ -21,6 +22,10 @@ import logging
 from typing import List, Dict, Optional # Import Dict, Optional
 
 logger = logging.getLogger(__name__)
+
+# Define files/dirs to exclude when checking for last content modification
+# Adjust as needed, similar to .gitignore logic but simpler for this purpose
+EXCLUDED_FOR_MTIME = {'.git', 'venv', '.venv', 'node_modules', '__pycache__', 'chroma_db', '.chroma'}
 
 class FileService:
 
@@ -239,6 +244,65 @@ class FileService:
             logger.error(f"Error finding markdown files in {project_path}: {e}", exc_info=True)
             return []
 
+    # --- REVISED: Get Directory Last Modified Time (DEPRECATED) ---
+    # def get_directory_last_modified(self, path: Path) -> Optional[float]:
+    #     """
+    #     DEPRECATED: Gets the last modified time (Unix timestamp) of a directory.
+    #     This is often unreliable for tracking content changes within the directory.
+    #     Use get_project_last_content_modification instead for sorting projects.
+    #     Returns None if the path doesn't exist, isn't a directory, or an error occurs.
+    #     """
+    #     if not self.path_exists(path) or not path.is_dir():
+    #         return None
+    #     try:
+    #         # Use path.stat().st_mtime for consistency with Path object usage
+    #         return path.stat().st_mtime
+    #     except OSError as e:
+    #         logger.error(f"Error getting mtime for directory {path}: {e}")
+    #         return None
+    # --- END REVISED ---
+
+    # --- ADDED: Get Last Content Modification Time ---
+    def get_project_last_content_modification(self, project_path: Path) -> Optional[float]:
+        """
+        Recursively finds the last modification time (Unix timestamp) of any relevant
+        file (.md, .json) within the project directory, excluding specified folders.
+        Returns the timestamp of the most recently modified relevant file,
+        or the directory's own mtime if no relevant files are found,
+        or None if the directory doesn't exist or an error occurs.
+        """
+        if not self.path_exists(project_path) or not project_path.is_dir():
+            logger.warning(f"Project path {project_path} not found or not a directory for mtime check.")
+            return None
+
+        latest_mtime = 0.0
+        try:
+            # Initialize with the directory's own mtime as a baseline
+            latest_mtime = project_path.stat().st_mtime
+
+            for item in project_path.rglob('*'):
+                # Check if the item's path parts contain any excluded directory names
+                relative_parts = item.relative_to(project_path).parts
+                if any(part in EXCLUDED_FOR_MTIME for part in relative_parts):
+                    continue # Skip this item and its potential children
+
+                if item.is_file():
+                    # Consider relevant file types (e.g., markdown and metadata)
+                    if item.suffix.lower() in ['.md', '.json']:
+                        try:
+                            item_mtime = item.stat().st_mtime
+                            latest_mtime = max(latest_mtime, item_mtime)
+                        except OSError as e:
+                            logger.warning(f"Could not stat file {item} during mtime check: {e}")
+            return latest_mtime
+        except OSError as e:
+            logger.error(f"Error getting last modification time for project {project_path}: {e}")
+            return None # Return None on error
+        except Exception as e:
+             logger.error(f"Unexpected error getting last modification time for project {project_path}: {e}", exc_info=True)
+             return None
+    # --- END ADDED ---
+
 
     # --- Specific Structure Creators ---
     def setup_project_structure(self, project_id: str):
@@ -251,10 +315,7 @@ class FileService:
         self.write_text_file(self._get_content_block_path(project_id, "plan.md"), "", trigger_index=True)
         self.write_text_file(self._get_content_block_path(project_id, "synopsis.md"), "", trigger_index=True)
         self.write_text_file(self._get_content_block_path(project_id, "world.md"), "", trigger_index=True)
-        # --- MODIFIED: Add empty chat_sessions key ---
         self.write_project_metadata(project_id, {"project_name": "", "chapters": {}, "characters": {}, "chat_sessions": {}})
-        # --- END MODIFIED ---
-        # Write empty chat history file
         self.write_chat_history_file(project_id, {}) # Write empty dict initially
 
 
@@ -281,17 +342,13 @@ class FileService:
         metadata_path = self._get_project_metadata_path(project_id)
         try:
             data = self.read_json_file(metadata_path)
-            # --- ADDED: Ensure chat_sessions key exists ---
             if 'chat_sessions' not in data:
                 data['chat_sessions'] = {}
-            # --- END ADDED ---
             return data
         except HTTPException as e:
             if e.status_code == 404:
                  logger.warning(f"Project metadata file not found for project {project_id}. Returning default structure.")
-                 # --- MODIFIED: Include chat_sessions in default ---
                  return {"project_name": f"Project {project_id}", "chapters": {}, "characters": {}, "chat_sessions": {}}
-                 # --- END MODIFIED ---
             logger.error(f"Unexpected error reading project metadata for {project_id}: {e.detail}")
             raise e
 
@@ -299,10 +356,8 @@ class FileService:
         """Writes data to the project_meta.json file."""
         metadata_path = self._get_project_metadata_path(project_id)
         try:
-            # --- ADDED: Ensure chat_sessions key exists before writing ---
             if 'chat_sessions' not in data:
                 data['chat_sessions'] = {}
-            # --- END ADDED ---
             self.write_json_file(metadata_path, data)
             logger.debug(f"Successfully wrote project metadata for {project_id}")
         except HTTPException as e:

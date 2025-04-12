@@ -27,7 +27,7 @@ from google.api_core.exceptions import GoogleAPICallError, ServiceUnavailable, R
 
 # Import the class we are testing and the retry predicate
 from app.rag.query_processor import QueryProcessor, _is_retryable_google_api_error
-from app.core.config import settings
+from app.core.config import settings # Import settings to get default temperature
 
 # --- Fixtures (Use shared fixtures from conftest.py) ---
 
@@ -59,6 +59,7 @@ def create_mock_client_error(status_code: int, message: str = "API Error") -> Mo
 
 
 # --- Test QueryProcessor ---
+# (Other tests remain unchanged - Omitted for brevity)
 @pytest.mark.asyncio
 @patch('app.rag.query_processor.VectorIndexRetriever', autospec=True)
 async def test_query_success_with_nodes(
@@ -79,36 +80,38 @@ async def test_query_success_with_nodes(
     # Define the expected *filtered* nodes
     expected_filtered_nodes = [mock_node_scene]
     # Define the paths that AIService would pass for filtering
-    # --- MODIFIED: Resolve path ---
     paths_to_filter_set = {str(plan_path.resolve())}
-    # --- END MODIFIED ---
 
     expected_answer = "The main character's goal is to reach the mountain summit."
     mock_retriever_instance = mock_retriever_class.return_value
     mock_retriever_instance.aretrieve = AsyncMock(return_value=retrieved_nodes)
     mock_llm.acomplete = AsyncMock(return_value=CompletionResponse(text=expected_answer))
     processor = QueryProcessor(index=mock_index, llm=mock_llm)
+    # Patch the internal helper method to check its call args later
+    with patch.object(processor, '_execute_llm_complete', wraps=processor._execute_llm_complete) as mock_execute_llm:
 
-    # Pass the filter set to the query method
-    answer, source_nodes, direct_info = await processor.query(
-        project_id, query_text, plan, synopsis, paths_to_filter=paths_to_filter_set
-    )
+        # Pass the filter set to the query method
+        answer, source_nodes, direct_info = await processor.query(
+            project_id, query_text, plan, synopsis, paths_to_filter=paths_to_filter_set
+        )
 
-    assert answer == expected_answer
-    assert source_nodes == expected_filtered_nodes
-    assert direct_info is None
-    mock_retriever_class.assert_called_once_with(index=mock_index, similarity_top_k=settings.RAG_QUERY_SIMILARITY_TOP_K, filters=ANY)
-    mock_retriever_instance.aretrieve.assert_awaited_once_with(query_text)
-    mock_llm.acomplete.assert_awaited_once()
-    prompt_arg = mock_llm.acomplete.call_args[0][0]
-    assert query_text in prompt_arg
-    assert plan in prompt_arg
-    assert synopsis in prompt_arg
-    # Check prompt includes only the non-filtered node
-    assert 'Source (Plan: "Project Plan")' not in prompt_arg # Should be filtered
-    assert "The hero wants to climb." not in prompt_arg # Should be filtered
-    assert 'Source (Scene: "Opening Scene")' in prompt_arg
-    assert "Goal is the summit." in prompt_arg
+        assert answer == expected_answer
+        assert source_nodes == expected_filtered_nodes
+        assert direct_info is None
+        mock_retriever_class.assert_called_once_with(index=mock_index, similarity_top_k=settings.RAG_QUERY_SIMILARITY_TOP_K, filters=ANY)
+        mock_retriever_instance.aretrieve.assert_awaited_once_with(query_text)
+        mock_execute_llm.assert_awaited_once() # Check the helper was awaited once
+        # Check the arguments passed to the internal _execute_llm_complete helper
+        internal_call_args, internal_call_kwargs = mock_execute_llm.call_args
+        prompt_arg = internal_call_args[0] # The prompt is the first positional arg
+        assert query_text in prompt_arg
+        assert plan in prompt_arg
+        assert synopsis in prompt_arg
+        # Check prompt includes only the non-filtered node
+        assert 'Source (Plan: "Project Plan")' not in prompt_arg # Should be filtered
+        assert "The hero wants to climb." not in prompt_arg # Should be filtered
+        assert 'Source (Scene: "Opening Scene")' in prompt_arg
+        assert "Goal is the summit." in prompt_arg
 
 
 @pytest.mark.asyncio
@@ -124,27 +127,27 @@ async def test_query_success_no_nodes(
     synopsis = "A dragon-free story."
     retrieved_nodes = [] # No nodes retrieved
     expected_filtered_nodes = [] # Still empty after filtering
-    # --- MODIFIED: Resolve path ---
     paths_to_filter_set = {str(Path(f"user_projects/{project_id}/plan.md").resolve())} # Example filter
-    # --- END MODIFIED ---
 
     expected_answer = "Based on the plan and synopsis, there is no mention of dragons."
     mock_retriever_instance = mock_retriever_class.return_value
     mock_retriever_instance.aretrieve = AsyncMock(return_value=retrieved_nodes)
     mock_llm.acomplete = AsyncMock(return_value=CompletionResponse(text=expected_answer))
     processor = QueryProcessor(index=mock_index, llm=mock_llm)
+    with patch.object(processor, '_execute_llm_complete', wraps=processor._execute_llm_complete) as mock_execute_llm:
 
-    answer, source_nodes, direct_info = await processor.query(
-        project_id, query_text, plan, synopsis, paths_to_filter=paths_to_filter_set
-    )
+        answer, source_nodes, direct_info = await processor.query(
+            project_id, query_text, plan, synopsis, paths_to_filter=paths_to_filter_set
+        )
 
-    assert answer == expected_answer
-    assert source_nodes == expected_filtered_nodes # Should be empty
-    assert direct_info is None
-    mock_retriever_instance.aretrieve.assert_awaited_once_with(query_text)
-    mock_llm.acomplete.assert_awaited_once()
-    prompt_arg = mock_llm.acomplete.call_args[0][0]
-    assert "No additional relevant context snippets were retrieved via search." in prompt_arg
+        assert answer == expected_answer
+        assert source_nodes == expected_filtered_nodes # Should be empty
+        assert direct_info is None
+        mock_retriever_instance.aretrieve.assert_awaited_once_with(query_text)
+        mock_execute_llm.assert_awaited_once()
+        internal_call_args, internal_call_kwargs = mock_execute_llm.call_args
+        prompt_arg = internal_call_args[0]
+        assert "No additional relevant context snippets were retrieved via search." in prompt_arg
 
 @pytest.mark.asyncio
 @patch('app.rag.query_processor.VectorIndexRetriever', autospec=True)
@@ -181,24 +184,23 @@ async def test_query_llm_error_non_retryable(
     mock_node1 = NodeWithScore(node=TextNode(id_='n1', text="Some context", metadata={'file_path': 'scenes/s1.md'}), score=0.9)
     retrieved_nodes = [mock_node1] # Assume retrieval works
     expected_filtered_nodes = [mock_node1] # Assume it wouldn't be filtered
-    # --- MODIFIED: Resolve path ---
     paths_to_filter_set = {str(Path(f"user_projects/{project_id}/plan.md").resolve())}
-    # --- END MODIFIED ---
 
     mock_retriever_instance = mock_retriever_class.return_value
     mock_retriever_instance.aretrieve = AsyncMock(return_value=retrieved_nodes)
-    mock_llm.acomplete = AsyncMock(side_effect=ValueError("LLM prompt validation failed"))
+    # Mock the internal helper to raise the error
     processor = QueryProcessor(index=mock_index, llm=mock_llm)
+    with patch.object(processor, '_execute_llm_complete', side_effect=ValueError("LLM prompt validation failed")) as mock_decorated_method:
 
-    answer, source_nodes, direct_info = await processor.query(
-        project_id, query_text, plan, synopsis, paths_to_filter=paths_to_filter_set
-    )
+        answer, source_nodes, direct_info = await processor.query(
+            project_id, query_text, plan, synopsis, paths_to_filter=paths_to_filter_set
+        )
 
-    assert "Sorry, an internal error occurred processing the query." in answer
-    assert source_nodes == [] # Error handler returns empty list now
-    assert direct_info is None
-    mock_retriever_instance.aretrieve.assert_awaited_once_with(query_text)
-    mock_llm.acomplete.assert_awaited_once()
+        assert "Sorry, an internal error occurred processing the query." in answer
+        assert source_nodes == [] # Error handler returns empty list now
+        assert direct_info is None
+        mock_retriever_instance.aretrieve.assert_awaited_once_with(query_text)
+        mock_decorated_method.assert_awaited_once() # Check the helper was called
 
 @pytest.mark.asyncio
 @patch('app.rag.query_processor.VectorIndexRetriever', autospec=True)
@@ -213,24 +215,23 @@ async def test_query_llm_empty_response(
     synopsis = "Synopsis"
     retrieved_nodes = []
     expected_filtered_nodes = []
-    # --- MODIFIED: Resolve path ---
     paths_to_filter_set = {str(Path(f"user_projects/{project_id}/plan.md").resolve())}
-    # --- END MODIFIED ---
 
     mock_retriever_instance = mock_retriever_class.return_value
     mock_retriever_instance.aretrieve = AsyncMock(return_value=retrieved_nodes)
-    mock_llm.acomplete = AsyncMock(return_value=CompletionResponse(text=""))
+    # Mock the internal helper to return empty text
     processor = QueryProcessor(index=mock_index, llm=mock_llm)
+    with patch.object(processor, '_execute_llm_complete', return_value=CompletionResponse(text="")) as mock_decorated_method:
 
-    answer, source_nodes, direct_info = await processor.query(
-        project_id, query_text, plan, synopsis, paths_to_filter=paths_to_filter_set
-    )
+        answer, source_nodes, direct_info = await processor.query(
+            project_id, query_text, plan, synopsis, paths_to_filter=paths_to_filter_set
+        )
 
-    assert "(The AI did not provide an answer based on the context.)" in answer
-    assert source_nodes == expected_filtered_nodes # Should be empty
-    assert direct_info is None
-    mock_retriever_instance.aretrieve.assert_awaited_once_with(query_text)
-    mock_llm.acomplete.assert_awaited_once()
+        assert "(The AI did not provide an answer based on the context.)" in answer
+        assert source_nodes == expected_filtered_nodes # Should be empty
+        assert direct_info is None
+        mock_retriever_instance.aretrieve.assert_awaited_once_with(query_text)
+        mock_decorated_method.assert_awaited_once() # Check the helper was called
 
 
 # --- Tests for Retry Logic ---
@@ -251,7 +252,14 @@ async def test_query_retry_success(mock_llm: MagicMock, mock_index: MagicMock):
 
     assert response == expected_response
     assert mock_llm.acomplete.await_count == 3
-    mock_llm.acomplete.assert_has_awaits([call(prompt), call(prompt), call(prompt)])
+    # --- CORRECTED: Assert with temperature ---
+    expected_calls = [
+        call(prompt, temperature=settings.LLM_TEMPERATURE),
+        call(prompt, temperature=settings.LLM_TEMPERATURE),
+        call(prompt, temperature=settings.LLM_TEMPERATURE)
+    ]
+    mock_llm.acomplete.assert_has_awaits(expected_calls)
+    # --- END CORRECTED ---
 
 @pytest.mark.asyncio
 async def test_query_retry_failure(mock_llm: MagicMock, mock_index: MagicMock):
@@ -272,6 +280,14 @@ async def test_query_retry_failure(mock_llm: MagicMock, mock_index: MagicMock):
     assert exc_info.value is final_error
     assert hasattr(exc_info.value, 'status_code') and exc_info.value.status_code == 429
     assert mock_llm.acomplete.await_count == 3
+    # --- CORRECTED: Assert with temperature ---
+    expected_calls = [
+        call(prompt, temperature=settings.LLM_TEMPERATURE),
+        call(prompt, temperature=settings.LLM_TEMPERATURE),
+        call(prompt, temperature=settings.LLM_TEMPERATURE)
+    ]
+    mock_llm.acomplete.assert_has_awaits(expected_calls)
+    # --- END CORRECTED ---
 
 @pytest.mark.asyncio
 async def test_query_retry_non_retryable_error(mock_llm: MagicMock, mock_index: MagicMock):
@@ -287,6 +303,9 @@ async def test_query_retry_non_retryable_error(mock_llm: MagicMock, mock_index: 
 
     assert exc_info.value == non_retryable_error
     assert mock_llm.acomplete.await_count == 1
+    # --- CORRECTED: Assert with temperature ---
+    mock_llm.acomplete.assert_awaited_once_with(prompt, temperature=settings.LLM_TEMPERATURE)
+    # --- END CORRECTED ---
 
 @pytest.mark.asyncio
 @patch('app.rag.query_processor.VectorIndexRetriever', autospec=True)
@@ -329,7 +348,7 @@ async def test_query_handles_retry_failure_gracefully(
 
 
 # --- Tests for Node Deduplication and Filtering ---
-
+# (Unchanged - Omitted for brevity)
 @pytest.mark.asyncio
 @patch('app.rag.query_processor.VectorIndexRetriever', autospec=True)
 async def test_query_deduplicates_and_filters_nodes(
@@ -386,29 +405,31 @@ async def test_query_deduplicates_and_filters_nodes(
     mock_retriever_instance.aretrieve = AsyncMock(return_value=retrieved_nodes)
     mock_llm.acomplete = AsyncMock(return_value=CompletionResponse(text=expected_answer))
     processor = QueryProcessor(index=mock_index, llm=mock_llm)
+    with patch.object(processor, '_execute_llm_complete', wraps=processor._execute_llm_complete) as mock_execute_llm:
 
-    # Pass the filter set to the query method
-    answer, source_nodes, direct_info = await processor.query(
-        project_id, query_text, plan, synopsis, paths_to_filter=paths_to_filter_set
-    )
+        # Pass the filter set to the query method
+        answer, source_nodes, direct_info = await processor.query(
+            project_id, query_text, plan, synopsis, paths_to_filter=paths_to_filter_set
+        )
 
-    # Assertions
-    assert answer == expected_answer
-    # Assert against the final filtered and deduplicated nodes
-    # Compare based on node IDs for simplicity, assuming IDs are unique after dedup
-    assert sorted([n.node.node_id for n in source_nodes]) == sorted([n.node.node_id for n in expected_final_nodes])
-    assert len(source_nodes) == len(expected_final_nodes)
+        # Assertions
+        assert answer == expected_answer
+        # Assert against the final filtered and deduplicated nodes
+        # Compare based on node IDs for simplicity, assuming IDs are unique after dedup
+        assert sorted([n.node.node_id for n in source_nodes]) == sorted([n.node.node_id for n in expected_final_nodes])
+        assert len(source_nodes) == len(expected_final_nodes)
 
-    assert direct_info is None
-    mock_retriever_instance.aretrieve.assert_awaited_once_with(query_text)
-    mock_llm.acomplete.assert_awaited_once()
-    prompt_arg = mock_llm.acomplete.call_args[0][0]
+        assert direct_info is None
+        mock_retriever_instance.aretrieve.assert_awaited_once_with(query_text)
+        mock_execute_llm.assert_awaited_once()
+        internal_call_args, internal_call_kwargs = mock_execute_llm.call_args
+        prompt_arg = internal_call_args[0]
 
-    # Check prompt includes only the non-filtered, non-duplicated nodes
-    assert "Plan context." not in prompt_arg        # Filtered
-    assert "Scene 1 content." in prompt_arg         # Kept (from high score node)
-    assert "Scene 2 content." in prompt_arg         # Kept
-    assert "Character info." in prompt_arg         # Kept
+        # Check prompt includes only the non-filtered, non-duplicated nodes
+        assert "Plan context." not in prompt_arg        # Filtered
+        assert "Scene 1 content." in prompt_arg         # Kept (from high score node)
+        assert "Scene 2 content." in prompt_arg         # Kept
+        assert "Character info." in prompt_arg         # Kept
 
 
 @pytest.mark.asyncio
@@ -441,14 +462,16 @@ async def test_query_node_without_filepath_is_not_filtered(
     mock_retriever_instance.aretrieve = AsyncMock(return_value=retrieved_nodes)
     mock_llm.acomplete = AsyncMock(return_value=CompletionResponse(text=expected_answer))
     processor = QueryProcessor(index=mock_index, llm=mock_llm)
+    with patch.object(processor, '_execute_llm_complete', wraps=processor._execute_llm_complete) as mock_execute_llm:
 
-    answer, source_nodes, direct_info = await processor.query(
-        project_id, query_text, plan, synopsis, paths_to_filter=paths_to_filter_set
-    )
+        answer, source_nodes, direct_info = await processor.query(
+            project_id, query_text, plan, synopsis, paths_to_filter=paths_to_filter_set
+        )
 
-    assert source_nodes == expected_final_nodes # Only the node without path should remain
-    prompt_arg = mock_llm.acomplete.call_args[0][0]
-    assert "Plan context." not in prompt_arg # Filtered
-    assert "Context without file path." in prompt_arg # Not filtered
+        assert source_nodes == expected_final_nodes # Only the node without path should remain
+        internal_call_args, internal_call_kwargs = mock_execute_llm.call_args
+        prompt_arg = internal_call_args[0]
+        assert "Plan context." not in prompt_arg # Filtered
+        assert "Context without file path." in prompt_arg # Not filtered
 
 # --- END TESTS ---

@@ -18,6 +18,7 @@ from app.services.file_service import file_service, BASE_PROJECT_DIR
 from app.models.common import generate_uuid
 import uuid # Import uuid for validation
 import logging # Import logging
+from pathlib import Path # Import Path
 
 logger = logging.getLogger(__name__) # Get logger for this module
 
@@ -79,21 +80,31 @@ class ProjectService:
         return ProjectRead(id=project_id, name=project_name)
 
     def get_all(self) -> ProjectList:
-        """Lists all available projects."""
-        logger.info(f"Attempting to list all projects in {BASE_PROJECT_DIR}")
-        projects = []
+        """Lists all available projects, sorted by last content modification time (descending)."""
+        logger.info(f"Attempting to list all projects in {BASE_PROJECT_DIR}, sorted by last content modification.")
+        projects_with_timestamps = []
         try:
             project_ids = file_service.list_subdirectories(BASE_PROJECT_DIR)
             logger.debug(f"Found potential project directories: {project_ids}")
+
             for pid in project_ids:
                 logger.debug(f"Processing potential project directory: {pid}")
                 try:
                     # Validate it looks like a UUID before trying to read
                     uuid.UUID(pid) # Raises ValueError if not a valid UUID
                     logger.debug(f"Directory name '{pid}' is a valid UUID format.")
+
+                    # Get project data and last modified time
+                    project_path = file_service._get_project_path(pid)
+                    # --- MODIFIED: Call new method ---
+                    last_modified = file_service.get_project_last_content_modification(project_path)
+                    # --- END MODIFIED ---
                     project_data = self.get_by_id(pid) # Reuse get_by_id logic
-                    projects.append(project_data)
-                    logger.debug(f"Successfully added project {pid} to list.")
+
+                    # Store data and timestamp (use 0 if timestamp is None for sorting)
+                    projects_with_timestamps.append((project_data, last_modified or 0.0))
+                    logger.debug(f"Added project {pid} (mtime: {last_modified}) to list.")
+
                 except ValueError:
                     logger.warning(f"Skipping directory '{pid}': Name is not a valid UUID.")
                     continue
@@ -105,8 +116,16 @@ class ProjectService:
                     # Catch any other unexpected errors during processing of one directory
                     logger.error(f"Skipping directory '{pid}': Unexpected error - {e}", exc_info=True)
                     continue
-            logger.info(f"Finished listing projects. Found {len(projects)} valid projects.")
-            return ProjectList(projects=projects)
+
+            # Sort the list by timestamp (descending)
+            projects_with_timestamps.sort(key=lambda item: item[1], reverse=True)
+
+            # Extract the sorted project data
+            sorted_projects = [item[0] for item in projects_with_timestamps]
+
+            logger.info(f"Finished listing projects. Found and sorted {len(sorted_projects)} valid projects.")
+            return ProjectList(projects=sorted_projects)
+
         except Exception as e:
             # Catch errors during the initial listing of subdirectories
             logger.error(f"Failed to list subdirectories in {BASE_PROJECT_DIR}: {e}", exc_info=True)
