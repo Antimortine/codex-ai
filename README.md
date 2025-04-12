@@ -18,6 +18,7 @@ For more details on the system's design, see:
 -   **Character Profiles:** Create and manage character descriptions.
 -   **Markdown Editor:** Write and edit all content using a familiar Markdown format (@uiw/react-md-editor).
 -   **Context-Aware Q&A:** Ask questions about your own story ("What was Character X's motivation in Chapter 2?", "Remind me of the description of Location Y?"). The AI uses the specific project's indexed content (including Plan & Synopsis) to answer, ensuring relevance and isolation between projects.
+-   **Multiple Chat Sessions per Project:** Maintain separate, independent chat conversations within a single project. Create, rename, delete, and switch between sessions. *(New!)*
 -   **AI-Powered Scene Generation:** Generate scene drafts (including title and content) based on previous scenes, plan, synopsis, retrieved context, and optional user prompts.
 -   **AI-Powered Editing (Rephrase):** Get suggestions for rephrasing selected text directly within the editor.
 -   **AI Chapter Splitting:** Analyze full chapter text (pasted into the UI) and receive AI-proposed scene splits with suggested titles and content.
@@ -162,21 +163,70 @@ codex-ai/
 └── README.md
 ```
 
+
 ## Known Issues
 
-*   **Scene Order Conflict:** When creating a scene from an AI draft immediately after deleting another scene, the frontend might calculate an incorrect `nextOrder` value, potentially leading to a "Scene order X already exists" error from the backend upon saving. (Workaround: Update page).
 *   **Rate Limiting (Free Tier):** While backend retry logic exists, the free tier of the Google Gemini API has strict limits (Requests Per Minute and Daily). Heavy use of AI features (Generation, Splitting, Query, Rephrase) may still hit these limits, resulting in temporary unavailability errors (HTTP 429). Using a paid plan (or free credits) is recommended for reliable usage.
+*   **SuggestionPopup Limitations:** The popup for rephrasing suggestions might have positioning issues near screen edges and could benefit from styling improvements.
 
 ## Roadmap
 
-*   **AI-Powered Editing:** Implement more features (Summarize, Expand, Tone Change) using the `AIEditorWrapper`.
-*   **Testing:** Expand backend test coverage (services, RAG components). Add frontend tests for cooldowns and specific modal interactions.
-*   **UI/UX Refinements:** Improve the "Split Chapter" modal display and interaction. Provide clearer visual feedback during AI operations and cooldowns. Address `SuggestionPopup` limitations. Fix the scene order calculation bug when creating from AI draft.
-*   **Configuration:** Move more hardcoded values (e.g., RAG parameters, cooldown durations) to configuration/settings.
-*   **Refactoring:** Address deprecation warnings (e.g., FastAPI lifespan events). Consider `PromptBuilder` abstraction if prompt logic grows complex.
-*   **Deployment Strategy:** Define and implement deployment (e.g., Docker).
-*   **(Future)** Integration with additional LLM providers/Vector DBs.
-*   **(Future)** Markdown Export feature.
+**P1: Critical / High Priority**
+
+1.  **Task D.1: Expand Test Coverage (RAG Filtering & IndexManager)**
+    *   **Status:** **DONE**
+
+2.  **Task B.1: Multiple Chat Sessions**
+    *   **Status:** **DONE**
+
+**P2: Medium Priority**
+
+3.  **Task B.2: Chapter-Level Plan/Synopsis**
+    *   **Description:** Allow optional `plan.md`/`synopsis.md` within chapter directories, prioritizing them for context in relevant AI features.
+    *   **Status:** Not Started
+    *   **Priority:** **Medium-High**
+
+4.  **Task C.4: Show Chapter Titles in Query Sources (UI)**
+    *   **Description:** Display chapter titles alongside scene sources in the query interface for better context.
+    *   **Status:** Not Started
+    *   **Priority:** **Medium**
+
+5.  **Task B.3: AI Editing Features (Expansion)**
+    *   **Description:** Implement more AI actions in the editor (Summarize, Expand, Change Tone).
+    *   **Status:** Not Started
+    *   **Priority:** **Medium** (Incremental)
+
+6.  **Task C.3: UI/UX Refinements**
+    *   **Description:** Improve AI Scene Gen prompt input (textarea), Split Chapter modal, AI feedback/cooldown indicators, SuggestionPopup limitations.
+    *   **Status:** Not Started
+    *   **Priority:** **Medium**
+
+**P3: Low Priority**
+
+7.  **Task C.2: Delete Last Chat Entry**
+    *   **Description:** Add a button to delete the most recent query/response pair in a chat session.
+    *   **Status:** Not Started
+    *   **Priority:** **Low-Medium**
+
+8.  **Task D.2: Configuration & Refactoring**
+    *   **Description:** Move hardcoded values to config, potentially refactor prompt building, address deprecations.
+    *   **Status:** Not Started
+    *   **Priority:** **Low**
+
+9.  **Task E.2: Markdown Export**
+    *   **Description:** Implement functionality to compile project content into a single Markdown file.
+    *   **Status:** Not Started
+    *   **Priority:** **Low**
+
+10. **Task E.1: Deployment Strategy**
+    *   **Description:** Define and implement deployment (e.g., Docker).
+    *   **Status:** Not Started
+    *   **Priority:** **Low**
+
+11. **Task E.3: Integrate other LLMs/Vector DBs**
+    *   **Description:** Explore adding support for alternative LLMs or Vector DBs.
+    *   **Status:** Not Started
+    *   **Priority:** **Low**
 
 ## Contributing
 
@@ -193,4 +243,3 @@ Codex AI is developed and maintained by Antimortine.
 -   **Email:** [antimortine@gmail.com](mailto:antimortine@gmail.com)
 -   **Telegram:** [https://t.me/antimortine](https://t.me/antimortine)
 -   **GitHub:** [https://github.com/Antimortine](https://github.com/Antimortine)
-

@@ -1,53 +1,111 @@
 
-# Codex AI - Testing Notes & Troubleshooting
+# Codex AI - Frontend Testing Notes & Troubleshooting
 
-This document records specific challenges encountered during testing and the solutions or patterns adopted to address them.
+This document outlines key strategies and solutions for writing reliable frontend tests (`vitest` + `@testing-library/react`) for the Codex AI application, particularly when dealing with asynchronous operations and state updates.
 
-## 1. Flaky Tests for Asynchronous State Updates (`QueryInterface.jsx`)
+## Golden Rules for Async Frontend Tests
 
-### 1.1. Problem Description
+1.  **Prioritize Verifying Effects:** Focus assertions on the *intended side effects* of an async operation (e.g., API call made, final data displayed, prop passed to child) rather than intermediate UI states (e.g., loading spinners disappearing, buttons momentarily disabled/enabled).
+2.  **Use Robust `waitFor` / `findBy*`:** When waiting for UI updates after async actions, use `findBy*` queries or `waitFor` with assertions that check for the *final, stable* state or a *direct consequence* of the completed operation. Avoid waiting for transient states.
+3.  **Verify Mock API Calls First:** For tests involving user actions that trigger API calls, assert that the mock API function (`toHaveBeenCalledWith(...)`) was called correctly *before* asserting subsequent UI changes. This confirms the core action completed.
+4.  **Isolate Tests:** Break down complex user flows involving multiple async steps into smaller, focused tests where possible.
+5.  **Controlled Promises (for "During" State):** To test UI states *during* an async operation (e.g., loading indicators, disabled buttons), use manually controlled promises in your mocks to pause execution and assert the intermediate state.
 
-Tests for the `QueryInterface` component, specifically those verifying the UI state *after* an asynchronous API call (`queryProjectContext`) completed, were consistently flaky. The component uses an `isProcessing` state variable, set to `true` before the API call and `false` in the `finally` block after the promise settles. This state controls the `disabled` attribute of input/buttons and the text of the submit button ("Asking AI..." vs "Submit Query").
+## 1. Challenge: Flaky Tests for Async State Updates
 
-The failing tests were:
+### Problem
 
-*   `calls API, displays history, clears input, and saves history on submit`: Failed asserting that the submit button was `not.toBeDisabled()` after the API call and save operation completed.
-*   `disables buttons while processing`: Correctly asserted the disabled state *during* processing but failed asserting the controls were re-enabled *after* processing completed.
+Tests verifying UI state immediately after asynchronous operations (API calls, timeouts) often fail due to race conditions. Assertions run before React finishes re-rendering the DOM based on the completed async task's state updates. Trying to assert intermediate states (like button enablement/disablement transitions) is particularly brittle.
 
-The root cause was identified as a race condition within the testing environment (Vitest + React Testing Library + JSDOM). Assertions checking the `disabled` attribute were running *before* the React re-render triggered by `setIsProcessing(false)` had fully completed and updated the DOM, even when using various `waitFor` strategies.
+### Bad Patterns (Avoid These)
 
-### 1.2. Attempted (Unsuccessful) Solutions
+```javascript
+// BAD: Waiting for intermediate state (button enablement) might be flaky
+await user.click(submitButton);
+await waitFor(() => {
+  expect(screen.getByRole('button', { name: /submit query/i })).toBeEnabled(); // Fails if re-render is slow
+});
+expect(mockApi.saveData).toHaveBeenCalled(); // Might run too soon
 
-Several standard approaches from React Testing Library were attempted but failed to consistently resolve the flakiness:
+// BAD: Waiting for loading text removal is also unreliable
+await user.click(submitButton);
+await waitForElementToBeRemoved(() => screen.queryByText(/loading/i));
+// Problem: State updates triggering other changes might not be finished yet!
+expect(screen.getByText('Success!')).toBeInTheDocument(); // Might fail
+```
 
-1.  **`waitFor` + `toBeEnabled()`/`not.toBeDisabled()`:** Directly waiting for the button's `disabled` attribute to change often timed out.
-2.  **`waitFor` + Text Change:** Waiting for the submit button's text to change back from "Asking AI..." sometimes succeeded, but the `disabled` attribute check immediately after could still fail.
-3.  **`waitForElementToBeRemoved`:** Waiting for the "Asking AI..." text/button to be removed failed, sometimes because the state update was too fast for the check to even start, and sometimes the subsequent `disabled` check still failed.
-4.  **`waitFor` + Mock Call:** Waiting for the `updateChatHistory` mock (called in the `finally` block *after* `setIsProcessing(false)`) seemed logical, but the subsequent `disabled` check still failed intermittently.
-5.  **`act` Wrapping:** Explicitly wrapping promise resolutions and subsequent `waitFor` calls within `act` did not reliably synchronize the state update and the assertion.
+### Good Patterns (Use These)
 
-### 1.3. Final Solution & Key Insights
+**Pattern 1: Verify Mock Call + Final UI State**
+```javascript
+// GOOD: Verify the API call first, then wait for the final expected UI
+it('saves data and shows success message', async () => {
+  mockApi.saveData.mockResolvedValue({ success: true });
+  render(<MyComponent />);
+  await user.click(screen.getByRole('button', { name: /save/i }));
 
-The successful approach involved restructuring the tests and using controlled promises:
+  // 1. Verify the core effect (API call) happened
+  await waitFor(() => {
+    expect(mockApi.saveData).toHaveBeenCalledTimes(1);
+    expect(mockApi.saveData).toHaveBeenCalledWith(/* expected data */);
+  });
 
-1.  **Test Splitting:** The original test verifying the entire submit flow was split into more focused tests:
-    *   One test verifies the API call, history update, and input clearing.
-    *   A separate test (`shows processing state...`) verifies the UI state *during* the processing phase.
-    *   Another test (`disables UI controls...`) *also* verifies the disabled state *during* processing.
-    *   Crucially, **we stopped trying to reliably assert the re-enabled state immediately after the async operation in the same test flow where the operation was triggered.** The flakiness indicated this specific transition was hard to pin down reliably across test runs. We trust that if the processing state *starts* correctly (disabling buttons) and the async operation *completes* (indicated by the save mock being called or response appearing), the `finally` block setting `isProcessing` to `false` *will* run in the actual component.
+  // 2. Verify the final, stable UI outcome
+  expect(await screen.findByText('Save successful!')).toBeInTheDocument(); // findBy* includes waitFor
+  // Avoid asserting intermediate states like button re-enabling unless specifically testing that state.
+});
+```
 
-2.  **Controlled Promises:** For the tests focusing on the *during processing* state (`shows processing state...` and `disables UI controls...`), a manually controlled promise was used for the `queryProjectContext` mock.
-    *   This allowed the test to trigger the API call (`user.click`).
-    *   Assert the immediate UI changes (`isProcessing` state, disabled buttons, "Asking AI..." text).
-    *   *Then*, manually resolve the promise (`resolveApi()`) without needing complex `waitFor` conditions for the *end* state in those specific tests.
+**Pattern 2: Wait for Specific Resulting Element**
+```javascript
+// GOOD: Wait for an element that ONLY appears after the async operation succeeds
+it('loads and displays user data', async () => {
+  mockApi.fetchUser.mockResolvedValue({ data: { name: 'Alice' } });
+  render(<MyComponent />);
 
-3.  **Focus on Effects:** For tests verifying the *completion* of the process (like `calls API, displays history...`), waiting for a reliable side effect *after* the `finally` block (like the `updateChatHistory` mock call) proved more robust than directly polling DOM attributes like `disabled`.
+  // Use findBy* which incorporates waitFor
+  const userNameElement = await screen.findByText('User: Alice');
+  expect(userNameElement).toBeInTheDocument();
 
-**Key Testing Insights:**
+  // Verify mock call *after* confirming UI update
+  expect(mockApi.fetchUser).toHaveBeenCalledTimes(1);
+});
+```
 
-*   Testing the exact moment an asynchronous state update fully reflects in *all* DOM attributes can be brittle in testing environments.
-*   Focus tests on verifying:
-    *   The initial state change when an async operation begins.
-    *   The *effects* that occur *after* the async operation completes (e.g., API calls made in `finally`, final data displayed), rather than the intermediate DOM attribute transitions.
-*   Controlled promises are invaluable for deterministically testing states *during* asynchronous operations.
-*   Splitting complex asynchronous flows into multiple, focused tests can improve reliability over one large test trying to assert multiple states across the async boundary.
+**Pattern 3: Verify Prop Changes in Mocked Children (for Parent Components)**
+```javascript
+// GOOD: In parent component tests, verify props passed to mocked children
+it('passes the correct activeSessionId after deletion', async () => {
+  // (Setup mocks for listChatSessions, deleteChatSession)
+  render(<ProjectQueryPage />);
+  await waitForInitialLoad(); // Helper waits for initial stable state
+
+  // (Simulate selecting session 1, clicking delete)
+
+  // Wait for the *consequence* - the prop passed to the child changing
+  await waitFor(() => {
+    expect(lastQueryInterfaceProps.activeSessionId).toBe(SESSION_2.id);
+  });
+
+  // Verify API calls occurred
+  expect(deleteChatSession).toHaveBeenCalledWith(TEST_PROJECT_ID, SESSION_1.id);
+  expect(listChatSessions).toHaveBeenCalledTimes(2); // Initial + after delete
+});
+```
+
+## 2. Challenge: Complex Async Flows & Dependency Loops
+
+### Problem
+
+Components like ProjectQueryPage have multiple useEffect hooks fetching data and potentially triggering actions (like default session creation) which themselves trigger more fetches. Incorrect dependency arrays in useEffect or useCallback can lead to infinite loops or unexpected extra API calls, making tests fail on toHaveBeenCalledTimes assertions.
+
+### Solution & Refinements
+
+1.  **Stable useCallback Dependencies:** Only include variables in useCallback dependency arrays if the function's identity truly depends on them. Avoid including state setters or state variables that are only read within the function if their change shouldn't recreate the function reference. Remove isProcessing... flags from fetchSessions dependencies.
+    
+2.  **Decouple Effects:** Separate concerns between useEffect hooks. For example, one effect fetches initial data, and a separate effect (potentially depending on the result of the first) handles conditional actions like creating a default item. Use useRef flags to ensure one-time actions (like default creation) don't run repeatedly.
+    
+3.  **Explicit State Resets:** Ensure loading/processing flags are reset reliably in finally blocks within the functions that set them to true, especially covering error paths.
+    
+
+By applying these principles and patterns, frontend tests involving asynchronous operations should become significantly more reliable and less flaky.

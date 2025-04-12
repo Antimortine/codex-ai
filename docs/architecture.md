@@ -5,7 +5,7 @@ This document outlines the architecture of the Codex AI application.
 
 ## 1. Overview
 
-Codex AI is a web application designed to assist creative writers. It combines a React frontend for user interaction with a FastAPI backend for managing project data, orchestrating AI tasks, and handling persistence. The core AI functionality relies on Retrieval-Augmented Generation (RAG) using LlamaIndex, a Google Gemini LLM, a multilingual HuggingFace embedding model, and a ChromaDB vector store.
+Codex AI is a web application designed to assist creative writers. It combines a React frontend for user interaction with a FastAPI backend for managing project data, orchestrating AI tasks, and handling persistence. The core AI functionality relies on Retrieval-Augmented Generation (RAG) using LlamaIndex, a Google Gemini LLM, a multilingual HuggingFace embedding model, and a ChromaDB vector store. Users can manage multiple independent chat sessions within each project.
 
 ## 2. Architecture Diagram
 
@@ -81,21 +81,23 @@ graph LR
     
 2.  The **Frontend** sends REST API calls to the **FastAPI Backend**.
     
-3.  The **Backend API** routes requests to the appropriate **Service** (e.g., ProjectService, AIService).
+3.  The **Backend API** routes requests to the appropriate **Service** (e.g., ProjectService, AIService, ChatHistoryService).
     
 4.  **Services** orchestrate business logic:
     
-    -   For CRUD operations, they use FileService to interact with Markdown files and metadata (project_meta.json, etc.) on the **File System**.
+    -   For CRUD operations (Projects, Chapters, Characters, Scenes, Chat Sessions), they use FileService to interact with Markdown files and metadata (project_meta.json, chapter_meta.json, chat_history.json) on the **File System**.
         
     -   FileService triggers the IndexManager (part of the **RAG Subsystem**) upon saving relevant content (.md files).
         
     -   For AI tasks (Query, Generate, Rephrase, Split), AIService loads necessary explicit context (like Plan, Synopsis, previous scenes) using FileService and then delegates the core AI logic to specific processors (QueryProcessor, SceneGenerator, Rephraser, ChapterSplitter) within the **RAG Subsystem**, passing both explicit and retrieved context as needed.
         
+    -   Chat history operations are handled per session via dedicated API endpoints and FileService methods.
+        
 5.  **RAG Subsystem:**
     
     -   IndexManager: Handles LlamaIndex setup, loads/updates/deletes documents in the **Vector DB (ChromaDB)**, generates embeddings via the **Embedding Model (HuggingFace)**, and injects project_id and other metadata.
         
-    -   QueryProcessor, SceneGenerator, Rephraser, ChapterSplitter: Use components initialized by IndexManager. They perform RAG retrieval (querying the **Vector DB** with project_id filters), construct prompts using retrieved context and any explicit context passed from AIService, call the **LLM API (Google Gemini)** (directly or via an Agent for ChapterSplitter), and process the response.
+    -   QueryProcessor, SceneGenerator, Rephraser, ChapterSplitter: Use components initialized by IndexManager. They perform RAG retrieval (querying the **Vector DB** with project_id filters), construct prompts using retrieved context and any explicit context passed from AIService, call the **LLM API (Google Gemini)**, and process the response.
         
 6.  Responses flow back through the layers to the user.
     
@@ -106,9 +108,9 @@ graph LR
 
 -   **Technology:** React, Vite, JavaScript/JSX, CSS, Axios, react-router-dom, @uiw/react-md-editor.
     
--   **UI Components:** Standard React components, AIEditorWrapper for Markdown editing with AI features.
+-   **UI Components:** Standard React components, AIEditorWrapper for Markdown editing with AI features, ProjectQueryPage manages chat session UI.
     
--   **Responsibilities:** UI rendering, user input, client-state management, API communication.
+-   **Responsibilities:** UI rendering, user input, client-state management (including active chat session), API communication.
     
 
 ### 3.2. Backend (FastAPI)
@@ -117,7 +119,7 @@ graph LR
     
 -   **Responsibilities:** REST API, routing, data validation, service orchestration, error handling.
     
--   **Structure:** Layered (API -> Services -> RAG/Utilities). Includes AIService for AI logic orchestration.
+-   **Structure:** Layered (API -> Services -> RAG/Utilities). Includes AIService for AI logic orchestration, CRUD services, and dedicated chat history/session endpoints.
     
 
 ### 3.3. RAG Subsystem (app/rag/)
@@ -126,96 +128,67 @@ graph LR
     
 -   **Components:**
     
-    -   **IndexManager:**
+    -   **IndexManager:** Initializes LlamaIndex components, handles index modification (CRUD), embedding generation, metadata injection.
         
-        -   Initializes LlamaIndex components (LLM, Embeddings, VectorStore, StorageContext).
-            
-        -   Handles index modification: loading documents, parsing, embedding (via **Embedding Model**), injecting metadata, and inserting/updating/deleting nodes in the **Vector DB**.
-            
-    -   **QueryProcessor:** Performs RAG queries, incorporating explicit Plan/Synopsis context alongside retrieved nodes before calling the LLM.
+    -   **QueryProcessor:** Performs RAG queries, incorporating explicit context.
         
-    -   **SceneGenerator:** Generates scene drafts using explicit context (Plan, Synopsis, previous scenes) and retrieved RAG context.
+    -   **SceneGenerator:** Generates scene drafts using explicit and RAG context.
         
-    -   **Rephraser:** Provides rephrasing suggestions using selected text, surrounding text, and retrieved RAG context.
+    -   **Rephraser:** Provides rephrasing suggestions using context.
         
-    -   **ChapterSplitter:** Analyzes chapter content using an LLM Agent to propose scene splits. (New!)
+    -   **ChapterSplitter:** Proposes scene splits based on chapter content.
         
-    -   **(Future)** PromptBuilder (potential abstraction for prompt logic).
-        
--   **Abstraction:** Leverages LlamaIndex interfaces (LLM, VectorStore, BaseEmbedding) for potential future component swapping.
+-   **Abstraction:** Leverages LlamaIndex interfaces.
     
 
 ### 3.4. Services (app/services/)
 
 -   **Technology:** Python.
     
--   **Responsibilities:** Encapsulate business logic for each domain (Projects, Chapters, Scenes, Characters, AI).
+-   **Responsibilities:** Encapsulate business logic.
     
-    -   CRUD services use FileService for persistence and metadata.
+    -   CRUD services (Project, Chapter, Character, Scene) use FileService for persistence and metadata.
         
     -   AIService loads explicit context via FileService and orchestrates calls to the RAG processors.
         
-    -   FileService: Centralizes all direct file system interactions (reading/writing text/JSON, creating/deleting files/dirs) and triggers IndexManager for relevant file changes. Also handles metadata I/O.
+    -   FileService: Centralizes file system interactions (Markdown, JSON metadata including project_meta.json, chapter_meta.json, chat_history.json), triggers IndexManager.
         
 
 ### 3.5. LLM Service (Google Gemini)
 
--   **Technology:** External API (Google Generative AI). Accessed via llama-index-llms-google-genai.
+-   **Technology:** External API (Google Generative AI).
     
--   **Responsibilities:** Natural language understanding, text generation based on context provided by RAG processors.
+-   **Responsibilities:** NLU, text generation.
     
 
 ### 3.6. Embedding Service (HuggingFace Multilingual)
 
--   **Technology:** HuggingFace sentence-transformers library (running locally). Model: sentence-transformers/paraphrase-multilingual-mpnet-base-v2.
+-   **Technology:** HuggingFace sentence-transformers library (local).
     
--   **Responsibilities:** Convert text chunks into vector embeddings suitable for multilingual semantic search. Used by IndexManager.
+-   **Responsibilities:** Convert text to vector embeddings.
     
 
 ### 3.7. Vector Database (ChromaDB)
 
 -   **Technology:** ChromaDB (Python library, local persistence).
     
--   **Responsibilities:** Store text chunks (nodes) with their embeddings and metadata (including project_id, file_path, character_name). Perform efficient vector similarity searches with metadata filtering. Accessed via LlamaIndex ChromaVectorStore adapter.
+-   **Responsibilities:** Store embeddings and metadata, perform vector search with filtering.
     
 
 ### 3.8. Data Storage (File System)
 
--   **Technology:** Server's local file system (user_projects/ directory).
+-   **Technology:** Server's local file system (user_projects/).
     
--   **Responsibilities:** Persist user project content (Markdown files) and project/chapter metadata (project_meta.json, chapter_meta.json). This is the primary source of truth for user content.
+-   **Responsibilities:** Persist user content (Markdown), project/chapter metadata (project_meta.json, chapter_meta.json), and chat session history (chat_history.json).
     
--   **Note:** ChromaDB also persists its data to the file system (chroma_db/ directory), managed separately.
+-   **Note:** ChromaDB also persists its data (chroma_db/).
     
 
 ## 4. Key Workflows
 
 ### 4.1. Content Indexing (RAG - Ingestion)
 
-1.  User saves/updates a Markdown file via Frontend -> Backend API -> Service.
-    
-2.  Service calls FileService to write the .md file to the File System.
-    
-3.  FileService triggers IndexManager.index_file(path).
-    
-4.  IndexManager:
-    
-    -   Loads the document.
-        
-    -   Extracts project_id from the path.
-        
-    -   Checks if it's a character file and retrieves character name from metadata via FileService.
-        
-    -   Parses document into Nodes (implicitly by LlamaIndex).
-        
-    -   Injects project_id, file_path, and potentially character_name into each Node's metadata.
-        
-    -   Generates embeddings for Nodes via the configured **Embedding Model (HuggingFace)**.
-        
-    -   Deletes existing nodes for this doc_id (file path) from **Vector DB**.
-        
-    -   Inserts new Nodes with embeddings and metadata into **Vector DB**.
-        
+(No significant changes, IndexManager handles metadata)
 
 ### 4.2. AI Query (RAG - Retrieval & Synthesis)
 
@@ -225,117 +198,88 @@ graph LR
     
     -   Calls FileService to load explicit Plan and Synopsis content.
         
-    -   Calls QueryProcessor.query(project_id, query_text, explicit_plan, explicit_synopsis).
+    -   Identifies potential direct source entities (Characters, Scenes, Notes) mentioned in the query via FileService/metadata.
+        
+    -   Loads content for directly mentioned entities via FileService.
+        
+    -   Determines paths to filter from RAG retrieval (Plan, Synopsis, directly loaded content).
+        
+    -   Calls QueryProcessor.query(...), passing explicit context, direct source content, and filter paths.
         
 3.  QueryProcessor:
     
-    -   Creates VectorIndexRetriever with MetadataFilters for the given project_id.
+    -   Retrieves relevant nodes from **Vector DB** (filtering by project_id and excluding filtered paths).
         
-    -   Retrieves relevant nodes from **Vector DB** using the retriever.
+    -   Constructs a prompt including query, explicit context, direct source content, and retrieved nodes.
         
-    -   Constructs a detailed prompt including the user query, explicit Plan/Synopsis, and the content of retrieved nodes.
+    -   Calls the **LLM API**.
         
-    -   Calls the **LLM API (Google Gemini)** directly with the combined prompt.
-        
-    -   Extracts the answer string from the LLM response.
-        
-    -   Returns (answer, retrieved_nodes) tuple to AIService.
+    -   Returns (answer, retrieved_nodes, direct_source_info) tuple to AIService.
         
 4.  AIService returns the tuple to the API endpoint.
     
-5.  API endpoint formats the retrieved_nodes into SourceNodeModel list.
+5.  API endpoint formats the response.
     
-6.  API endpoint returns AIQueryResponse (containing answer and source_nodes) to the Frontend.
-    
-7.  Frontend displays the response to the User.
+6.  Frontend displays the response (separating direct vs. retrieved sources if needed).
     
 
 ### 4.3. AI Scene Generation (RAG)
 
-1.  User clicks "Add Scene using AI" on Frontend -> Backend API (/ai/generate/scene/...) -> AIService.
-    
-2.  AIService.generate_scene_draft:
-    
-    -   Calls FileService to load explicit Plan, Synopsis, and previous scene(s) content based on PREVIOUS_SCENE_COUNT.
-        
-    -   Calls SceneGenerator.generate_scene(...), passing the loaded explicit context.
-        
-3.  SceneGenerator:
-    
-    -   Creates VectorIndexRetriever with MetadataFilters for the project_id.
-        
-    -   Retrieves relevant nodes from **Vector DB**.
-        
-    -   Constructs a prompt including the user prompt (if any), explicit Plan/Synopsis/previous scenes, and retrieved nodes.
-        
-    -   Calls the **LLM API (Google Gemini)**.
-        
-    -   Returns the generated Markdown string to AIService.
-        
-4.  AIService returns the generated content in AISceneGenerationResponse to the Frontend.
-    
-5.  Frontend displays the draft in a modal.
-    
+(No significant changes, uses explicit context + RAG)
 
-### 4.4. AI Chapter Splitting (New!)
+### 4.4. AI Chapter Splitting
 
-1.  User pastes chapter content and clicks "Split Chapter (AI)" on Frontend -> Backend API (/ai/split/chapter/...) -> AIService.
+(No significant changes, uses explicit context + RAG)
+
+### 4.5. Chat Session Management
+
+1.  User interacts with session UI (dropdown, buttons) in Frontend (ProjectQueryPage).
     
-2.  AIService.split_chapter_into_scenes:
+2.  Frontend calls relevant Backend API endpoints (/projects/{projectId}/chat_sessions/... or /projects/{projectId}/chat_history/{sessionId}).
     
-    -   Calls FileService to load explicit Plan and Synopsis content.
-        
-    -   Calls ChapterSplitter.split(...), passing the chapter content from the request and the loaded explicit context.
-        
-3.  ChapterSplitter:
+3.  API routes to chat_history.py endpoints.
     
-    -   Constructs a prompt including the chapter content, explicit Plan/Synopsis, and instructions for splitting.
-        
-    -   Initializes a ReActAgent with an LLM and a tool (save_proposed_scenes) for structured output.
-        
-    -   Calls the Agent with the prompt. The Agent interacts with the LLM and calls the tool.
-        
-    -   The tool validates and stores the proposed scene list (title, content).
-        
-    -   Returns the validated list of proposed scenes to AIService.
-        
-4.  AIService returns the proposed scenes in AIChapterSplitResponse to the Frontend.
+4.  Endpoints use FileService methods (get_chat_sessions_metadata, add_chat_session_metadata, read_chat_session_history, write_chat_session_history, etc.) to interact with project_meta.json (for session names) and chat_history.json (for history content).
     
-5.  Frontend displays the proposed splits in a modal.
+5.  FileService reads/writes the JSON files on the **File System**.
+    
+6.  Responses are sent back to the Frontend, which updates its state (sessions, activeSessionId, chat history).
     
 
 ## 5. Design Decisions & Principles
 
 -   **API-First:** Decoupled Frontend/Backend.
     
--   **Layered Architecture:** Clear separation (API -> Service -> RAG/Utilities).
+-   **Layered Architecture:** API -> Service -> RAG/Utilities.
     
--   **Separation of Concerns (RAG):** IndexManager handles index lifecycle/setup, specific processors (QueryProcessor, SceneGenerator, Rephraser, ChapterSplitter) handle different AI tasks. AIService orchestrates and loads explicit context.
+-   **Separation of Concerns (RAG):** IndexManager, specific RAG processors, AIService orchestration.
     
--   **Explicit Context Management:** Project isolation achieved via mandatory project_id metadata injection and filtering during retrieval. Explicit Plan/Synopsis/Scenes passed when necessary.
+-   **Explicit Context Management:** Project isolation via metadata filtering; explicit context passed when needed.
     
--   **Async Backend:** FastAPI for efficient I/O.
+-   **Async Backend:** FastAPI.
     
 -   **Modularity & Extensibility:** LlamaIndex abstractions.
     
 -   **Markdown as Source of Truth:** User content remains portable.
     
--   **Centralized File I/O:** FileService manages all disk access and triggers indexing.
+-   **Centralized File I/O:** FileService manages disk access, metadata, chat history, and triggers indexing.
     
--   **DRY:** Metadata I/O centralized in FileService.
+-   **DRY:** Metadata I/O centralized.
     
--   **Reproducible Dependencies:** pip-tools (requirements.in, requirements.txt) used for backend dependency locking.
+-   **Reproducible Dependencies:** pip-tools.
     
 
 ## 6. Data Storage Summary
 
 -   **User Content & Core Metadata:** Markdown files and project_meta.json/chapter_meta.json in user_projects/. **Excluded from Git.**
     
+-   **Chat History:** Stored per-project in user_projects/{project_id}/chat_history.json. Session metadata stored within project_meta.json. **Excluded from Git.**
+    
 -   **Vector Embeddings & Index:** Managed by ChromaDB, persisted in chroma_db/. **Excluded from Git.**
     
--   **Application Configuration:** .env file (excluded from Git).
+-   **Application Configuration:**  .env file (excluded from Git).
     
--   **Dependency Lock Files:** backend/requirements.txt (generated, committed to Git), frontend/package-lock.json (or yarn.lock, committed to Git).
+-   **Dependency Lock Files:**  backend/requirements.txt, frontend/package-lock.json (committed to Git).
     
 
 ## 7. Deployment (Future Consideration)
