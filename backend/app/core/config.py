@@ -35,6 +35,11 @@ class Settings(BaseSettings):
 
     # --- LLM Configuration ---
     LLM_TEMPERATURE: float = float(os.getenv("LLM_TEMPERATURE", 0.7))
+    # --- ADDED: Max Context Length ---
+    # Max characters for truncating context elements (RAG nodes, project plan/synopsis, prev scenes)
+    # Chapter plan/synopsis are currently NOT truncated by this.
+    MAX_CONTEXT_LENGTH: int = int(os.getenv("MAX_CONTEXT_LENGTH", 15000))
+    # --- END ADDED ---
 
 
 settings = Settings()

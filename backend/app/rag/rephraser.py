@@ -59,11 +59,13 @@ class Rephraser:
     )
     async def _execute_llm_complete(self, prompt: str):
         """Helper function to isolate the LLM call for retry logic."""
-        logger.info(f"Calling LLM for rephrase suggestions (Temperature: {settings.LLM_TEMPERATURE})...") # Log temp
-        logger.debug(f"--- Rephrase Prompt Start ---\n{prompt}\n--- Rephrase Prompt End ---")
-        # --- MODIFIED: Explicitly pass temperature ---
-        return await self.llm.acomplete(prompt, temperature=settings.LLM_TEMPERATURE)
+        # --- MODIFIED: Add prompt size logging ---
+        char_count = len(prompt)
+        est_tokens = char_count // 4
+        logger.info(f"Calling LLM for rephrase suggestions (Temperature: {settings.LLM_TEMPERATURE}, Chars: {char_count}, Est. Tokens: {est_tokens})...")
+        logger.debug(f"--- Rephrase Prompt Start (Chars: {char_count}, Est. Tokens: {est_tokens}) ---\n{prompt}\n--- Rephrase Prompt End ---")
         # --- END MODIFIED ---
+        return await self.llm.acomplete(prompt, temperature=settings.LLM_TEMPERATURE)
 
     async def rephrase(
         self,
@@ -87,7 +89,7 @@ class Rephraser:
         nodes_for_prompt: List[NodeWithScore] = []
 
         try:
-            # 1. Construct Retrieval Query & Retrieve Context (Unchanged logic)
+            # 1. Retrieve Context (Unchanged logic)
             retrieval_context = f"{context_before or ''} {selected_text} {context_after or ''}".strip()
             retrieval_query = (
                 f"Find context relevant to rephrasing the specific text: '{selected_text}'. "
@@ -108,7 +110,7 @@ class Rephraser:
             else:
                 logger.debug("Rephraser: No nodes retrieved.")
 
-            # --- Deduplication and Filtering (Unchanged logic) ---
+            # Deduplication and Filtering (Unchanged logic)
             unique_retrieved_nodes_map = {}
             if retrieved_nodes:
                 for node_with_score in retrieved_nodes:
@@ -149,7 +151,7 @@ class Rephraser:
             else:
                 logger.debug("Rephraser: No nodes remaining after filtering.")
 
-            # --- Format RAG context (Unchanged logic) ---
+            # Format RAG context (with truncation)
             rag_context_list = []
             if nodes_for_prompt:
                  for node_with_score in nodes_for_prompt:
@@ -159,8 +161,11 @@ class Rephraser:
                       char_name = node.metadata.get('character_name')
                       char_info = f" (Character: {char_name})" if char_name and doc_type != 'Character' else ""
                       source_label = f"Source ({doc_type}: \"{doc_title}\"{char_info})"
-                      node_content = node.get_content(); max_node_len = 500
+                      node_content = node.get_content()
+                      # --- MODIFIED: Use MAX_CONTEXT_LENGTH ---
+                      max_node_len = settings.MAX_CONTEXT_LENGTH
                       truncated_content = node_content[:max_node_len] + ('...' if len(node_content) > max_node_len else '')
+                      # --- END MODIFIED ---
                       rag_context_list.append(f"{source_label}\n\n{truncated_content}")
             rag_context_str = "\n\n---\n\n".join(rag_context_list) if rag_context_list else "No specific context was retrieved via search."
             logger.debug(f"Rephraser: Final rag_context_str for prompt:\n---\n{rag_context_str}\n---")
@@ -177,12 +182,17 @@ class Rephraser:
                 f"Please provide {settings.RAG_REPHRASE_SUGGESTION_COUNT} alternative ways to phrase the 'Text to Rephrase' below, considering the context.\n\n"
             )
 
-            # --- MODIFIED: Conditionally add project context ---
+            # Conditionally add project context (with truncation)
             if explicit_plan:
-                user_message_content += f"**Project Plan:**\n```markdown\n{explicit_plan}\n```\n\n"
+                # --- MODIFIED: Use MAX_CONTEXT_LENGTH ---
+                truncated_plan = explicit_plan[:settings.MAX_CONTEXT_LENGTH] + ('...' if len(explicit_plan) > settings.MAX_CONTEXT_LENGTH else '')
+                user_message_content += f"**Project Plan:**\n```markdown\n{truncated_plan}\n```\n\n"
+                # --- END MODIFIED ---
             if explicit_synopsis:
-                user_message_content += f"**Project Synopsis:**\n```markdown\n{explicit_synopsis}\n```\n\n"
-            # --- END MODIFIED ---
+                # --- MODIFIED: Use MAX_CONTEXT_LENGTH ---
+                truncated_synopsis = explicit_synopsis[:settings.MAX_CONTEXT_LENGTH] + ('...' if len(explicit_synopsis) > settings.MAX_CONTEXT_LENGTH else '')
+                user_message_content += f"**Project Synopsis:**\n```markdown\n{truncated_synopsis}\n```\n\n"
+                # --- END MODIFIED ---
 
             user_message_content += (
                 f"**Additional Retrieved Context:**\n```markdown\n{rag_context_str}\n```\n\n"
@@ -220,7 +230,6 @@ class Rephraser:
             suggestions = re.findall(r"^\s*\d+\.\s*(.*)", generated_text, re.MULTILINE)
             if not suggestions:
                 logger.warning(f"Could not parse numbered list from LLM response. Response was:\n{generated_text}")
-                # Fallback parsing: split by lines, remove empty, take first N
                 suggestions = [line.strip() for line in generated_text.splitlines() if line.strip()]
                 if not suggestions: return [f"Error: Could not parse suggestions. Raw response: {generated_text}"]
                 logger.warning(f"Fallback parsing used (split by newline), got {len(suggestions)} potential suggestions.")
@@ -230,7 +239,7 @@ class Rephraser:
             logger.info(f"Successfully parsed {len(suggestions)} rephrase suggestions for project '{project_id}'.")
             return suggestions
 
-        # --- Exception Handling (Unchanged) ---
+        # Exception Handling (Unchanged)
         except GoogleAPICallError as e:
              if _is_retryable_google_api_error(e):
                   logger.error(f"Rate limit error persisted after retries for rephrase: {e}", exc_info=False)

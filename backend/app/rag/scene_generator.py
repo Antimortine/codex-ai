@@ -62,11 +62,13 @@ class SceneGenerator:
     )
     async def _execute_llm_complete(self, prompt: str):
         """Helper function to isolate the LLM call for retry logic."""
-        logger.info(f"Calling LLM acomple for scene generation (Temperature: {settings.LLM_TEMPERATURE})...") # Log temp
-        logger.debug(f"--- Scene Gen Prompt Start ---\n{prompt}\n--- Scene Gen Prompt End ---")
-        # --- MODIFIED: Explicitly pass temperature ---
-        response = await self.llm.acomplete(prompt, temperature=settings.LLM_TEMPERATURE)
+        # --- MODIFIED: Add prompt size logging ---
+        char_count = len(prompt)
+        est_tokens = char_count // 4
+        logger.info(f"Calling LLM acomple for scene generation (Temperature: {settings.LLM_TEMPERATURE}, Chars: {char_count}, Est. Tokens: {est_tokens})...")
+        logger.debug(f"--- Scene Gen Prompt Start (Chars: {char_count}, Est. Tokens: {est_tokens}) ---\n{prompt}\n--- Scene Gen Prompt End ---")
         # --- END MODIFIED ---
+        response = await self.llm.acomplete(prompt, temperature=settings.LLM_TEMPERATURE)
         return response
 
     async def generate_scene(
@@ -75,13 +77,11 @@ class SceneGenerator:
         chapter_id: str,
         prompt_summary: Optional[str],
         previous_scene_order: Optional[int],
-        explicit_plan: Optional[str], # Now optional
-        explicit_synopsis: Optional[str], # Now optional
-        # --- ADDED: Chapter context ---
+        explicit_plan: Optional[str],
+        explicit_synopsis: Optional[str],
         explicit_chapter_plan: Optional[str],
         explicit_chapter_synopsis: Optional[str],
-        # --- END ADDED ---
-        explicit_previous_scenes: List[Tuple[int, str]], # Contains (order, content)
+        explicit_previous_scenes: List[Tuple[int, str]],
         paths_to_filter: Optional[Set[str]] = None
         ) -> Dict[str, str]:
         """
@@ -108,7 +108,7 @@ class SceneGenerator:
             logger.warning(f"Could not retrieve chapter title for {chapter_id}: {e}")
 
         try:
-            # --- 1. Retrieve RAG Context (Unchanged logic) ---
+            # 1. Retrieve RAG Context (Unchanged logic)
             retrieval_query_parts = [
                 f"Relevant context for writing the next scene in chapter '{chapter_title}'."
             ]
@@ -116,7 +116,9 @@ class SceneGenerator:
                 retrieval_query_parts.append(f"The new scene should focus on or involve: {prompt_summary}")
             if explicit_previous_scenes:
                  last_scene_content = explicit_previous_scenes[-1][1]
-                 retrieval_query_parts.append(f"The immediately preceding scene ended with: {last_scene_content[-500:]}") # Last 500 chars
+                 # --- MODIFIED: Use MAX_CONTEXT_LENGTH for retrieval query part ---
+                 retrieval_query_parts.append(f"The immediately preceding scene ended with: {last_scene_content[-settings.MAX_CONTEXT_LENGTH:]}")
+                 # --- END MODIFIED ---
             retrieval_query = " ".join(retrieval_query_parts)
 
             logger.debug(f"Constructed retrieval query for scene gen: '{retrieval_query}'")
@@ -129,7 +131,7 @@ class SceneGenerator:
             else:
                 logger.debug("SceneGenerator: No nodes retrieved.")
 
-            # --- Deduplication and Filtering (Unchanged logic) ---
+            # Deduplication and Filtering (Unchanged logic)
             unique_retrieved_nodes_map = {}
             if retrieved_nodes:
                 for node_with_score in retrieved_nodes:
@@ -170,7 +172,7 @@ class SceneGenerator:
             else:
                 logger.debug("SceneGenerator: No nodes remaining after filtering.")
 
-            # --- Format RAG context (Unchanged logic) ---
+            # Format RAG context (with truncation)
             rag_context_list = []
             if nodes_for_prompt:
                  for node_with_score in nodes_for_prompt:
@@ -180,8 +182,11 @@ class SceneGenerator:
                       char_name = node.metadata.get('character_name')
                       char_info = f" (Character: {char_name})" if char_name and doc_type != 'Character' else ""
                       source_label = f"Source ({doc_type}: \"{doc_title}\"{char_info})"
-                      node_content = node.get_content(); max_node_len = 500
+                      node_content = node.get_content()
+                      # --- MODIFIED: Use MAX_CONTEXT_LENGTH ---
+                      max_node_len = settings.MAX_CONTEXT_LENGTH
                       truncated_content = node_content[:max_node_len] + ('...' if len(node_content) > max_node_len else '')
+                      # --- END MODIFIED ---
                       rag_context_list.append(f"{source_label}\n\n{truncated_content}")
             rag_context_str = "\n\n---\n\n".join(rag_context_list) if rag_context_list else "No additional context retrieved via search."
             logger.debug(f"SceneGenerator: Final rag_context_str for prompt:\n---\n{rag_context_str}\n---")
@@ -191,7 +196,7 @@ class SceneGenerator:
             system_prompt = (
                 "You are an expert writing assistant helping a user draft the next scene in their creative writing project. "
                 "Generate a coherent and engaging scene draft in Markdown format. "
-                "Pay close attention to the provided Project Plan, Project Synopsis, Chapter Plan, Chapter Synopsis, and the content of the Immediately Previous Scene(s) to ensure consistency and logical progression. " # Added Chapter Plan/Synopsis
+                "Pay close attention to the provided Project Plan, Project Synopsis, Chapter Plan, Chapter Synopsis, and the content of the Immediately Previous Scene(s) to ensure consistency and logical progression. "
                 "Also consider the Additional Context retrieved via search."
             )
             previous_scenes_prompt_part = ""
@@ -207,7 +212,10 @@ class SceneGenerator:
                       except Exception:
                           pass # Ignore errors fetching previous titles for prompt
                       label = f"Immediately Previous Scene (Order: {order}, Title: \"{prev_scene_title}\")" if order == actual_previous_order else f"Previous Scene (Order: {order}, Title: \"{prev_scene_title}\")"
-                      max_prev_len = 1000; truncated_prev_content = content[:max_prev_len] + ('...' if len(content) > max_prev_len else '')
+                      # --- MODIFIED: Use MAX_CONTEXT_LENGTH ---
+                      max_prev_len = settings.MAX_CONTEXT_LENGTH
+                      truncated_prev_content = content[:max_prev_len] + ('...' if len(content) > max_prev_len else '')
+                      # --- END MODIFIED ---
                       previous_scenes_prompt_part += f"**{label}:**\n```markdown\n{truncated_prev_content}\n```\n\n"
             else:
                  previous_scenes_prompt_part = f"**Previous Scene(s):** N/A (Generating the first scene of chapter '{chapter_title}')\n\n"
@@ -215,16 +223,22 @@ class SceneGenerator:
 
             user_message_content = f"{main_instruction}"
 
-            # --- MODIFIED: Conditionally add context sections ---
+            # Conditionally add context sections (with truncation for project level)
             if explicit_plan:
-                user_message_content += f"**Project Plan:**\n```markdown\n{explicit_plan}\n```\n\n"
+                # --- MODIFIED: Use MAX_CONTEXT_LENGTH ---
+                truncated_plan = explicit_plan[:settings.MAX_CONTEXT_LENGTH] + ('...' if len(explicit_plan) > settings.MAX_CONTEXT_LENGTH else '')
+                user_message_content += f"**Project Plan:**\n```markdown\n{truncated_plan}\n```\n\n"
+                # --- END MODIFIED ---
             if explicit_synopsis:
-                user_message_content += f"**Project Synopsis:**\n```markdown\n{explicit_synopsis}\n```\n\n"
+                # --- MODIFIED: Use MAX_CONTEXT_LENGTH ---
+                truncated_synopsis = explicit_synopsis[:settings.MAX_CONTEXT_LENGTH] + ('...' if len(explicit_synopsis) > settings.MAX_CONTEXT_LENGTH else '')
+                user_message_content += f"**Project Synopsis:**\n```markdown\n{truncated_synopsis}\n```\n\n"
+                # --- END MODIFIED ---
+            # Chapter context - NO TRUNCATION
             if explicit_chapter_plan:
                 user_message_content += f"**Chapter Plan (for Chapter '{chapter_title}'):**\n```markdown\n{explicit_chapter_plan}\n```\n\n"
             if explicit_chapter_synopsis:
                 user_message_content += f"**Chapter Synopsis (for Chapter '{chapter_title}'):**\n```markdown\n{explicit_chapter_synopsis}\n```\n\n"
-            # --- END MODIFIED ---
 
             user_message_content += (
                 f"{previous_scenes_prompt_part}"
@@ -249,16 +263,16 @@ class SceneGenerator:
                 parsed_title = title_match.group(1).strip(); content_start_index = title_match.end(); newline_after_title = generated_text.find('\n', content_start_index)
                 parsed_content = "" # Initialize
                 if newline_after_title != -1: parsed_content = generated_text[newline_after_title:].strip();
-                else: parsed_content = generated_text[content_start_index:].strip() # Handle case where content starts immediately after title on same line (less likely)
+                else: parsed_content = generated_text[content_start_index:].strip()
 
                 if parsed_content: title = parsed_title; content = parsed_content; logger.info(f"Successfully parsed title and content via regex: '{title}'")
-                else: logger.warning(f"LLM response had H2 heading '## {parsed_title}' but no substantial content followed."); title = "Untitled Scene"; content = generated_text # Keep original text if parsing fails
+                else: logger.warning(f"LLM response had H2 heading '## {parsed_title}' but no substantial content followed."); title = "Untitled Scene"; content = generated_text
             else: logger.warning(f"LLM response did not contain an H2 heading '## Title'. Using default title.")
             generated_draft = {"title": title, "content": content}
             logger.info(f"Scene generation processed. Title: '{generated_draft['title']}'")
             return generated_draft
 
-        # --- Exception handling (Unchanged) ---
+        # Exception handling (Unchanged)
         except GoogleAPICallError as e:
              if _is_retryable_google_api_error(e): raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=f"Error: Rate limit exceeded after multiple retries. Please wait and try again.") from e
              else: raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error: An unexpected error occurred while communicating with the AI service. Details: {e}") from e

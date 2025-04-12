@@ -30,9 +30,7 @@ from typing import List, Optional, Set # Import Set
 
 from app.models.ai import ProposedScene
 from app.core.config import settings # Import settings
-# --- ADDED: Import file_service ---
 from app.services.file_service import file_service
-# --- END ADDED ---
 
 logger = logging.getLogger(__name__)
 
@@ -66,11 +64,13 @@ class ChapterSplitter:
     )
     async def _execute_llm_complete(self, prompt: str):
         """Helper function to isolate the LLM call for retry logic."""
-        logger.info(f"Calling LLM acomple for chapter splitting (Temperature: {settings.LLM_TEMPERATURE})...") # Log temp
-        logger.debug(f"--- Chapter Split Prompt Start ---\n{prompt}\n--- Chapter Split Prompt End ---")
-        # --- MODIFIED: Explicitly pass temperature ---
-        response = await self.llm.acomplete(prompt, temperature=settings.LLM_TEMPERATURE)
+        # --- MODIFIED: Add prompt size logging ---
+        char_count = len(prompt)
+        est_tokens = char_count // 4
+        logger.info(f"Calling LLM acomple for chapter splitting (Temperature: {settings.LLM_TEMPERATURE}, Chars: {char_count}, Est. Tokens: {est_tokens})...")
+        logger.debug(f"--- Chapter Split Prompt Start (Chars: {char_count}, Est. Tokens: {est_tokens}) ---\n{prompt}\n--- Chapter Split Prompt End ---")
         # --- END MODIFIED ---
+        response = await self.llm.acomplete(prompt, temperature=settings.LLM_TEMPERATURE)
         return response
 
     async def split(
@@ -78,12 +78,10 @@ class ChapterSplitter:
         project_id: str,
         chapter_id: str,
         chapter_content: str,
-        explicit_plan: Optional[str], # Now optional
-        explicit_synopsis: Optional[str], # Now optional
-        # --- ADDED: Chapter context ---
+        explicit_plan: Optional[str],
+        explicit_synopsis: Optional[str],
         explicit_chapter_plan: Optional[str],
         explicit_chapter_synopsis: Optional[str],
-        # --- END ADDED ---
         paths_to_filter: Optional[Set[str]] = None
         ) -> List[ProposedScene]:
         """
@@ -98,7 +96,6 @@ class ChapterSplitter:
             logger.warning("Chapter content is empty, cannot split.")
             return []
 
-        # --- ADDED: Get chapter title ---
         chapter_title = f"Chapter {chapter_id}" # Default
         try:
             project_meta = file_service.read_project_metadata(project_id)
@@ -107,7 +104,6 @@ class ChapterSplitter:
                 chapter_title = chapter_info['title']
         except Exception as e:
             logger.warning(f"Could not retrieve chapter title for {chapter_id}: {e}")
-        # --- END ADDED ---
 
         final_paths_to_filter_obj = {Path(p).resolve() for p in (paths_to_filter or set())}
         logger.debug(f"ChapterSplitter: Paths to filter (resolved): {final_paths_to_filter_obj}")
@@ -115,13 +111,13 @@ class ChapterSplitter:
         nodes_for_prompt: List[NodeWithScore] = []
 
         try:
-            # --- Retrieve RAG Context (Unchanged logic) ---
+            # Retrieve RAG Context (Unchanged logic)
             logger.debug("Retrieving context for chapter splitting...")
             retrieval_query = f"Find context relevant to splitting the following chapter content into scenes: {chapter_content[:1000]}..."
             logger.debug(f"Constructed retrieval query for chapter split: '{retrieval_query}'")
             retriever = VectorIndexRetriever(
                 index=self.index,
-                similarity_top_k=settings.RAG_GENERATION_SIMILARITY_TOP_K, # Use generation setting for now
+                similarity_top_k=settings.RAG_GENERATION_SIMILARITY_TOP_K,
                 filters=MetadataFilters(filters=[ExactMatchFilter(key="project_id", value=project_id)]),
             )
             retrieved_nodes = await retriever.aretrieve(retrieval_query)
@@ -132,7 +128,7 @@ class ChapterSplitter:
             else:
                 logger.debug("ChapterSplitter: No nodes retrieved.")
 
-            # --- Deduplication and Filtering (Unchanged logic) ---
+            # Deduplication and Filtering (Unchanged logic)
             unique_retrieved_nodes_map = {}
             if retrieved_nodes:
                 for node_with_score in retrieved_nodes:
@@ -173,7 +169,7 @@ class ChapterSplitter:
             else:
                 logger.debug("ChapterSplitter: No nodes remaining after filtering.")
 
-            # Format RAG context (Unchanged logic)
+            # Format RAG context (with truncation)
             rag_context_list = []
             if nodes_for_prompt:
                  for node_with_score in nodes_for_prompt:
@@ -183,8 +179,11 @@ class ChapterSplitter:
                       char_name = node.metadata.get('character_name')
                       char_info = f" (Character: {char_name})" if char_name and doc_type != 'Character' else ""
                       source_label = f"Source ({doc_type}: \"{doc_title}\"{char_info})"
-                      node_content = node.get_content(); max_node_len = 500
+                      node_content = node.get_content()
+                      # --- MODIFIED: Use MAX_CONTEXT_LENGTH ---
+                      max_node_len = settings.MAX_CONTEXT_LENGTH
                       truncated_content = node_content[:max_node_len] + ('...' if len(node_content) > max_node_len else '')
+                      # --- END MODIFIED ---
                       rag_context_list.append(f"{source_label}\n\n{truncated_content}")
             rag_context_str = "\n\n---\n\n".join(rag_context_list) if rag_context_list else "No additional relevant context snippets were retrieved via search."
             logger.debug(f"ChapterSplitter: Final rag_context_str for prompt:\n---\n{rag_context_str}\n---")
@@ -203,20 +202,26 @@ class ChapterSplitter:
 
             user_message_content = (
                 f"Analyze the chapter content provided below (between <<<CHAPTER_START>>> and <<<CHAPTER_END>>>) and split it into distinct scenes. "
-                f"The chapter ID is '{chapter_id}' and the chapter title is '{chapter_title}'.\n\n" # Added chapter title
-                "Use the provided Project Plan, Project Synopsis, Chapter Plan, Chapter Synopsis, and Additional Context for context on the overall story and potential scene breaks.\n\n" # Added Chapter Plan/Synopsis mention
+                f"The chapter ID is '{chapter_id}' and the chapter title is '{chapter_title}'.\n\n"
+                "Use the provided Project Plan, Project Synopsis, Chapter Plan, Chapter Synopsis, and Additional Context for context on the overall story and potential scene breaks.\n\n"
             )
 
-            # --- MODIFIED: Conditionally add context sections ---
+            # Conditionally add context sections (with truncation for project level)
             if explicit_plan:
-                user_message_content += f"**Project Plan:**\n```markdown\n{explicit_plan}\n```\n\n"
+                # --- MODIFIED: Use MAX_CONTEXT_LENGTH ---
+                truncated_plan = explicit_plan[:settings.MAX_CONTEXT_LENGTH] + ('...' if len(explicit_plan) > settings.MAX_CONTEXT_LENGTH else '')
+                user_message_content += f"**Project Plan:**\n```markdown\n{truncated_plan}\n```\n\n"
+                # --- END MODIFIED ---
             if explicit_synopsis:
-                user_message_content += f"**Project Synopsis:**\n```markdown\n{explicit_synopsis}\n```\n\n"
+                # --- MODIFIED: Use MAX_CONTEXT_LENGTH ---
+                truncated_synopsis = explicit_synopsis[:settings.MAX_CONTEXT_LENGTH] + ('...' if len(explicit_synopsis) > settings.MAX_CONTEXT_LENGTH else '')
+                user_message_content += f"**Project Synopsis:**\n```markdown\n{truncated_synopsis}\n```\n\n"
+                # --- END MODIFIED ---
+            # Chapter context - NO TRUNCATION
             if explicit_chapter_plan:
                 user_message_content += f"**Chapter Plan (for Chapter '{chapter_title}'):**\n```markdown\n{explicit_chapter_plan}\n```\n\n"
             if explicit_chapter_synopsis:
                 user_message_content += f"**Chapter Synopsis (for Chapter '{chapter_title}'):**\n```markdown\n{explicit_chapter_synopsis}\n```\n\n"
-            # --- END MODIFIED ---
 
             user_message_content += (
                 f"**Additional Retrieved Context:**\n```markdown\n{rag_context_str}\n```\n\n"
@@ -227,8 +232,6 @@ class ChapterSplitter:
             full_prompt = f"{system_prompt}\n\nUser: {user_message_content}\n\nAssistant:"
 
             # --- Call LLM ---
-            logger.debug(f"ChapterSplitter: Prompt length: {len(full_prompt)}")
-            logger.debug(f"ChapterSplitter: Calling _execute_llm_complete...")
             llm_response = await self._execute_llm_complete(full_prompt)
             generated_text = llm_response.text.strip() if llm_response else ""
 

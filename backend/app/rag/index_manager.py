@@ -70,22 +70,18 @@ class IndexManager:
             # 1. Configure LlamaIndex Settings globally
             logger.debug(f"Configuring LLM: {LLM_MODEL_NAME} with temperature: {settings.LLM_TEMPERATURE}")
             try:
-                 # --- MODIFIED: Pass temperature from settings ---
                  LlamaSettings.llm = GoogleGenAI(
                      model=LLM_MODEL_NAME,
                      api_key=settings.GOOGLE_API_KEY,
                      temperature=settings.LLM_TEMPERATURE
                  )
-                 # --- END MODIFIED ---
             except TypeError:
                  logger.warning("Initialization with 'model' failed for GoogleGenAI, trying 'model_name'.")
-                 # --- MODIFIED: Pass temperature from settings ---
                  LlamaSettings.llm = GoogleGenAI(
                      model_name=LLM_MODEL_NAME,
                      api_key=settings.GOOGLE_API_KEY,
                      temperature=settings.LLM_TEMPERATURE
                  )
-                 # --- END MODIFIED ---
             self.llm = LlamaSettings.llm
 
             logger.debug(f"Configuring Embedding Model: {EMBEDDING_MODEL_NAME}")
@@ -182,7 +178,6 @@ class IndexManager:
                 except Exception as e:
                     logger.warning(f"Could not read project metadata to get chapter title for {chapter_id}: {e}. Using ID '{chapter_id}' as chapter title.")
 
-                # --- ADDED: Check for chapter plan/synopsis ---
                 if file_path.name == "plan.md" and len(relative_path_parts) == 3:
                     details = {
                         'document_type': 'ChapterPlan',
@@ -197,16 +192,13 @@ class IndexManager:
                         'chapter_id': chapter_id,
                         'chapter_title': chapter_title
                     }
-                # --- END ADDED ---
-                # Scene files
                 elif len(relative_path_parts) > 2 and relative_path_parts[2].endswith('.md'): # Check if it's likely a scene file
                     scene_id = file_path.stem
                     scene_title = scene_id # Default to ID
-                    # Get Scene Title from chapter metadata
                     try:
                         chapter_meta = fs.read_chapter_metadata(project_id, chapter_id)
                         scene_meta = chapter_meta.get('scenes', {}).get(scene_id, {})
-                        title_from_meta = scene_meta.get('title') # Get title, could be None or empty string
+                        title_from_meta = scene_meta.get('title')
                         if title_from_meta:
                             scene_title = title_from_meta
                             logger.debug(f"Found scene title '{scene_title}' in chapter metadata for scene {scene_id}.")
@@ -223,7 +215,7 @@ class IndexManager:
                     }
             # Note files
             elif len(relative_path_parts) > 1 and relative_path_parts[0] == 'notes' and file_path.suffix == '.md':
-                details = {'document_type': 'Note', 'document_title': file_path.stem} # Use stem for Note title
+                details = {'document_type': 'Note', 'document_title': file_path.stem}
         except Exception as e: logger.error(f"Error determining document details for {file_path}: {e}", exc_info=True)
         return details
 
@@ -246,66 +238,43 @@ class IndexManager:
         try:
             if file_path.stat().st_size == 0:
                 logger.info(f"Skipping indexing for empty file: {file_path}")
-                doc_id_for_empty = str(file_path)
-                try: logger.debug(f"Attempting to delete nodes for now-empty file: {doc_id_for_empty}"); self.index.delete_ref_doc(ref_doc_id=doc_id_for_empty, delete_from_docstore=True); logger.info(f"Successfully deleted existing nodes for now-empty file: {doc_id_for_empty} (if they existed).")
-                except Exception as delete_error: logger.warning(f"Could not delete nodes for now-empty file {doc_id_for_empty} (may not have existed): {delete_error}")
+                self.delete_doc(file_path) # Attempt to remove any stale nodes
                 return
         except OSError as e: logger.error(f"Could not check file size for {file_path}: {e}"); return
 
         logger.info(f"IndexManager: Received request to index/update file: {file_path}")
-        doc_id = str(file_path)
         project_id = self._extract_project_id(file_path)
         if not project_id: logger.error(f"Could not determine project_id for file {file_path}. Skipping indexing."); return
         logger.info(f"Determined project_id '{project_id}' for file {file_path}")
 
         try:
-            # More aggressive deletion to ensure ChromaDB is properly updated
-            logger.debug(f"Attempting to delete existing nodes for doc_id: {doc_id}")
-
-            # First try standard LlamaIndex delete method
-            try:
-                self.index.delete_ref_doc(ref_doc_id=doc_id, delete_from_docstore=True)
-                logger.info(f"Successfully deleted existing nodes for doc_id: {doc_id} via LlamaIndex.")
-            except Exception as delete_error:
-                logger.warning(f"Could not delete nodes via LlamaIndex for doc_id {doc_id}: {delete_error}")
-
-                # Fallback: try direct ChromaDB deletion if we have project_id
-                if self.chroma_collection and project_id:
-                    try:
-                        # Try direct ChromaDB deletion using file path as filter
-                        self.chroma_collection.delete(where={"file_path": str(file_path)})
-                        logger.info(f"Directly deleted document from ChromaDB with file_path={file_path}")
-                    except Exception as chroma_delete_err:
-                        logger.warning(f"Direct ChromaDB deletion failed for {file_path}: {chroma_delete_err}")
+            # --- Delete existing nodes first ---
+            self.delete_doc(file_path)
+            # --- End Deletion ---
 
             logger.debug(f"Loading document content from: {file_path}")
             def file_metadata_func(file_name: str) -> Dict[str, Any]:
                  current_path = Path(file_name)
                  current_project_id = self._extract_project_id(current_path)
 
-                 # If preloaded metadata is provided, use it instead of reading from filesystem
                  if preloaded_metadata and str(current_path) == str(file_path):
                      logger.debug(f"Using preloaded metadata for {file_name}: {preloaded_metadata}")
                      meta = {
                          "file_path": file_name,
                          "project_id": current_project_id or "UNKNOWN",
                      }
-                     # Copy all preloaded metadata
                      meta.update(preloaded_metadata)
                      return meta
 
-                 # Otherwise, proceed with regular filesystem metadata loading
                  current_details = self._get_document_details(current_path, current_project_id) if current_project_id else {}
                  meta = {
                      "file_path": file_name,
                      "project_id": current_project_id or "UNKNOWN",
                      "document_type": current_details.get('document_type', 'Unknown'),
-                     "document_title": current_details.get('document_title', current_path.name) # Use title from details
+                     "document_title": current_details.get('document_title', current_path.name)
                  }
-                 # Add character name if applicable
                  if meta["document_type"] == "Character":
                      meta["character_name"] = meta["document_title"]
-                 # Add chapter info if applicable (Scenes, ChapterPlan, ChapterSynopsis)
                  if meta["document_type"] in ["Scene", "ChapterPlan", "ChapterSynopsis"]:
                      meta["chapter_id"] = current_details.get('chapter_id', 'UNKNOWN')
                      meta["chapter_title"] = current_details.get('chapter_title', 'UNKNOWN')
@@ -316,21 +285,16 @@ class IndexManager:
             documents = reader.load_data()
             if not documents: logger.warning(f"No documents loaded from file: {file_path}. Skipping insertion."); return
 
-            logger.debug(f"Inserting new nodes for doc_id: {doc_id} (metadata added via file_metadata_func)")
+            logger.debug(f"Inserting new nodes for file: {file_path} (metadata added via file_metadata_func)")
 
-            # For scene files, we want to be extra careful about metadata updates
             if preloaded_metadata and preloaded_metadata.get('document_type') == 'Scene':
                 logger.info(f"Using enhanced insertion for Scene document with title: {preloaded_metadata.get('document_title')}")
-
-                # Log detailed information about what we're inserting
                 for doc in documents:
                     logger.debug(f"Document metadata before insertion: {doc.metadata}")
-                    # Ensure the document has the most current metadata
                     if 'document_title' in preloaded_metadata:
                         doc.metadata['document_title'] = preloaded_metadata['document_title']
                     logger.debug(f"Final document metadata for insertion: {doc.metadata}")
 
-            # Insert the nodes into the index
             self.index.insert_nodes(documents)
             logger.info(f"Successfully indexed/updated file: {file_path} with project_id '{project_id}'")
 
@@ -341,17 +305,37 @@ class IndexManager:
     def delete_doc(self, file_path: Path):
         """
         Deletes nodes associated with a specific file path from the index.
-        Uses the file path string as the ref_doc_id.
+        Attempts both direct ChromaDB deletion and LlamaIndex ref_doc deletion.
         """
-        if not self.index: logger.error("Index is not initialized. Cannot delete doc."); return
         if not isinstance(file_path, Path): logger.error(f"IndexManager.delete_doc called with invalid type for file_path: {type(file_path)}"); return
         logger.info(f"IndexManager: Received request to delete document associated with file path: {file_path}")
-        doc_id = str(file_path)
-        try:
-            logger.debug(f"Attempting to delete nodes for ref_doc_id: {doc_id}")
-            self.index.delete_ref_doc(ref_doc_id=doc_id, delete_from_docstore=True)
-            logger.info(f"Successfully deleted nodes for file {file_path} from index (if they existed).")
-        except Exception as e: logger.error(f"Error deleting document from index for file {file_path} (ref_doc_id: {doc_id}): {e}", exc_info=True)
+
+        # --- MODIFIED: Attempt both deletion methods ---
+        # Attempt 1: Direct ChromaDB deletion using file_path metadata
+        if self.chroma_collection:
+            try:
+                logger.debug(f"Attempting direct ChromaDB deletion for file_path: {str(file_path)}")
+                delete_result = self.chroma_collection.delete(where={"file_path": str(file_path)})
+                logger.info(f"Direct ChromaDB deletion attempt for file_path='{str(file_path)}' completed.")
+            except Exception as chroma_delete_err:
+                logger.warning(f"Direct ChromaDB deletion failed for {file_path}: {chroma_delete_err}")
+        else:
+            logger.warning("Chroma collection not available for direct deletion.")
+
+        # Attempt 2: LlamaIndex deletion using ref_doc_id
+        if self.index:
+             doc_id = str(file_path) # LlamaIndex uses file path string as ref_doc_id
+             try:
+                 logger.debug(f"Attempting LlamaIndex deletion for ref_doc_id: {doc_id}")
+                 self.index.delete_ref_doc(ref_doc_id=doc_id, delete_from_docstore=True)
+                 logger.info(f"LlamaIndex deletion attempt for ref_doc_id: {doc_id} completed (might not find nodes if direct delete worked).")
+             except Exception as e:
+                 # This might be expected if direct deletion worked, or could be another issue
+                 logger.warning(f"LlamaIndex delete_ref_doc failed for {doc_id}: {e}")
+        else:
+             logger.error("Index is not initialized. Cannot delete doc via LlamaIndex.")
+        # --- END MODIFIED ---
+
 
     def delete_project_docs(self, project_id: str):
         """

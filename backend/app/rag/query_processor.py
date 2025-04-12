@@ -57,11 +57,13 @@ class QueryProcessor:
     )
     async def _execute_llm_complete(self, prompt: str):
         """Helper function to isolate the LLM call for retry logic."""
-        logger.info(f"Calling LLM with combined context for query (Temperature: {settings.LLM_TEMPERATURE})...") # Log temp
-        logger.debug(f"--- Query Prompt Start ---\n{prompt}\n--- Query Prompt End ---") # Log prompt
-        # --- MODIFIED: Explicitly pass temperature ---
-        return await self.llm.acomplete(prompt, temperature=settings.LLM_TEMPERATURE)
+        # --- MODIFIED: Add prompt size logging ---
+        char_count = len(prompt)
+        est_tokens = char_count // 4
+        logger.info(f"Calling LLM with combined context for query (Temperature: {settings.LLM_TEMPERATURE}, Chars: {char_count}, Est. Tokens: {est_tokens})...")
+        logger.debug(f"--- Query Prompt Start (Chars: {char_count}, Est. Tokens: {est_tokens}) ---\n{prompt}\n--- Query Prompt End ---")
         # --- END MODIFIED ---
+        return await self.llm.acomplete(prompt, temperature=settings.LLM_TEMPERATURE)
 
     async def query(self,
                   project_id: str,
@@ -69,9 +71,7 @@ class QueryProcessor:
                   explicit_plan: Optional[str], # Now optional
                   explicit_synopsis: Optional[str], # Now optional
                   direct_sources_data: Optional[List[Dict]] = None,
-                  # --- ADDED: direct_chapter_context ---
                   direct_chapter_context: Optional[Dict[str, Optional[str]]] = None,
-                  # --- END ADDED ---
                   paths_to_filter: Optional[Set[str]] = None
                   ) -> Tuple[str, List[NodeWithScore], Optional[List[Dict[str, str]]]]:
         logger.info(f"QueryProcessor: Received query for project '{project_id}': '{query_text}'")
@@ -88,7 +88,6 @@ class QueryProcessor:
                      "type": source.get("type", "Unknown"),
                      "name": source.get("name", "Unknown")
                  })
-        # --- ADDED: Include chapter context in direct sources info if present ---
         if direct_chapter_context:
             if not direct_sources_info_list: direct_sources_info_list = []
             chapter_title = direct_chapter_context.get('chapter_title', 'Unknown Chapter')
@@ -96,10 +95,9 @@ class QueryProcessor:
                 direct_sources_info_list.append({'type': 'ChapterPlan', 'name': f"Plan for Chapter '{chapter_title}'"})
             if direct_chapter_context.get('chapter_synopsis'):
                 direct_sources_info_list.append({'type': 'ChapterSynopsis', 'name': f"Synopsis for Chapter '{chapter_title}'"})
-        # --- END ADDED ---
 
         try:
-            # 1. Create Retriever & Retrieve Nodes
+            # 1. Retrieve Nodes (Unchanged)
             logger.debug(f"Creating retriever with top_k={settings.RAG_QUERY_SIMILARITY_TOP_K} and filter for project_id='{project_id}'")
             retriever = VectorIndexRetriever(index=self.index, similarity_top_k=settings.RAG_QUERY_SIMILARITY_TOP_K, filters=MetadataFilters(filters=[ExactMatchFilter(key="project_id", value=project_id)]))
             logger.info(f"Retrieving nodes for query: '{query_text}'")
@@ -111,7 +109,7 @@ class QueryProcessor:
             else:
                 logger.debug("QueryProcessor: No nodes retrieved.")
 
-            # --- Deduplication and Filtering (Unchanged) ---
+            # Deduplication and Filtering (Unchanged)
             unique_retrieved_nodes_map = {}
             if retrieved_nodes:
                 for node_with_score in retrieved_nodes:
@@ -162,14 +160,13 @@ class QueryProcessor:
             )
             user_message_content = f"**User Query:**\n{query_text}\n\n"
 
-            # --- MODIFIED: Conditionally add project context ---
+            # Conditionally add project context (no truncation here)
             if explicit_plan:
                 user_message_content += f"**Project Plan:**\n```markdown\n{explicit_plan}\n```\n\n"
             if explicit_synopsis:
                 user_message_content += f"**Project Synopsis:**\n```markdown\n{explicit_synopsis}\n```\n\n"
-            # --- END MODIFIED ---
 
-            # --- MODIFIED: Conditionally add direct chapter context ---
+            # Conditionally add direct chapter context (no truncation here)
             if direct_chapter_context:
                 chapter_title = direct_chapter_context.get('chapter_title', 'Unknown Chapter')
                 chapter_plan = direct_chapter_context.get('chapter_plan')
@@ -181,16 +178,16 @@ class QueryProcessor:
                         user_message_content += f"--- Start Chapter Plan ---\n```markdown\n{chapter_plan}\n```\n--- End Chapter Plan ---\n\n"
                     if chapter_synopsis:
                         user_message_content += f"--- Start Chapter Synopsis ---\n```markdown\n{chapter_synopsis}\n```\n--- End Chapter Synopsis ---\n\n"
-            # --- END MODIFIED ---
 
-            # Add other direct sources (unchanged logic)
+            # Add other direct sources (no truncation here)
             if direct_sources_data:
                  user_message_content += "**Directly Requested Content:**\n"
                  for i, source_data in enumerate(direct_sources_data):
-                      source_type = source_data.get('type', 'Unknown'); source_name = source_data.get('name', f'Source {i+1}'); source_content = source_data.get('content', ''); truncated_direct_content = source_content
-                      user_message_content += (f"--- Start Directly Requested {source_type}: \"{source_name}\" ---\n" f"```markdown\n{truncated_direct_content}\n```\n" f"--- End Directly Requested {source_type}: \"{source_name}\" ---\n\n")
+                      source_type = source_data.get('type', 'Unknown'); source_name = source_data.get('name', f'Source {i+1}'); source_content = source_data.get('content', '');
+                      # No truncation for directly requested content
+                      user_message_content += (f"--- Start Directly Requested {source_type}: \"{source_name}\" ---\n" f"```markdown\n{source_content}\n```\n" f"--- End Directly Requested {source_type}: \"{source_name}\" ---\n\n")
 
-            # Add retrieved RAG context (unchanged logic, but uses filtered nodes)
+            # Add retrieved RAG context (with truncation)
             rag_context_list = []
             if nodes_for_prompt:
                  for node_with_score in nodes_for_prompt:
@@ -200,8 +197,11 @@ class QueryProcessor:
                       char_name = node.metadata.get('character_name')
                       char_info = f" (Character: {char_name})" if char_name and doc_type != 'Character' else ""
                       source_label = f"Source ({doc_type}: \"{doc_title}\"{char_info})"
-                      node_content = node.get_content(); max_node_len = 500
+                      node_content = node.get_content()
+                      # --- MODIFIED: Use MAX_CONTEXT_LENGTH ---
+                      max_node_len = settings.MAX_CONTEXT_LENGTH # Use global setting
                       truncated_content = node_content[:max_node_len] + ('...' if len(node_content) > max_node_len else '')
+                      # --- END MODIFIED ---
                       rag_context_list.append(f"{source_label}\n\n{truncated_content}")
             retrieved_context_str = "\n\n---\n\n".join(rag_context_list) if rag_context_list else "No additional relevant context snippets were retrieved via search."
             logger.debug(f"QueryProcessor: Final rag_context_str for prompt:\n---\n{retrieved_context_str}\n---")
@@ -222,12 +222,11 @@ class QueryProcessor:
             logger.info(f"Query successful. Returning answer, {len(nodes_for_prompt)} filtered source nodes, and direct source info list (if any).")
             return answer, nodes_for_prompt, direct_sources_info_list
 
-        # --- Exception Handling (Unchanged) ---
+        # Exception Handling (Unchanged)
         except GoogleAPICallError as e:
              if _is_retryable_google_api_error(e):
                  logger.error(f"Rate limit error persisted after retries for query: {e}", exc_info=False)
                  error_message = f"Error: Rate limit exceeded for query after multiple retries. Please wait and try again."
-                 # Return filtered nodes even on error
                  return error_message, nodes_for_prompt, None
              else:
                  logger.error(f"Non-retryable GoogleAPICallError during query for project '{project_id}': {e}", exc_info=True)
