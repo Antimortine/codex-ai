@@ -46,7 +46,7 @@ class IndexManager:
     """
     Manages the RAG index for project content using LlamaIndex, ChromaDB, Google Gemini LLM, and HuggingFace Embeddings.
     Focuses on index initialization and modification (add/update/delete).
-    Injects relevant metadata (project_id, file_path, document_type, document_title) into nodes.
+    Injects relevant metadata (project_id, file_path, document_type, document_title, chapter_id, chapter_title) into nodes.
     """
 
     def __init__(self):
@@ -60,9 +60,7 @@ class IndexManager:
         self.embed_model: Optional[HuggingFaceEmbedding] = None
         self.storage_context: Optional[StorageContext] = None
         self.vector_store: Optional[ChromaVectorStore] = None
-        # --- ADDED: Store chroma_collection ---
         self.chroma_collection: Optional[chromadb.Collection] = None
-        # --- END ADDED ---
 
         if not settings.GOOGLE_API_KEY:
             logger.error("GOOGLE_API_KEY not found in settings. Cannot initialize AI components.")
@@ -89,9 +87,7 @@ class IndexManager:
             os.makedirs(CHROMA_PERSIST_DIR, exist_ok=True)
             db = chromadb.PersistentClient(path=CHROMA_PERSIST_DIR)
             logger.debug(f"Getting or creating ChromaDB collection: {CHROMA_COLLECTION_NAME}")
-            # --- MODIFIED: Store collection ---
             self.chroma_collection = db.get_or_create_collection(name=CHROMA_COLLECTION_NAME)
-            # --- END MODIFIED ---
             logger.debug("Initializing ChromaVectorStore...")
             self.vector_store = ChromaVectorStore(chroma_collection=self.chroma_collection)
 
@@ -138,7 +134,8 @@ class IndexManager:
     def _get_document_details(self, file_path: Path, project_id: str) -> Dict[str, Any]:
         """
         Determines the document type and title based on its path and project metadata.
-        Returns a dictionary containing 'document_type' and 'document_title'.
+        For scenes, it also attempts to add chapter_id and chapter_title.
+        Returns a dictionary containing metadata keys.
         """
         default_title = file_path.name
         details = {'document_type': 'Unknown', 'document_title': default_title}
@@ -156,29 +153,56 @@ class IndexManager:
             elif len(relative_path_parts) > 2 and relative_path_parts[0] == 'chapters' and relative_path_parts[2].endswith('.md'):
                 chapter_id = relative_path_parts[1]; scene_id = file_path.stem
                 scene_title = scene_id # Default to ID
+                chapter_title = chapter_id # Default chapter title to ID
+
+                # Get Scene Title from chapter metadata
                 try:
                     chapter_meta = fs.read_chapter_metadata(project_id, chapter_id)
                     scene_meta = chapter_meta.get('scenes', {}).get(scene_id, {})
                     title_from_meta = scene_meta.get('title') # Get title, could be None or empty string
-                    if title_from_meta: # Check if title is truthy (not None, not empty string)
+                    if title_from_meta:
                         scene_title = title_from_meta
-                        logger.debug(f"Found scene title '{scene_title}' in metadata for scene {scene_id}.")
+                        logger.debug(f"Found scene title '{scene_title}' in chapter metadata for scene {scene_id}.")
                     else:
-                        logger.warning(f"Scene title not found or empty in metadata for scene {scene_id} in chapter {chapter_id}. Using ID '{scene_id}' as title.")
+                        logger.warning(f"Scene title not found or empty in chapter metadata for scene {scene_id}. Using ID '{scene_id}' as title.")
                 except Exception as e:
                     logger.warning(f"Could not read chapter metadata for {chapter_id} to get scene title for {scene_id}: {e}. Using ID '{scene_id}' as title.")
-                details = {'document_type': 'Scene', 'document_title': scene_title}
+
+                # Get Chapter Title from project metadata
+                try:
+                    project_meta = fs.read_project_metadata(project_id)
+                    chapter_meta_in_proj = project_meta.get('chapters', {}).get(chapter_id, {})
+                    title_from_proj_meta = chapter_meta_in_proj.get('title')
+                    if title_from_proj_meta:
+                        chapter_title = title_from_proj_meta
+                        logger.debug(f"Found chapter title '{chapter_title}' in project metadata for chapter {chapter_id}.")
+                    else:
+                        logger.warning(f"Chapter title not found or empty in project metadata for chapter {chapter_id}. Using ID '{chapter_id}' as chapter title.")
+                except Exception as e:
+                    logger.warning(f"Could not read project metadata to get chapter title for {chapter_id}: {e}. Using ID '{chapter_id}' as chapter title.")
+
+                details = {
+                    'document_type': 'Scene',
+                    'document_title': scene_title,
+                    'chapter_id': chapter_id,
+                    'chapter_title': chapter_title
+                }
             elif len(relative_path_parts) > 1 and relative_path_parts[0] == 'notes' and file_path.suffix == '.md':
                 details = {'document_type': 'Note', 'document_title': file_path.stem} # Use stem for Note title
         except Exception as e: logger.error(f"Error determining document details for {file_path}: {e}", exc_info=True)
         return details
 
-    def index_file(self, file_path: Path):
+    def index_file(self, file_path: Path, preloaded_metadata: Optional[Dict[str, Any]] = None):
         """
-        Loads, parses, embeds, adds metadata (project_id, file_path, document_type, document_title),
+        Loads, parses, embeds, adds metadata (project_id, file_path, document_type, document_title, chapter_id, chapter_title),
         and inserts/updates a single file's content into the index.
         If the document already exists (based on file_path), it's deleted first.
         Empty files are skipped.
+        
+        Args:
+            file_path: Path to the file to index
+            preloaded_metadata: Optional dictionary containing pre-loaded metadata to use instead of reading from filesystem
+                               This helps avoid race conditions when metadata has just been updated
         """
         if not self.index: logger.error("Index is not initialized. Cannot index file."); return
         if not isinstance(file_path, Path): logger.error(f"IndexManager.index_file called with invalid type for file_path: {type(file_path)}"); return
@@ -200,23 +224,56 @@ class IndexManager:
         logger.info(f"Determined project_id '{project_id}' for file {file_path}")
 
         try:
+            # More aggressive deletion to ensure ChromaDB is properly updated
             logger.debug(f"Attempting to delete existing nodes for doc_id: {doc_id}")
-            try: self.index.delete_ref_doc(ref_doc_id=doc_id, delete_from_docstore=True); logger.info(f"Successfully deleted existing nodes for doc_id: {doc_id} (if they existed).")
-            except Exception as delete_error: logger.warning(f"Could not delete nodes for doc_id {doc_id} (may not have existed): {delete_error}")
+            
+            # First try standard LlamaIndex delete method
+            try:
+                self.index.delete_ref_doc(ref_doc_id=doc_id, delete_from_docstore=True)
+                logger.info(f"Successfully deleted existing nodes for doc_id: {doc_id} via LlamaIndex.")
+            except Exception as delete_error: 
+                logger.warning(f"Could not delete nodes via LlamaIndex for doc_id {doc_id}: {delete_error}")
+                
+                # Fallback: try direct ChromaDB deletion if we have project_id
+                if self.chroma_collection and project_id:
+                    try:
+                        # Try direct ChromaDB deletion using file path as filter
+                        self.chroma_collection.delete(where={"file_path": str(file_path)})
+                        logger.info(f"Directly deleted document from ChromaDB with file_path={file_path}")
+                    except Exception as chroma_delete_err:
+                        logger.warning(f"Direct ChromaDB deletion failed for {file_path}: {chroma_delete_err}")
 
             logger.debug(f"Loading document content from: {file_path}")
             def file_metadata_func(file_name: str) -> Dict[str, Any]:
                  current_path = Path(file_name)
                  current_project_id = self._extract_project_id(current_path)
+                 
+                 # If preloaded metadata is provided, use it instead of reading from filesystem
+                 if preloaded_metadata and str(current_path) == str(file_path):
+                     logger.debug(f"Using preloaded metadata for {file_name}: {preloaded_metadata}")
+                     meta = {
+                         "file_path": file_name,
+                         "project_id": current_project_id or "UNKNOWN",
+                     }
+                     # Copy all preloaded metadata
+                     meta.update(preloaded_metadata)
+                     return meta
+                     
+                 # Otherwise, proceed with regular filesystem metadata loading
                  current_details = self._get_document_details(current_path, current_project_id) if current_project_id else {}
                  meta = {
                      "file_path": file_name,
                      "project_id": current_project_id or "UNKNOWN",
                      "document_type": current_details.get('document_type', 'Unknown'),
-                     "document_title": current_details.get('document_title', current_path.name) # Use full name as fallback
+                     "document_title": current_details.get('document_title', current_path.name) # Use title from details
                  }
+                 # Add character name if applicable
                  if meta["document_type"] == "Character":
                      meta["character_name"] = meta["document_title"]
+                 # Add chapter info if applicable
+                 if meta["document_type"] == "Scene":
+                     meta["chapter_id"] = current_details.get('chapter_id', 'UNKNOWN')
+                     meta["chapter_title"] = current_details.get('chapter_title', 'UNKNOWN')
                  logger.debug(f"Generated metadata for {file_name}: {meta}")
                  return meta
 
@@ -225,6 +282,20 @@ class IndexManager:
             if not documents: logger.warning(f"No documents loaded from file: {file_path}. Skipping insertion."); return
 
             logger.debug(f"Inserting new nodes for doc_id: {doc_id} (metadata added via file_metadata_func)")
+            
+            # For scene files, we want to be extra careful about metadata updates
+            if preloaded_metadata and preloaded_metadata.get('document_type') == 'Scene':
+                logger.info(f"Using enhanced insertion for Scene document with title: {preloaded_metadata.get('document_title')}")
+                
+                # Log detailed information about what we're inserting
+                for doc in documents:
+                    logger.debug(f"Document metadata before insertion: {doc.metadata}")
+                    # Ensure the document has the most current metadata
+                    if 'document_title' in preloaded_metadata:
+                        doc.metadata['document_title'] = preloaded_metadata['document_title']
+                    logger.debug(f"Final document metadata for insertion: {doc.metadata}")
+            
+            # Insert the nodes into the index
             self.index.insert_nodes(documents)
             logger.info(f"Successfully indexed/updated file: {file_path} with project_id '{project_id}'")
 
@@ -247,7 +318,6 @@ class IndexManager:
             logger.info(f"Successfully deleted nodes for file {file_path} from index (if they existed).")
         except Exception as e: logger.error(f"Error deleting document from index for file {file_path} (ref_doc_id: {doc_id}): {e}", exc_info=True)
 
-    # --- REVISED: delete_project_docs using direct ChromaDB access ---
     def delete_project_docs(self, project_id: str):
         """
         Deletes all nodes associated with a specific project_id from the index
@@ -259,28 +329,15 @@ class IndexManager:
 
         logger.info(f"Attempting to delete all indexed documents for project_id: {project_id} directly from ChromaDB.")
         try:
-            # Use ChromaDB's delete method with a 'where' filter
-            # This directly targets documents based on metadata
             self.chroma_collection.delete(where={"project_id": project_id})
             logger.info(f"Successfully deleted documents for project {project_id} from ChromaDB collection '{self.chroma_collection.name}'.")
-
-            # Note: LlamaIndex's internal docstore might still hold references if not
-            # automatically cleaned up by the vector store integration.
-            # For a full cleanup, we might still need to iterate and call delete_ref_doc,
-            # but deleting from Chroma is the primary step. Let's rely on this for now.
-            # If inconsistencies arise later, we might need to add docstore cleanup.
-
         except Exception as e:
             logger.error(f"Error during direct ChromaDB deletion for project {project_id}: {e}", exc_info=True)
-            # Depending on the error, we might want to raise it
-            # raise RuntimeError(f"Failed to delete project docs from ChromaDB for {project_id}") from e
-    # --- END REVISED ---
 
 
-# --- ADDED: Instantiate Singleton ---
+# --- Instantiate Singleton ---
 try:
     index_manager = IndexManager()
 except Exception as e:
     logger.critical(f"Failed to create IndexManager instance on startup: {e}", exc_info=True)
     index_manager = None
-# --- END ADDED ---

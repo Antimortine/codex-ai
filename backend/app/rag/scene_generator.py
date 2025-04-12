@@ -103,22 +103,15 @@ class SceneGenerator:
 
         try:
             # --- 1. Retrieve RAG Context ---
-            # --- REVISED: Retrieval query focuses more on prompt and previous scene ---
             retrieval_query_parts = [
                 f"Relevant context for writing the next scene in chapter '{chapter_title}'."
             ]
             if prompt_summary:
-                # Make the prompt summary more prominent in the query
                 retrieval_query_parts.append(f"The new scene should focus on or involve: {prompt_summary}")
             if explicit_previous_scenes:
                  last_scene_content = explicit_previous_scenes[-1][1]
-                 # Use a larger excerpt of the previous scene
                  retrieval_query_parts.append(f"The immediately preceding scene ended with: {last_scene_content[-500:]}") # Last 500 chars
-            # Optionally add keywords from plan/synopsis if they seem very relevant
-            # retrieval_query_parts.append(f"Keywords from Plan: {explicit_plan[:100]}")
-            # retrieval_query_parts.append(f"Keywords from Synopsis: {explicit_synopsis[:100]}")
             retrieval_query = " ".join(retrieval_query_parts)
-            # --- END REVISED ---
 
             logger.debug(f"Constructed retrieval query for scene gen: '{retrieval_query}'")
             retriever = VectorIndexRetriever( index=self.index, similarity_top_k=settings.RAG_GENERATION_SIMILARITY_TOP_K, filters=MetadataFilters(filters=[ExactMatchFilter(key="project_id", value=project_id)]), )
@@ -199,7 +192,10 @@ class SceneGenerator:
                       label = f"Immediately Previous Scene (Order: {order}, Title: \"{prev_scene_title}\")" if order == actual_previous_order else f"Previous Scene (Order: {order}, Title: \"{prev_scene_title}\")"
                       max_prev_len = 1000; truncated_prev_content = content[:max_prev_len] + ('...' if len(content) > max_prev_len else '')
                       previous_scenes_prompt_part += f"**{label}:**\n```markdown\n{truncated_prev_content}\n```\n\n"
-            else: previous_scenes_prompt_part = "**Previous Scene(s):** N/A (Generating the first scene)\n\n"
+            else:
+                 # --- MODIFIED: Include chapter title in the N/A message ---
+                 previous_scenes_prompt_part = f"**Previous Scene(s):** N/A (Generating the first scene of chapter '{chapter_title}')\n\n"
+                 # --- END MODIFIED ---
             main_instruction = f"Guidance for new scene: '{prompt_summary}'.\n\n" if prompt_summary else "Generate the next logical scene based on the context.\n\n"
             max_plan_synopsis_len = 1000
             truncated_plan = (explicit_plan or '')[:max_plan_synopsis_len] + ('...' if len(explicit_plan or '') > max_plan_synopsis_len else '')

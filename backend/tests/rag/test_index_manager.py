@@ -65,12 +65,14 @@ def reset_mocks():
     mock_llama_settings_llm.reset_mock()
     mock_llama_settings_embed.reset_mock()
     mock_internal_file_service.reset_mock()
-    mock_internal_file_service.read_project_metadata.reset_mock()
+    # --- Reset side_effect as well ---
+    mock_internal_file_service.read_project_metadata.reset_mock(side_effect=None)
+    mock_internal_file_service.read_chapter_metadata.reset_mock(side_effect=None)
+    # --- End Reset ---
     mock_internal_file_service._get_characters_dir.reset_mock()
     mock_internal_file_service._get_content_block_path.reset_mock()
     mock_internal_file_service._get_chapter_path.reset_mock()
     mock_internal_file_service._get_scene_path.reset_mock()
-    mock_internal_file_service.read_chapter_metadata.reset_mock()
 
 
 @pytest.fixture(scope="function")
@@ -104,6 +106,7 @@ def patched_index_manager_instance(request):
             settings.GOOGLE_API_KEY = original_key
 
 # --- Test IndexManager ---
+# (Initialization and _extract_project_id tests unchanged - omitted)
 def test_index_manager_initialization_load_existing(patched_index_manager_instance):
     manager, mocks = patched_index_manager_instance
     mocks["p_client_cls"].assert_called_once_with(path=CHROMA_PERSIST_DIR)
@@ -113,9 +116,7 @@ def test_index_manager_initialization_load_existing(patched_index_manager_instan
     mocks["load_index"].assert_called_once_with(mock_storage_context)
     mocks["vs_from_docs"].assert_not_called()
     assert manager.index == mock_vector_index
-    # --- CORRECTED: Only assert against the return value ---
     assert manager.chroma_collection is mock_chroma_client.get_or_create_collection.return_value
-    # --- END CORRECTED ---
 
 @pytest.mark.patch_load_index(ValueError("No existing index found"))
 def test_index_manager_initialization_create_new(patched_index_manager_instance):
@@ -127,9 +128,7 @@ def test_index_manager_initialization_create_new(patched_index_manager_instance)
      mocks["load_index"].assert_called_once_with(mock_storage_context)
      mocks["vs_from_docs"].assert_called_once_with([], storage_context=mock_storage_context)
      assert manager.index == mock_vector_index
-     # --- CORRECTED: Only assert against the return value ---
      assert manager.chroma_collection is mock_chroma_client.get_or_create_collection.return_value
-     # --- END CORRECTED ---
 
 
 def test_extract_project_id_success(patched_index_manager_instance):
@@ -151,6 +150,7 @@ def test_extract_project_id_base_dir(patched_index_manager_instance):
     assert extracted_id is None
 
 # --- _get_document_details Tests ---
+# (Plan, Synopsis, World, Character tests unchanged - omitted)
 def test_get_document_details_plan(patched_index_manager_instance):
     manager, _ = patched_index_manager_instance
     project_id = "proj_details"
@@ -223,7 +223,6 @@ def test_get_document_details_character_metadata_read_error(patched_index_manage
     file_path = BASE_PROJECT_DIR / project_id / "characters" / f"{char_id}.md"
     mock_internal_file_service.read_project_metadata.side_effect = OSError("Cannot read file")
     details = manager._get_document_details(file_path, project_id)
-    # Fallback when project metadata read fails is 'Unknown' type and full filename
     assert details == {'document_type': 'Unknown', 'document_title': f"{char_id}.md"}
     mock_internal_file_service.read_project_metadata.assert_called_once_with(project_id)
 
@@ -234,52 +233,130 @@ def test_get_document_details_scene_success(patched_index_manager_instance):
     chapter_id = "ch1"
     scene_id = "sc1_good_title"
     scene_title = "The Shire"
+    chapter_title = "Chapter One" # Expected chapter title
     file_path = BASE_PROJECT_DIR / project_id / "chapters" / chapter_id / f"{scene_id}.md"
+    # --- Explicitly reset side effects and set return values ---
+    mock_internal_file_service.read_chapter_metadata.side_effect = None
+    mock_internal_file_service.read_project_metadata.side_effect = None
     mock_internal_file_service.read_chapter_metadata.return_value = {
         "scenes": {scene_id: {"title": scene_title}}
     }
+    mock_internal_file_service.read_project_metadata.return_value = {
+        "chapters": {chapter_id: {"title": chapter_title}}
+    }
+    # --- End Fix ---
     details = manager._get_document_details(file_path, project_id)
-    assert details == {'document_type': 'Scene', 'document_title': scene_title}
+    assert details == {
+        'document_type': 'Scene',
+        'document_title': scene_title,
+        'chapter_id': chapter_id,
+        'chapter_title': chapter_title
+    }
     mock_internal_file_service.read_chapter_metadata.assert_called_once_with(project_id, chapter_id)
+    mock_internal_file_service.read_project_metadata.assert_called_once_with(project_id)
 
 def test_get_document_details_scene_metadata_missing_title(patched_index_manager_instance):
     manager, _ = patched_index_manager_instance
     project_id = "proj_details_scene_no_title"
     chapter_id = "ch1"
     scene_id = "sc1_no_title"
+    chapter_title = "Chapter One" # Expected chapter title
     file_path = BASE_PROJECT_DIR / project_id / "chapters" / chapter_id / f"{scene_id}.md"
+    # --- Explicitly reset side effects and set return values ---
+    mock_internal_file_service.read_chapter_metadata.side_effect = None
+    mock_internal_file_service.read_project_metadata.side_effect = None
     mock_internal_file_service.read_chapter_metadata.return_value = {
         "scenes": {scene_id: {}} # No title field
     }
+    mock_internal_file_service.read_project_metadata.return_value = {
+        "chapters": {chapter_id: {"title": chapter_title}}
+    }
+    # --- End Fix ---
     details = manager._get_document_details(file_path, project_id)
-    assert details == {'document_type': 'Scene', 'document_title': scene_id}
+    assert details == {
+        'document_type': 'Scene',
+        'document_title': scene_id, # Fallback to scene_id
+        'chapter_id': chapter_id,
+        'chapter_title': chapter_title
+    }
     mock_internal_file_service.read_chapter_metadata.assert_called_once_with(project_id, chapter_id)
+    mock_internal_file_service.read_project_metadata.assert_called_once_with(project_id)
 
 def test_get_document_details_scene_metadata_missing_scene(patched_index_manager_instance):
     manager, _ = patched_index_manager_instance
     project_id = "proj_details_scene_missing"
     chapter_id = "ch1"
     scene_id = "sc1_missing"
+    chapter_title = "Chapter One" # Expected chapter title
     file_path = BASE_PROJECT_DIR / project_id / "chapters" / chapter_id / f"{scene_id}.md"
+    # --- Explicitly reset side effects and set return values ---
+    mock_internal_file_service.read_chapter_metadata.side_effect = None
+    mock_internal_file_service.read_project_metadata.side_effect = None
     mock_internal_file_service.read_chapter_metadata.return_value = {
         "scenes": {"other_scene": {"title": "Another Scene"}}
     }
+    mock_internal_file_service.read_project_metadata.return_value = {
+        "chapters": {chapter_id: {"title": chapter_title}}
+    }
+    # --- End Fix ---
     details = manager._get_document_details(file_path, project_id)
-    assert details == {'document_type': 'Scene', 'document_title': scene_id}
+    assert details == {
+        'document_type': 'Scene',
+        'document_title': scene_id, # Fallback to scene_id
+        'chapter_id': chapter_id,
+        'chapter_title': chapter_title
+    }
     mock_internal_file_service.read_chapter_metadata.assert_called_once_with(project_id, chapter_id)
+    mock_internal_file_service.read_project_metadata.assert_called_once_with(project_id)
 
 def test_get_document_details_scene_metadata_read_error(patched_index_manager_instance):
     manager, _ = patched_index_manager_instance
     project_id = "proj_details_scene_err"
     chapter_id = "ch1"
     scene_id = "sc1_err"
+    chapter_title = "Chapter One" # Expected chapter title
     file_path = BASE_PROJECT_DIR / project_id / "chapters" / chapter_id / f"{scene_id}.md"
+    # --- Explicitly reset side effects and set return values/side_effects ---
     mock_internal_file_service.read_chapter_metadata.side_effect = OSError("Cannot read chapter meta")
+    mock_internal_file_service.read_project_metadata.side_effect = None # Reset project meta side effect
+    mock_internal_file_service.read_project_metadata.return_value = {
+        "chapters": {chapter_id: {"title": chapter_title}}
+    }
+    # --- End Fix ---
     details = manager._get_document_details(file_path, project_id)
-    # --- CORRECTED: Fallback is scene_id (stem), type is Scene ---
-    assert details == {'document_type': 'Scene', 'document_title': scene_id}
-    # --- END CORRECTED ---
+    assert details == {
+        'document_type': 'Scene',
+        'document_title': scene_id, # Fallback to scene_id because chapter meta read failed
+        'chapter_id': chapter_id,
+        'chapter_title': chapter_title # Still gets chapter title because project meta read succeeded
+    }
     mock_internal_file_service.read_chapter_metadata.assert_called_once_with(project_id, chapter_id)
+    mock_internal_file_service.read_project_metadata.assert_called_once_with(project_id)
+
+def test_get_document_details_scene_project_metadata_read_error(patched_index_manager_instance):
+    manager, _ = patched_index_manager_instance
+    project_id = "proj_details_scene_proj_err"
+    chapter_id = "ch1"
+    scene_id = "sc1_proj_err"
+    scene_title = "Scene Title From Chapter Meta"
+    file_path = BASE_PROJECT_DIR / project_id / "chapters" / chapter_id / f"{scene_id}.md"
+    # --- Explicitly reset side effects and set return values/side_effects ---
+    mock_internal_file_service.read_chapter_metadata.side_effect = None # Reset chapter meta side effect
+    mock_internal_file_service.read_project_metadata.side_effect = OSError("Cannot read project meta")
+    mock_internal_file_service.read_chapter_metadata.return_value = {
+        "scenes": {scene_id: {"title": scene_title}}
+    }
+    # --- End Fix ---
+    details = manager._get_document_details(file_path, project_id)
+    assert details == {
+        'document_type': 'Scene',
+        'document_title': scene_title, # Gets scene title from chapter meta
+        'chapter_id': chapter_id,
+        'chapter_title': chapter_id # Falls back to chapter_id for chapter title because project meta read failed
+    }
+    mock_internal_file_service.read_chapter_metadata.assert_called_once_with(project_id, chapter_id)
+    mock_internal_file_service.read_project_metadata.assert_called_once_with(project_id)
+
 
 def test_get_document_details_note(patched_index_manager_instance):
     manager, _ = patched_index_manager_instance
@@ -301,6 +378,7 @@ def test_get_document_details_unknown(patched_index_manager_instance):
     mock_internal_file_service.read_chapter_metadata.assert_not_called()
 
 # --- index_file Tests ---
+# (index_file tests for plan, character, empty, non-file, outside project unchanged - omitted)
 @patch('pathlib.Path.is_file')
 @patch('pathlib.Path.stat')
 def test_index_file_success_normal_file(
@@ -362,6 +440,59 @@ def test_index_file_success_character_file(
     mock_simple_directory_reader_instance.load_data.assert_called_once()
     manager.index.insert_nodes.assert_called_once_with([mock_document])
 
+@patch('pathlib.Path.is_file')
+@patch('pathlib.Path.stat')
+def test_index_file_success_scene_file(
+    mock_stat: MagicMock,
+    mock_is_file: MagicMock,
+    patched_index_manager_instance
+):
+    """Test indexing a scene file, verifying chapter metadata is included."""
+    manager, mocks = patched_index_manager_instance
+    project_id = "proj_scene_index"
+    chapter_id = "ch_abc"
+    scene_id = "sc_xyz"
+    scene_title = "The Council of Elrond"
+    chapter_title = "Rivendell"
+    file_path = BASE_PROJECT_DIR / project_id / "chapters" / chapter_id / f"{scene_id}.md"
+    doc_id = str(file_path)
+    mock_is_file.return_value = True
+    mock_stat.return_value.st_size = 150
+    mock_document = MagicMock(name="MockDocumentScene")
+    mock_simple_directory_reader_instance.load_data.return_value = [mock_document]
+
+    # --- Explicitly reset side effects and set return values ---
+    mock_internal_file_service.read_chapter_metadata.side_effect = None
+    mock_internal_file_service.read_project_metadata.side_effect = None
+    mock_internal_file_service.read_chapter_metadata.return_value = {
+        "scenes": {scene_id: {"title": scene_title}}
+    }
+    mock_internal_file_service.read_project_metadata.return_value = {
+        "chapters": {chapter_id: {"title": chapter_title}}
+    }
+    # --- End Fix ---
+
+    manager.index_file(file_path)
+
+    mock_is_file.assert_called_once()
+    mock_stat.assert_called_once()
+    manager.index.delete_ref_doc.assert_called_once_with(ref_doc_id=doc_id, delete_from_docstore=True)
+    mocks["sdr_cls"].assert_called_once_with(input_files=[file_path], file_metadata=ANY)
+    assert callable(mocks["sdr_cls"].call_args.kwargs['file_metadata'])
+
+    # Verify the metadata generated by file_metadata_func
+    # We can call the captured function directly
+    metadata_func = mocks["sdr_cls"].call_args.kwargs['file_metadata']
+    generated_meta = metadata_func(str(file_path))
+    assert generated_meta['project_id'] == project_id
+    assert generated_meta['document_type'] == 'Scene'
+    assert generated_meta['document_title'] == scene_title # Check scene title
+    assert generated_meta['chapter_id'] == chapter_id
+    assert generated_meta['chapter_title'] == chapter_title # Check chapter title
+
+    mock_simple_directory_reader_instance.load_data.assert_called_once()
+    manager.index.insert_nodes.assert_called_once_with([mock_document])
+
 
 @patch('pathlib.Path.is_file')
 @patch('pathlib.Path.stat')
@@ -404,6 +535,7 @@ def test_index_file_outside_project(mock_stat: MagicMock, mock_is_file: MagicMoc
     manager.index.insert_nodes.assert_not_called()
 
 # --- delete_doc Tests ---
+# (Unchanged - omitted)
 def test_delete_doc_success(patched_index_manager_instance):
     manager, _ = patched_index_manager_instance
     project_id = "proj_del"
@@ -428,6 +560,7 @@ def test_delete_doc_index_error(mock_is_file: MagicMock, patched_index_manager_i
     manager.index.delete_ref_doc.assert_called_once_with(ref_doc_id=doc_id, delete_from_docstore=True)
 
 # --- delete_project_docs Tests ---
+# (Unchanged - omitted)
 def test_delete_project_docs_success(patched_index_manager_instance):
     manager, mocks = patched_index_manager_instance
     project_id = "proj_to_clear"

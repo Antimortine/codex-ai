@@ -17,8 +17,12 @@ from app.models.scene import SceneCreate, SceneUpdate, SceneRead, SceneList
 from app.services.file_service import file_service
 from app.services.chapter_service import chapter_service
 from app.models.common import generate_uuid
-# No direct index_manager import needed here anymore
+# --- ADDED: Import index_manager ---
+from app.rag.index_manager import index_manager
+# --- END ADDED ---
 import logging
+from pathlib import Path # Import Path
+
 
 logger = logging.getLogger(__name__)
 
@@ -36,7 +40,7 @@ class SceneService:
         if file_service.path_exists(scene_path):
             raise HTTPException(status_code=status.HTTP_409_CONFLICT, detail="Scene ID collision")
 
-        # --- MODIFICATION START: Handle optional order ---
+        # --- Handle optional order and save metadata FIRST ---
         chapter_metadata = file_service.read_chapter_metadata(project_id, chapter_id)
         if 'scenes' not in chapter_metadata: chapter_metadata['scenes'] = {}
         existing_scenes = chapter_metadata['scenes']
@@ -60,33 +64,43 @@ class SceneService:
                         status_code=status.HTTP_409_CONFLICT,
                         detail=f"Scene order {final_order} already exists for scene '{data.get('title', existing_id)}'"
                      )
-        # --- MODIFICATION END ---
 
-        # Create the scene markdown file and trigger indexing
-        # Pass trigger_index=True
-        file_service.write_text_file(scene_path, scene_in.content, trigger_index=True)
-
-        # --- MODIFICATION START: Use final_order and check for cleanup on error ---
+        # --- Save Metadata BEFORE writing the file ---
+        logger.debug(f"Writing chapter metadata for new scene {scene_id} BEFORE writing file.")
+        chapter_metadata['scenes'][scene_id] = {
+            "title": scene_in.title,
+            "order": final_order # Use the calculated or validated order
+        }
         try:
-            # Update chapter metadata using file_service
-            chapter_metadata['scenes'][scene_id] = {
-                "title": scene_in.title,
-                "order": final_order # Use the calculated or validated order
-            }
             file_service.write_chapter_metadata(project_id, chapter_id, chapter_metadata) # JSON, no index trigger
         except Exception as meta_write_err:
-             # Attempt to cleanup the created file if metadata write fails
              logger.error(f"Failed to write chapter metadata for new scene {scene_id}: {meta_write_err}", exc_info=True)
-             try:
-                  file_service.delete_file(scene_path) # This will also attempt index deletion
-             except Exception as cleanup_err:
-                  logger.error(f"Failed to cleanup scene file {scene_path} after metadata write error: {cleanup_err}")
-             # Re-raise the original error or a generic one
+             # No file cleanup needed here as it hasn't been created yet
              raise HTTPException(
                 status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
                 detail=f"Failed to save scene metadata."
              ) from meta_write_err
-        # --- MODIFICATION END ---
+
+        # --- Now write the scene file, triggering indexing ---
+        try:
+            logger.debug(f"Writing scene file {scene_path} which will trigger indexing.")
+            # --- CORRECTED: Still trigger index on CREATE ---
+            file_service.write_text_file(scene_path, scene_in.content, trigger_index=True)
+            # --- END CORRECTED ---
+        except Exception as file_write_err:
+            logger.error(f"Failed to write scene file {scene_path} after metadata was updated: {file_write_err}", exc_info=True)
+            # Attempt to rollback metadata change
+            try:
+                logger.warning(f"Attempting to rollback metadata for scene {scene_id} due to file write error.")
+                del chapter_metadata['scenes'][scene_id]
+                file_service.write_chapter_metadata(project_id, chapter_id, chapter_metadata)
+            except Exception as rollback_err:
+                logger.error(f"Failed to rollback metadata for scene {scene_id}: {rollback_err}")
+                # Log this, but raise the original file write error
+            raise HTTPException(
+                status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                detail=f"Failed to save scene content file."
+            ) from file_write_err
 
         return SceneRead(
             id=scene_id,
@@ -176,18 +190,71 @@ class SceneService:
             existing_scene.order = scene_in.order
             meta_updated = True
 
+        # --- Save metadata BEFORE writing content file (if metadata changed) ---
         if meta_updated:
-            file_service.write_chapter_metadata(project_id, chapter_id, chapter_metadata) # JSON, no index trigger
+            logger.debug(f"Writing updated chapter metadata for scene {scene_id} BEFORE writing file.")
+            try:
+                file_service.write_chapter_metadata(project_id, chapter_id, chapter_metadata) # JSON, no index trigger
+            except Exception as meta_write_err:
+                logger.error(f"Failed to write updated chapter metadata for scene {scene_id}: {meta_write_err}", exc_info=True)
+                # Don't proceed with file write if metadata failed
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=f"Failed to save updated scene metadata."
+                ) from meta_write_err
 
         content_updated = False
+        # Always initialize scene_path here so we have it for both content updates and indexing
+        scene_path = file_service._get_scene_path(project_id, chapter_id, scene_id)
+        
         if scene_in.content is not None and scene_in.content != existing_scene.content:
-            scene_path = file_service._get_scene_path(project_id, chapter_id, scene_id)
-            # Write MD file and trigger indexing
-            # Pass trigger_index=True
-            file_service.write_text_file(scene_path, scene_in.content, trigger_index=True)
-            existing_scene.content = scene_in.content
-            content_updated = True
-            # No need for separate index call here anymore
+            # --- Write MD file WITHOUT triggering index ---
+            logger.debug(f"Writing updated scene file {scene_path} WITHOUT triggering index.")
+            try:
+                # Pass trigger_index=False
+                file_service.write_text_file(scene_path, scene_in.content, trigger_index=False)
+                existing_scene.content = scene_in.content
+                content_updated = True
+            except Exception as file_write_err:
+                logger.error(f"Failed to write updated scene file {scene_path}: {file_write_err}", exc_info=True)
+                # If metadata *was* updated, we might want to try rolling it back,
+                # but that adds complexity. For now, just raise the file error.
+                # If metadata wasn't updated, this error is simpler.
+                raise HTTPException(
+                    status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+                    detail=f"Failed to save updated scene content file."
+                ) from file_write_err
+
+        # --- Explicitly trigger indexing AFTER writes if content or metadata changed ---
+        # Prepare preloaded metadata to avoid race conditions where the indexer might read stale metadata
+        if content_updated or meta_updated:
+            try:
+                # Prepare preloaded metadata with current scene title and other details
+                project_metadata = file_service.read_project_metadata(project_id)
+                chapter_title = "Unknown Chapter"
+                chapter_data = project_metadata.get('chapters', {}).get(chapter_id, {})
+                if chapter_data and 'title' in chapter_data:
+                    chapter_title = chapter_data['title']
+                    
+                # Create preloaded metadata dictionary with current values 
+                # This avoids race condition with recently written metadata files
+                preloaded_metadata = {
+                    "document_type": "Scene",
+                    "document_title": existing_scene.title,  # Use the current title (changed or not)
+                    "chapter_id": chapter_id,
+                    "chapter_title": chapter_title
+                }
+                
+                logger.info(f"Explicitly triggering index update for scene file with preloaded metadata: {scene_path}")
+                if index_manager:
+                    index_manager.index_file(scene_path, preloaded_metadata=preloaded_metadata)
+                else:
+                    logger.error("IndexManager not available, cannot trigger index update explicitly.")
+            except Exception as index_err:
+                # Log the error but don't fail the whole update operation,
+                # as the data is saved. User might need to re-index manually.
+                logger.error(f"Error during explicit index trigger for {scene_path}: {index_err}", exc_info=True)
+
 
         return existing_scene
 

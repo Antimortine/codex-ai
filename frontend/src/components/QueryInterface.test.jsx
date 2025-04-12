@@ -87,11 +87,11 @@ describe('QueryInterface Component with History & Sessions', () => {
       renderQueryInterface({ activeSessionId: null });
       // We shouldn't see the loading text or make API calls when activeSessionId is null
       expect(getChatHistory).not.toHaveBeenCalled();
-      
+
       // Check for disabled controls
       expect(screen.getByRole('button', { name: /submit query/i })).toBeDisabled();
       expect(screen.getByRole('button', { name: /clear chat/i })).toBeDisabled();
-      
+
       // Check for correct placeholder
       const input = screen.getByRole('textbox', { name: /ai query input/i });
       expect(input).toBeDisabled();
@@ -109,7 +109,7 @@ describe('QueryInterface Component with History & Sessions', () => {
 
     // Wait for history content to appear
     await screen.findByText('You: Old query');
-    
+
     // Verify mock call after content is present
     expect(getChatHistory).toHaveBeenCalledWith(TEST_PROJECT_ID, TEST_SESSION_ID);
 
@@ -137,19 +137,19 @@ describe('QueryInterface Component with History & Sessions', () => {
 
     // Wait for the error message itself
     await screen.findByText(`Failed to load chat history for this session: ${loadErrorMsg}`);
-    
+
     // Verify mock call after error is present
     expect(getChatHistory).toHaveBeenCalledWith(TEST_PROJECT_ID, TEST_SESSION_ID);
 
     // Verify UI state after error
     expect(screen.queryByText(/loading chat history.../i)).not.toBeInTheDocument();
-    
+
     await waitFor(() => {
       expect(screen.getByRole('button', { name: /submit query/i })).toBeDisabled();
       expect(screen.getByRole('button', { name: /clear chat/i })).toBeDisabled();
       expect(screen.getByPlaceholderText(/ask a question about your project/i)).toBeDisabled();
     });
-    
+
     expect(screen.queryByTestId('query-history')).not.toBeInTheDocument();
   });
   // --- End Initial Load Tests ---
@@ -157,10 +157,10 @@ describe('QueryInterface Component with History & Sessions', () => {
 
   it('renders the query input, submit button, and clear chat button', async () => {
     renderQueryInterface();
-    
+
     // Wait for the "no history" message which appears after successful empty load
     await screen.findByText(/no chat history for this session yet/i);
-    
+
     // Verify mock call after message is present
     expect(getChatHistory).toHaveBeenCalledWith(TEST_PROJECT_ID, TEST_SESSION_ID);
 
@@ -179,11 +179,11 @@ describe('QueryInterface Component with History & Sessions', () => {
     queryProjectContext.mockResolvedValue({ data: expectedResponse });
 
     renderQueryInterface();
-    
+
     // Wait for initial load to complete
     await screen.findByText(/no chat history for this session yet/i);
     expect(getChatHistory).toHaveBeenCalledWith(TEST_PROJECT_ID, TEST_SESSION_ID);
-    
+
     // Get UI elements
     const queryInput = screen.getByPlaceholderText(/ask a question about your project/i);
     const submitButton = screen.getByRole('button', { name: /submit query/i });
@@ -200,7 +200,7 @@ describe('QueryInterface Component with History & Sessions', () => {
     // Verify history was updated in UI
     const historyArea = screen.getByTestId('query-history');
     const latestEntry = getLatestHistoryEntry();
-    
+
     await waitFor(() => {
       expect(within(latestEntry).getByText(`You: ${queryText}`)).toBeInTheDocument();
       expect(within(latestEntry).getByText(`AI: ${answerText}`)).toBeInTheDocument();
@@ -220,11 +220,11 @@ describe('QueryInterface Component with History & Sessions', () => {
     queryProjectContext.mockRejectedValue({ response: { data: { detail: errorMessage } } });
 
     renderQueryInterface();
-    
+
     // Wait for initial load to complete
     await screen.findByText(/no chat history for this session yet/i);
     expect(getChatHistory).toHaveBeenCalledWith(TEST_PROJECT_ID, TEST_SESSION_ID);
-    
+
     // Get UI elements
     const queryInput = screen.getByPlaceholderText(/ask a question about your project/i);
     const submitButton = screen.getByRole('button', { name: /submit query/i });
@@ -241,7 +241,7 @@ describe('QueryInterface Component with History & Sessions', () => {
     // Verify error is displayed in UI
     const historyArea = screen.getByTestId('query-history');
     const latestEntry = getLatestHistoryEntry();
-    
+
     await waitFor(() => {
       expect(within(latestEntry).getByText(`You: ${queryText}`)).toBeInTheDocument();
       expect(screen.getByTestId(`query-error-0`)).toHaveTextContent(errorMessage);
@@ -382,5 +382,62 @@ describe('QueryInterface Component with History & Sessions', () => {
         expect(queryInput).toBeEnabled();
     });
   });
+
+  // --- ADDED: Test for displaying chapter title in source nodes ---
+  it('displays chapter title for scene source nodes', async () => {
+    const queryText = 'Tell me about the first scene';
+    const answerText = 'The first scene is about the beginning.';
+    const mockSourceNodes = [
+      {
+        id: 'scene-node-1',
+        text: 'Scene content snippet.',
+        score: 0.9,
+        metadata: {
+          file_path: 'user_projects/query-proj-1/chapters/ch-abc/sc-xyz.md',
+          project_id: TEST_PROJECT_ID,
+          document_type: 'Scene',
+          document_title: 'The Beginning Scene', // Scene title
+          chapter_id: 'ch-abc',
+          chapter_title: 'Chapter One Title' // Chapter title
+        }
+      },
+      {
+        id: 'char-node-1',
+        text: 'Character description snippet.',
+        score: 0.8,
+        metadata: {
+          file_path: 'user_projects/query-proj-1/characters/char-123.md',
+          project_id: TEST_PROJECT_ID,
+          document_type: 'Character',
+          document_title: 'Gandalf' // Character name
+        }
+      }
+    ];
+    const expectedResponse = { answer: answerText, source_nodes: mockSourceNodes, direct_sources: null };
+    queryProjectContext.mockResolvedValue({ data: expectedResponse });
+
+    renderQueryInterface();
+    await screen.findByText(/no chat history for this session yet/i); // Wait for load
+
+    const queryInput = screen.getByPlaceholderText(/ask a question about your project/i);
+    const submitButton = screen.getByRole('button', { name: /submit query/i });
+
+    await user.type(queryInput, queryText);
+    await user.click(submitButton);
+
+    // Wait for the response to appear
+    await screen.findByText(`AI: ${answerText}`);
+
+    // Open the details spoiler
+    const detailsSummary = screen.getByText(/retrieved context snippets/i);
+    await user.click(detailsSummary);
+
+    // Verify the source node display format
+    const sceneSourceText = await screen.findByText(/Scene in "Chapter One Title": "The Beginning Scene"/i);
+    expect(sceneSourceText).toBeInTheDocument();
+    const characterSourceText = screen.getByText(/Character: "Gandalf"/i);
+    expect(characterSourceText).toBeInTheDocument();
+  });
+  // --- END ADDED ---
 
 });

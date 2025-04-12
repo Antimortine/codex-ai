@@ -149,20 +149,32 @@ const HistoryEntry = ({ entry }) => {
     // --- MODIFIED: Helper to get display title/filename ---
     const getSourceDisplay = (metadata) => {
         if (!metadata) return 'Unknown Source';
-        const title = metadata.document_title;
+        const sceneTitle = metadata.document_title; // Scene title or fallback ID
         const filePath = metadata.file_path;
         const filename = filePath ? filePath.split(/[\\/]/).pop() : 'Unknown File';
         const type = metadata.document_type || 'Unknown';
+        const chapterTitle = metadata.chapter_title; // Get chapter title
+        const chapterId = metadata.chapter_id; // Get chapter ID
 
         // Prioritize title if it exists and isn't just the scene ID (UUID format check)
         const uuidRegex = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i;
-        const titleIsLikelyId = title && uuidRegex.test(title);
+        const titleIsLikelyId = sceneTitle && uuidRegex.test(sceneTitle);
+        const displaySceneTitle = (sceneTitle && !titleIsLikelyId) ? `"${sceneTitle}"` : filename;
 
-        if (title && !titleIsLikelyId) {
-            return `${type}: "${title}"`; // Use title if available and not an ID
+        // Construct display string based on type
+        if (type === 'Scene') {
+            const displayChapterTitle = chapterTitle && chapterTitle !== chapterId ? `"${chapterTitle}"` : `Chapter ${chapterId || 'Unknown'}`;
+            return `Scene in ${displayChapterTitle}: ${displaySceneTitle}`;
+        } else if (type === 'Character') {
+            return `Character: "${sceneTitle}"`; // Character title is the name
+        } else if (type === 'Plan' || type === 'Synopsis' || type === 'World') {
+            return sceneTitle; // Use the predefined titles like 'Project Plan'
+        } else if (type === 'Note') {
+            return `Note: "${sceneTitle}"`; // Note title is the filename stem
+        } else {
+            // Fallback for Unknown or other types
+            return `${type}: ${displaySceneTitle}`;
         }
-        // Fallback to filename
-        return `${type}: ${filename}`;
     };
     // --- END MODIFIED ---
 
@@ -284,18 +296,18 @@ function QueryInterface({ projectId, activeSessionId }) {
 
     // Updated to include activeSessionId in dependency array and API call
     const saveHistory = useCallback(async (currentHistory) => {
-        if (!projectId || !activeSessionId || isLoadingHistory || historyError) { 
-            console.log("[QueryInterface] Save Effect: Skipping save."); 
-            return; 
+        if (!projectId || !activeSessionId || isLoadingHistory || historyError) {
+            console.log("[QueryInterface] Save Effect: Skipping save.");
+            return;
         }
         console.log(`[QueryInterface] Save Effect: Saving ${currentHistory.length} history entries for project: ${projectId}, session: ${activeSessionId}`);
         const historyToSave = currentHistory.map(({ isLoading, ...entry }) => entry);
-        try { 
-            await updateChatHistory(projectId, activeSessionId, { history: historyToSave }); 
-            console.log(`[QueryInterface] Save Effect: History saved successfully.`); 
+        try {
+            await updateChatHistory(projectId, activeSessionId, { history: historyToSave });
+            console.log(`[QueryInterface] Save Effect: History saved successfully.`);
         }
-        catch (error) { 
-            console.error("[QueryInterface] Save Effect: Error saving history:", error); 
+        catch (error) {
+            console.error("[QueryInterface] Save Effect: Error saving history:", error);
         }
     }, [projectId, activeSessionId, isLoadingHistory, historyError]);
 

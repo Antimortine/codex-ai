@@ -83,7 +83,11 @@ async def test_generate_scene_success_first_scene(mock_file_svc: MagicMock, mock
     generator = SceneGenerator(index=mock_index, llm=mock_llm)
     generated_draft = await generator.generate_scene(project_id, chapter_id, prompt_summary, previous_scene_order, plan, synopsis, explicit_previous_scenes)
     assert generated_draft == expected_result_dict; mock_file_svc.read_project_metadata.assert_called_once_with(project_id); mock_retriever_instance.aretrieve.assert_awaited_once(); mock_llm.acomplete.assert_awaited_once()
-    prompt_arg = mock_llm.acomplete.call_args[0][0]; assert f"Chapter '{chapter_title}'" in prompt_arg; assert "Previous Scene(s):** N/A" in prompt_arg; assert "No additional context retrieved" in prompt_arg
+    prompt_arg = mock_llm.acomplete.call_args[0][0]; assert f"Chapter '{chapter_title}'" in prompt_arg;
+    # --- MODIFIED: Assert new prompt text ---
+    assert f"N/A (Generating the first scene of chapter '{chapter_title}')" in prompt_arg;
+    # --- END MODIFIED ---
+    assert "No additional context retrieved" in prompt_arg
 
 @pytest.mark.asyncio
 @patch('app.rag.scene_generator.VectorIndexRetriever', autospec=True)
