@@ -28,13 +28,13 @@ class Settings(BaseSettings):
     GOOGLE_API_KEY: str = os.getenv("GOOGLE_API_KEY")
 
     # --- RAG Configuration ---
-    # --- MODIFIED: Increased top_k values ---
     RAG_QUERY_SIMILARITY_TOP_K: int = int(os.getenv("RAG_QUERY_SIMILARITY_TOP_K", 7))
     RAG_GENERATION_SIMILARITY_TOP_K: int = int(os.getenv("RAG_GENERATION_SIMILARITY_TOP_K", 7))
-    # --- END MODIFIED ---
     RAG_REPHRASE_SUGGESTION_COUNT: int = int(os.getenv("RAG_REPHRASE_SUGGESTION_COUNT", 3))
-    # New: Number of preceding scenes to load for generation context
-    RAG_GENERATION_PREVIOUS_SCENE_COUNT: int = int(os.getenv("RAG_GENERATION_PREVIOUS_SCENE_COUNT", 1))
+    RAG_GENERATION_PREVIOUS_SCENE_COUNT: int = int(os.getenv("RAG_GENERATION_PREVIOUS_SCENE_COUNT", 3))
+
+    # --- LLM Configuration ---
+    LLM_TEMPERATURE: float = float(os.getenv("LLM_TEMPERATURE", 0.7))
 
 
 settings = Settings()

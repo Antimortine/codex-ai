@@ -30,7 +30,7 @@ from llama_index.vector_stores.chroma import ChromaVectorStore
 from llama_index.embeddings.huggingface import HuggingFaceEmbedding
 from llama_index.llms.google_genai import GoogleGenAI
 import chromadb
-from app.core.config import settings, BASE_PROJECT_DIR
+from app.core.config import settings, BASE_PROJECT_DIR # Import settings
 from app.services.file_service import file_service
 
 
@@ -56,7 +56,7 @@ class IndexManager:
         """
         logger.info("Initializing IndexManager...")
         self.index: Optional[VectorStoreIndex] = None
-        self.llm: Optional[LLM] = None
+        self.llm: Optional[GoogleGenAI] = None # Specific type hint
         self.embed_model: Optional[HuggingFaceEmbedding] = None
         self.storage_context: Optional[StorageContext] = None
         self.vector_store: Optional[ChromaVectorStore] = None
@@ -68,12 +68,24 @@ class IndexManager:
 
         try:
             # 1. Configure LlamaIndex Settings globally
-            logger.debug(f"Configuring LLM: {LLM_MODEL_NAME}")
+            logger.debug(f"Configuring LLM: {LLM_MODEL_NAME} with temperature: {settings.LLM_TEMPERATURE}")
             try:
-                 LlamaSettings.llm = GoogleGenAI(model=LLM_MODEL_NAME, api_key=settings.GOOGLE_API_KEY)
+                 # --- MODIFIED: Pass temperature from settings ---
+                 LlamaSettings.llm = GoogleGenAI(
+                     model=LLM_MODEL_NAME,
+                     api_key=settings.GOOGLE_API_KEY,
+                     temperature=settings.LLM_TEMPERATURE
+                 )
+                 # --- END MODIFIED ---
             except TypeError:
                  logger.warning("Initialization with 'model' failed for GoogleGenAI, trying 'model_name'.")
-                 LlamaSettings.llm = GoogleGenAI(model_name=LLM_MODEL_NAME, api_key=settings.GOOGLE_API_KEY)
+                 # --- MODIFIED: Pass temperature from settings ---
+                 LlamaSettings.llm = GoogleGenAI(
+                     model_name=LLM_MODEL_NAME,
+                     api_key=settings.GOOGLE_API_KEY,
+                     temperature=settings.LLM_TEMPERATURE
+                 )
+                 # --- END MODIFIED ---
             self.llm = LlamaSettings.llm
 
             logger.debug(f"Configuring Embedding Model: {EMBEDDING_MODEL_NAME}")
@@ -198,7 +210,7 @@ class IndexManager:
         and inserts/updates a single file's content into the index.
         If the document already exists (based on file_path), it's deleted first.
         Empty files are skipped.
-        
+
         Args:
             file_path: Path to the file to index
             preloaded_metadata: Optional dictionary containing pre-loaded metadata to use instead of reading from filesystem
@@ -226,14 +238,14 @@ class IndexManager:
         try:
             # More aggressive deletion to ensure ChromaDB is properly updated
             logger.debug(f"Attempting to delete existing nodes for doc_id: {doc_id}")
-            
+
             # First try standard LlamaIndex delete method
             try:
                 self.index.delete_ref_doc(ref_doc_id=doc_id, delete_from_docstore=True)
                 logger.info(f"Successfully deleted existing nodes for doc_id: {doc_id} via LlamaIndex.")
-            except Exception as delete_error: 
+            except Exception as delete_error:
                 logger.warning(f"Could not delete nodes via LlamaIndex for doc_id {doc_id}: {delete_error}")
-                
+
                 # Fallback: try direct ChromaDB deletion if we have project_id
                 if self.chroma_collection and project_id:
                     try:
@@ -247,7 +259,7 @@ class IndexManager:
             def file_metadata_func(file_name: str) -> Dict[str, Any]:
                  current_path = Path(file_name)
                  current_project_id = self._extract_project_id(current_path)
-                 
+
                  # If preloaded metadata is provided, use it instead of reading from filesystem
                  if preloaded_metadata and str(current_path) == str(file_path):
                      logger.debug(f"Using preloaded metadata for {file_name}: {preloaded_metadata}")
@@ -258,7 +270,7 @@ class IndexManager:
                      # Copy all preloaded metadata
                      meta.update(preloaded_metadata)
                      return meta
-                     
+
                  # Otherwise, proceed with regular filesystem metadata loading
                  current_details = self._get_document_details(current_path, current_project_id) if current_project_id else {}
                  meta = {
@@ -282,11 +294,11 @@ class IndexManager:
             if not documents: logger.warning(f"No documents loaded from file: {file_path}. Skipping insertion."); return
 
             logger.debug(f"Inserting new nodes for doc_id: {doc_id} (metadata added via file_metadata_func)")
-            
+
             # For scene files, we want to be extra careful about metadata updates
             if preloaded_metadata and preloaded_metadata.get('document_type') == 'Scene':
                 logger.info(f"Using enhanced insertion for Scene document with title: {preloaded_metadata.get('document_title')}")
-                
+
                 # Log detailed information about what we're inserting
                 for doc in documents:
                     logger.debug(f"Document metadata before insertion: {doc.metadata}")
@@ -294,7 +306,7 @@ class IndexManager:
                     if 'document_title' in preloaded_metadata:
                         doc.metadata['document_title'] = preloaded_metadata['document_title']
                     logger.debug(f"Final document metadata for insertion: {doc.metadata}")
-            
+
             # Insert the nodes into the index
             self.index.insert_nodes(documents)
             logger.info(f"Successfully indexed/updated file: {file_path} with project_id '{project_id}'")

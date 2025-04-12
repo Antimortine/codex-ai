@@ -25,7 +25,7 @@ from typing import List, Tuple, Optional, Dict, Set # Import Set
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception, RetryError
 from google.api_core.exceptions import GoogleAPICallError, ServiceUnavailable, ResourceExhausted
 
-from app.core.config import settings
+from app.core.config import settings # Import settings
 
 logger = logging.getLogger(__name__)
 
@@ -57,9 +57,11 @@ class QueryProcessor:
     )
     async def _execute_llm_complete(self, prompt: str):
         """Helper function to isolate the LLM call for retry logic."""
-        logger.info(f"Calling LLM with combined context for query...")
+        logger.info(f"Calling LLM with combined context for query (Temperature: {settings.LLM_TEMPERATURE})...") # Log temp
         logger.debug(f"--- Query Prompt Start ---\n{prompt}\n--- Query Prompt End ---") # Log prompt
-        return await self.llm.acomplete(prompt)
+        # --- MODIFIED: Explicitly pass temperature ---
+        return await self.llm.acomplete(prompt, temperature=settings.LLM_TEMPERATURE)
+        # --- END MODIFIED ---
 
     async def query(self, project_id: str, query_text: str, explicit_plan: str, explicit_synopsis: str,
                   direct_sources_data: Optional[List[Dict]] = None,
@@ -179,7 +181,7 @@ class QueryProcessor:
             )
             full_prompt = f"{system_prompt}\n\nUser: {user_message_content}\n\nAssistant:"
 
-            # 3. Call LLM via retry helper (Unchanged)
+            # 3. Call LLM via retry helper
             llm_response = await self._execute_llm_complete(full_prompt)
             answer = llm_response.text.strip() if llm_response else ""
             logger.info("LLM call complete.")

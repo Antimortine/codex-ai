@@ -28,7 +28,7 @@ from typing import List, Tuple, Optional, Dict, Any, Set # Import Set
 from tenacity import retry, stop_after_attempt, wait_exponential, retry_if_exception, RetryError
 from google.api_core.exceptions import GoogleAPICallError, ServiceUnavailable, ResourceExhausted # Import base error
 
-from app.core.config import settings
+from app.core.config import settings # Import settings
 from app.services.file_service import file_service # Import file_service to get chapter title
 
 
@@ -62,9 +62,11 @@ class SceneGenerator:
     )
     async def _execute_llm_complete(self, prompt: str):
         """Helper function to isolate the LLM call for retry logic."""
-        logger.info("Calling LLM acomple for scene generation...")
+        logger.info(f"Calling LLM acomple for scene generation (Temperature: {settings.LLM_TEMPERATURE})...") # Log temp
         logger.debug(f"--- Scene Gen Prompt Start ---\n{prompt}\n--- Scene Gen Prompt End ---")
-        response = await self.llm.acomplete(prompt)
+        # --- MODIFIED: Explicitly pass temperature ---
+        response = await self.llm.acomplete(prompt, temperature=settings.LLM_TEMPERATURE)
+        # --- END MODIFIED ---
         return response
 
     async def generate_scene(
@@ -123,29 +125,43 @@ class SceneGenerator:
             else:
                 logger.debug("SceneGenerator: No nodes retrieved.")
 
-            # --- Filter retrieved nodes using Path objects ---
+            # --- ADDED: Deduplicate retrieved nodes before filtering ---
+            unique_retrieved_nodes_map = {}
             if retrieved_nodes:
+                for node_with_score in retrieved_nodes:
+                    node = node_with_score.node
+                    unique_key = (node.get_content(), node.metadata.get('file_path'))
+                    if unique_key not in unique_retrieved_nodes_map or node_with_score.score > unique_retrieved_nodes_map[unique_key].score:
+                        unique_retrieved_nodes_map[unique_key] = node_with_score
+            unique_retrieved_nodes = list(unique_retrieved_nodes_map.values())
+            if len(unique_retrieved_nodes) < len(retrieved_nodes):
+                logger.debug(f"Deduplicated {len(retrieved_nodes) - len(unique_retrieved_nodes)} nodes based on content and file path.")
+            # --- END ADDED ---
+
+            # --- Filter unique retrieved nodes using Path objects ---
+            if unique_retrieved_nodes: # Filter the deduplicated list
                 logger.debug(f"SceneGenerator: Starting node filtering against {len(final_paths_to_filter_obj)} filter paths.")
-                for node in retrieved_nodes:
+                for node_with_score in unique_retrieved_nodes: # Iterate over unique nodes
+                    node = node_with_score.node
                     node_path_str = node.metadata.get('file_path')
                     if not node_path_str:
                         logger.warning(f"Node {node.node_id} missing 'file_path' metadata. Including in prompt.")
-                        nodes_for_prompt.append(node)
+                        nodes_for_prompt.append(node_with_score) # Append NodeWithScore
                         continue
                     try:
                         node_path_obj = Path(node_path_str).resolve()
                         is_filtered = node_path_obj in final_paths_to_filter_obj
                         logger.debug(f"  Comparing Node Path: {node_path_obj} | In Filter Set: {is_filtered}")
                         if not is_filtered:
-                            nodes_for_prompt.append(node)
+                            nodes_for_prompt.append(node_with_score) # Append NodeWithScore
                     except Exception as e:
                         logger.error(f"Error resolving or comparing path '{node_path_str}' for node {node.node_id}. Including node. Error: {e}")
-                        nodes_for_prompt.append(node) # Include if error occurs
+                        nodes_for_prompt.append(node_with_score) # Append NodeWithScore
 
-                if len(nodes_for_prompt) < len(retrieved_nodes):
-                    logger.debug(f"Filtered {len(retrieved_nodes) - len(nodes_for_prompt)} retrieved nodes based on paths_to_filter.")
+                if len(nodes_for_prompt) < len(unique_retrieved_nodes):
+                    logger.debug(f"Filtered {len(unique_retrieved_nodes) - len(nodes_for_prompt)} unique retrieved nodes based on paths_to_filter.")
                 else:
-                    logger.debug("No nodes were filtered based on paths_to_filter.")
+                    logger.debug("No unique nodes were filtered based on paths_to_filter.")
             if nodes_for_prompt:
                 log_nodes_after = [(n.node_id, n.metadata.get('file_path'), n.score) for n in nodes_for_prompt]
                 logger.debug(f"SceneGenerator: Nodes remaining AFTER filtering (for prompt): {log_nodes_after}")
@@ -193,9 +209,7 @@ class SceneGenerator:
                       max_prev_len = 1000; truncated_prev_content = content[:max_prev_len] + ('...' if len(content) > max_prev_len else '')
                       previous_scenes_prompt_part += f"**{label}:**\n```markdown\n{truncated_prev_content}\n```\n\n"
             else:
-                 # --- MODIFIED: Include chapter title in the N/A message ---
                  previous_scenes_prompt_part = f"**Previous Scene(s):** N/A (Generating the first scene of chapter '{chapter_title}')\n\n"
-                 # --- END MODIFIED ---
             main_instruction = f"Guidance for new scene: '{prompt_summary}'.\n\n" if prompt_summary else "Generate the next logical scene based on the context.\n\n"
             max_plan_synopsis_len = 1000
             truncated_plan = (explicit_plan or '')[:max_plan_synopsis_len] + ('...' if len(explicit_plan or '') > max_plan_synopsis_len else '')
@@ -214,7 +228,7 @@ class SceneGenerator:
             )
             full_prompt = f"{system_prompt}\n\nUser: {user_message_content}\n\nAssistant:"
 
-            # --- 3. Call LLM via Retry Helper (Unchanged) ---
+            # --- 3. Call LLM via Retry Helper ---
             llm_response = await self._execute_llm_complete(full_prompt)
             generated_text = llm_response.text.strip() if llm_response else ""
             if not generated_text: raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Error: The AI failed to generate a scene draft. Please try again.")

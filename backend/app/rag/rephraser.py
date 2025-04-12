@@ -59,9 +59,11 @@ class Rephraser:
     )
     async def _execute_llm_complete(self, prompt: str):
         """Helper function to isolate the LLM call for retry logic."""
-        logger.info("Calling LLM for rephrase suggestions...")
+        logger.info(f"Calling LLM for rephrase suggestions (Temperature: {settings.LLM_TEMPERATURE})...") # Log temp
         logger.debug(f"--- Rephrase Prompt Start ---\n{prompt}\n--- Rephrase Prompt End ---")
-        return await self.llm.acomplete(prompt)
+        # --- MODIFIED: Explicitly pass temperature ---
+        return await self.llm.acomplete(prompt, temperature=settings.LLM_TEMPERATURE)
+        # --- END MODIFIED ---
 
     async def rephrase(
         self,
@@ -202,7 +204,7 @@ class Rephraser:
             full_prompt = f"{system_prompt}\n\nUser: {user_message_content}\n\nAssistant:"
 
 
-            # 3. Call LLM via retry helper (Unchanged)
+            # 3. Call LLM via retry helper
             llm_response = await self._execute_llm_complete(full_prompt)
             generated_text = llm_response.text.strip() if llm_response else ""
 

@@ -18,12 +18,13 @@ For more details on the system's design, see:
 -   **Character Profiles:** Create and manage character descriptions.
 -   **Markdown Editor:** Write and edit all content using a familiar Markdown format (@uiw/react-md-editor).
 -   **Context-Aware Q&A:** Ask questions about your own story ("What was Character X's motivation in Chapter 2?", "Remind me of the description of Location Y?"). The AI uses the specific project's indexed content (including Plan & Synopsis) to answer, ensuring relevance and isolation between projects.
--   **Multiple Chat Sessions per Project:** Maintain separate, independent chat conversations within a single project. Create, rename, delete, and switch between sessions. *(New!)*
+-   **Multiple Chat Sessions per Project:** Maintain separate, independent chat conversations within a single project. Create, rename, delete, and switch between sessions.
 -   **AI-Powered Scene Generation:** Generate scene drafts (including title and content) based on previous scenes, plan, synopsis, retrieved context, and optional user prompts.
 -   **AI-Powered Editing (Rephrase):** Get suggestions for rephrasing selected text directly within the editor.
 -   **AI Chapter Splitting:** Analyze full chapter text (pasted into the UI) and receive AI-proposed scene splits with suggested titles and content.
 -   **Source Node Retrieval:** API responses for AI queries include the specific text chunks (source nodes) used by the AI to generate the answer, providing transparency.
 -   **RAG Integration (LlamaIndex + ChromaDB + HuggingFace):** The AI maintains awareness of project context by indexing Markdown content into a vector database (ChromaDB) using multilingual embeddings (`sentence-transformers/paraphrase-multilingual-mpnet-base-v2`). Project-specific metadata filtering ensures the AI only retrieves context relevant to the current project during queries.
+-   **Configurable LLM Temperature:** Set a global temperature for LLM generation via environment variable. *(New!)*
 -   **Extensible Architecture:** Designed with abstractions (via LlamaIndex) to potentially support different LLMs and Vector Databases in the future.
 -   **Testing:** Backend tests using `pytest`. Frontend tests using `vitest`.
 -   **Markdown Export (Planned):** Compile selected Chapters or the entire manuscript into a single Markdown file.
@@ -83,6 +84,7 @@ These instructions will get you a copy of the project up and running on your loc
     # Set up environment variables
     cp .env.example .env
     # Edit the .env file with your actual secrets (GOOGLE_API_KEY)
+    # AND set the desired LLM_TEMPERATURE (e.g., LLM_TEMPERATURE=0.7)
     nano .env # Or your preferred editor
 
     # Go back to root directory
@@ -171,6 +173,19 @@ codex-ai/
 
 ## Roadmap
 
+**P0: Highest Priority (New)**
+
+1.  **Task F.1: Configurable LLM Parameters**
+    *   **Description:** Allow users to configure LLM parameters like temperature for AI generation tasks. Explore implementation options (global config, per-project, per-query).
+    *   **Status:** **DONE (Global Config Implemented)**
+    *   **Priority:** **High**
+
+2.  **Task F.2: Order Projects by Last Modified**
+    *   **Description:** Modify the project listing logic (ProjectService.get_all, potentially FileService) to retrieve the last modified timestamp for each project directory and sort the project list accordingly (most recent first). Update API response and frontend display.
+    *   **Status:** Not Started
+    *   **Priority:** **High**
+
+
 **P1: Critical / High Priority**
 
 1.  **Task D.1: Expand Test Coverage (RAG Filtering & IndexManager)**
@@ -179,51 +194,51 @@ codex-ai/
 2.  **Task B.1: Multiple Chat Sessions**
     *   **Status:** **DONE**
 
+3.  **Task C.4: Show Chapter Titles in Query Sources (UI)**
+    *   **Status:** **DONE**
+
+
 **P2: Medium Priority**
 
-3.  **Task B.2: Chapter-Level Plan/Synopsis**
-    *   **Description:** Allow optional `plan.md`/`synopsis.md` within chapter directories, prioritizing them for context in relevant AI features.
+1.  **Task B.2: Chapter-Level Plan/Synopsis**
+    *   **Description:** Allow optional plan.md/synopsis.md within chapter directories, prioritizing them for context in relevant AI features.
     *   **Status:** Not Started
     *   **Priority:** **Medium-High**
 
-4.  **Task C.4: Show Chapter Titles in Query Sources (UI)**
-    *   **Description:** Display chapter titles alongside scene sources in the query interface for better context.
-    *   **Status:** Not Started
-    *   **Priority:** **Medium**
-
-5.  **Task B.3: AI Editing Features (Expansion)**
+2.  **Task B.3: AI Editing Features (Expansion)**
     *   **Description:** Implement more AI actions in the editor (Summarize, Expand, Change Tone).
     *   **Status:** Not Started
     *   **Priority:** **Medium** (Incremental)
 
-6.  **Task C.3: UI/UX Refinements**
+3.  **Task C.3: UI/UX Refinements**
     *   **Description:** Improve AI Scene Gen prompt input (textarea), Split Chapter modal, AI feedback/cooldown indicators, SuggestionPopup limitations.
     *   **Status:** Not Started
     *   **Priority:** **Medium**
 
+
 **P3: Low Priority**
 
-7.  **Task C.2: Delete Last Chat Entry**
+1.  **Task C.2: Delete Last Chat Entry**
     *   **Description:** Add a button to delete the most recent query/response pair in a chat session.
     *   **Status:** Not Started
     *   **Priority:** **Low-Medium**
 
-8.  **Task D.2: Configuration & Refactoring**
+2.  **Task D.2: Configuration & Refactoring**
     *   **Description:** Move hardcoded values to config, potentially refactor prompt building, address deprecations.
     *   **Status:** Not Started
     *   **Priority:** **Low**
 
-9.  **Task E.2: Markdown Export**
+3.  **Task E.2: Markdown Export**
     *   **Description:** Implement functionality to compile project content into a single Markdown file.
     *   **Status:** Not Started
     *   **Priority:** **Low**
 
-10. **Task E.1: Deployment Strategy**
+4.  **Task E.1: Deployment Strategy**
     *   **Description:** Define and implement deployment (e.g., Docker).
     *   **Status:** Not Started
     *   **Priority:** **Low**
 
-11. **Task E.3: Integrate other LLMs/Vector DBs**
+5.  **Task E.3: Integrate other LLMs/Vector DBs**
     *   **Description:** Explore adding support for alternative LLMs or Vector DBs.
     *   **Status:** Not Started
     *   **Priority:** **Low**
@@ -243,3 +258,4 @@ Codex AI is developed and maintained by Antimortine.
 -   **Email:** [antimortine@gmail.com](mailto:antimortine@gmail.com)
 -   **Telegram:** [https://t.me/antimortine](https://t.me/antimortine)
 -   **GitHub:** [https://github.com/Antimortine](https://github.com/Antimortine)
+

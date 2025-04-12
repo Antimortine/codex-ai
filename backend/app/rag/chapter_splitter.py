@@ -63,9 +63,11 @@ class ChapterSplitter:
     )
     async def _execute_llm_complete(self, prompt: str):
         """Helper function to isolate the LLM call for retry logic."""
-        logger.info("Calling LLM acomple for chapter splitting...")
+        logger.info(f"Calling LLM acomple for chapter splitting (Temperature: {settings.LLM_TEMPERATURE})...") # Log temp
         logger.debug(f"--- Chapter Split Prompt Start ---\n{prompt}\n--- Chapter Split Prompt End ---")
-        response = await self.llm.acomplete(prompt)
+        # --- MODIFIED: Explicitly pass temperature ---
+        response = await self.llm.acomplete(prompt, temperature=settings.LLM_TEMPERATURE)
+        # --- END MODIFIED ---
         return response
 
     async def split(
