@@ -245,7 +245,7 @@ HistoryEntry.propTypes = {
 // --- End Helper Component ---
 
 
-function QueryInterface({ projectId }) {
+function QueryInterface({ projectId, activeSessionId }) {
     const [currentQuery, setCurrentQuery] = useState('');
     const [history, setHistory] = useState([]);
     const [isProcessing, setIsProcessing] = useState(false);
@@ -255,15 +255,15 @@ function QueryInterface({ projectId }) {
     const historyEndRef = useRef(null);
     const formRef = useRef(null);
 
-    // (useEffect for loading history remains unchanged)
+    // Updated to include activeSessionId in dependency array and API call
     useEffect(() => {
-        if (!projectId) return;
+        if (!projectId || !activeSessionId) return;
         let isMounted = true;
         setIsLoadingHistory(true);
         setHistoryError(null);
         setHistory([]);
-        console.log(`[QueryInterface] Load Effect: Fetching history for project: ${projectId}`);
-        getChatHistory(projectId)
+        console.log(`[QueryInterface] Load Effect: Fetching history for project: ${projectId}, session: ${activeSessionId}`);
+        getChatHistory(projectId, activeSessionId)
             .then(response => {
                 if (isMounted) {
                     const loadedHistory = response.data?.history || [];
@@ -276,20 +276,28 @@ function QueryInterface({ projectId }) {
             })
             .catch(error => {
                 console.error("[QueryInterface] Load Effect: Error fetching history:", error);
-                if (isMounted) { setHistoryError(`Failed to load chat history: ${error.response?.data?.detail || error.message}`); }
+                if (isMounted) { setHistoryError(`Failed to load chat history for this session: ${error.response?.data?.detail || error.message}`); }
             })
             .finally(() => { if (isMounted) { setIsLoadingHistory(false); } });
         return () => { isMounted = false; };
-    }, [projectId]);
+    }, [projectId, activeSessionId]);
 
-    // (useCallback for saving history remains unchanged)
+    // Updated to include activeSessionId in dependency array and API call
     const saveHistory = useCallback(async (currentHistory) => {
-        if (!projectId || isLoadingHistory || historyError) { console.log("[QueryInterface] Save Effect: Skipping save."); return; }
-        console.log(`[QueryInterface] Save Effect: Saving ${currentHistory.length} history entries for project: ${projectId}`);
+        if (!projectId || !activeSessionId || isLoadingHistory || historyError) { 
+            console.log("[QueryInterface] Save Effect: Skipping save."); 
+            return; 
+        }
+        console.log(`[QueryInterface] Save Effect: Saving ${currentHistory.length} history entries for project: ${projectId}, session: ${activeSessionId}`);
         const historyToSave = currentHistory.map(({ isLoading, ...entry }) => entry);
-        try { await updateChatHistory(projectId, { history: historyToSave }); console.log(`[QueryInterface] Save Effect: History saved successfully.`); }
-        catch (error) { console.error("[QueryInterface] Save Effect: Error saving history:", error); }
-    }, [projectId, isLoadingHistory, historyError]);
+        try { 
+            await updateChatHistory(projectId, activeSessionId, { history: historyToSave }); 
+            console.log(`[QueryInterface] Save Effect: History saved successfully.`); 
+        }
+        catch (error) { 
+            console.error("[QueryInterface] Save Effect: Error saving history:", error); 
+        }
+    }, [projectId, activeSessionId, isLoadingHistory, historyError]);
 
     // (useEffect for scrolling remains unchanged)
     useEffect(() => { if (history.length > 0) { historyEndRef.current?.scrollIntoView({ behavior: "smooth" }); } }, [history]);
@@ -338,7 +346,7 @@ function QueryInterface({ projectId }) {
     // (Event handlers handleSubmitForm, handleKeyDown, handleNewChat remain unchanged)
     const handleSubmitForm = (e) => { e.preventDefault(); processQuery(); };
     const handleKeyDown = (e) => { if (e.key === 'Enter' && e.ctrlKey && !isProcessing && currentQuery.trim()) { e.preventDefault(); processQuery(); } };
-    const handleNewChat = async () => { const newHistoryState = []; setHistory(newHistoryState); setCurrentQuery(''); setIsProcessing(false); nextId.current = 0; await saveHistory(newHistoryState); };
+    const handleClearChat = async () => { const newHistoryState = []; setHistory(newHistoryState); setCurrentQuery(''); setIsProcessing(false); nextId.current = 0; await saveHistory(newHistoryState); };
 
     const historyAreaId = "query-history";
     const isProcessingId = "is-processing";
@@ -364,7 +372,7 @@ function QueryInterface({ projectId }) {
             )}
             {/* Empty History Message */}
              {!isLoadingHistory && !historyError && history.length === 0 && (
-                 <p>No chat history yet. Ask a question below!</p>
+                 <p>No chat history for this session yet. Ask a question below!</p>
              )}
 
             {/* Input Form */}
@@ -374,8 +382,8 @@ function QueryInterface({ projectId }) {
                     value={currentQuery}
                     onChange={(e) => setCurrentQuery(e.target.value)}
                     onKeyDown={handleKeyDown}
-                    placeholder="Ask a question about your project plan, characters, scenes... (Ctrl+Enter to submit)"
-                    disabled={isProcessing || isLoadingHistory || !!historyError}
+                    placeholder={activeSessionId ? "Ask a question about your project" : "Select a chat session first"}
+                    disabled={isProcessing || isLoadingHistory || !!historyError || !activeSessionId}
                     rows={3}
                     aria-label="AI Query Input"
                 />
@@ -390,12 +398,12 @@ function QueryInterface({ projectId }) {
                 </button>
                 <button
                     type="button"
-                    data-testid="new-chat-button"
-                    onClick={handleNewChat}
-                    style={{...styles.newChatButton, ...((isProcessing || isLoadingHistory) && styles.buttonDisabled)}} // Apply disabled style
-                    disabled={isProcessing || isLoadingHistory}
+                    data-testid="clear-chat-button"
+                    onClick={handleClearChat}
+                    style={{...styles.newChatButton, ...((isProcessing || isLoadingHistory || historyError) && styles.buttonDisabled)}} // Apply disabled style
+                    disabled={isProcessing || isLoadingHistory || historyError}
                 >
-                    New Chat
+                    Clear Chat
                 </button>
             </form>
         </div>
@@ -404,6 +412,7 @@ function QueryInterface({ projectId }) {
 
 QueryInterface.propTypes = {
   projectId: PropTypes.string.isRequired,
+  activeSessionId: PropTypes.string,
 };
 
 export default QueryInterface;

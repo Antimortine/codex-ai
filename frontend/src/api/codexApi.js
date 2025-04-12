@@ -76,25 +76,62 @@ export const rephraseText = (projectId, requestData) => {
 export const splitChapterIntoScenes = (projectId, chapterId, requestData = {}) => {
     return apiClient.post(`/ai/split/chapter/${projectId}/${chapterId}`, requestData);
 };
-// --- ADDED: Rebuild Index Endpoint ---
 export const rebuildProjectIndex = (projectId) => apiClient.post(`/ai/rebuild_index/${projectId}`);
-// --- END ADDED ---
 
-// --- Chat History Endpoints ---
+// --- MODIFIED: Chat History & Session Endpoints ---
+
+// --- Chat Session CRUD ---
 /**
- * Gets the chat history for a project.
+ * Lists all chat sessions for a project.
  * @param {string} projectId - The ID of the project.
+ * @returns {Promise<AxiosResponse<any>>} - Expected data: { sessions: [{id, name, project_id}, ...] }
+ */
+export const listChatSessions = (projectId) => apiClient.get(`/projects/${projectId}/chat_sessions`);
+
+/**
+ * Creates a new chat session for a project.
+ * @param {string} projectId - The ID of the project.
+ * @param {object} data - The request body. e.g., { name: "New Session Name" }
+ * @returns {Promise<AxiosResponse<any>>} - Returns the created session {id, name, project_id}.
+ */
+export const createChatSession = (projectId, data) => apiClient.post(`/projects/${projectId}/chat_sessions`, data);
+
+/**
+ * Renames a specific chat session.
+ * @param {string} projectId - The ID of the project.
+ * @param {string} sessionId - The ID of the session to rename.
+ * @param {object} data - The request body. e.g., { name: "Updated Name" }
+ * @returns {Promise<AxiosResponse<any>>} - Returns the updated session {id, name, project_id}.
+ */
+export const renameChatSession = (projectId, sessionId, data) => apiClient.patch(`/projects/${projectId}/chat_sessions/${sessionId}`, data);
+
+/**
+ * Deletes a specific chat session and its history.
+ * @param {string} projectId - The ID of the project.
+ * @param {string} sessionId - The ID of the session to delete.
+ * @returns {Promise<AxiosResponse<any>>} - Returns a success message {message: "..."}.
+ */
+export const deleteChatSession = (projectId, sessionId) => apiClient.delete(`/projects/${projectId}/chat_sessions/${sessionId}`);
+
+// --- Chat History (Per Session) ---
+/**
+ * Gets the chat history for a specific session within a project.
+ * @param {string} projectId - The ID of the project.
+ * @param {string} sessionId - The ID of the specific chat session.
  * @returns {Promise<AxiosResponse<any>>} - Expected data: { history: [{id, query, response?, error?}, ...] }
  */
-export const getChatHistory = (projectId) => apiClient.get(`/projects/${projectId}/chat_history`);
+export const getChatHistory = (projectId, sessionId) => apiClient.get(`/projects/${projectId}/chat_history/${sessionId}`);
 
 /**
- * Updates (overwrites) the chat history for a project.
+ * Updates (overwrites) the chat history for a specific session within a project.
  * @param {string} projectId - The ID of the project.
+ * @param {string} sessionId - The ID of the specific chat session.
  * @param {object} data - The request body. e.g., { history: [{id, query, response?, error?}, ...] }
- * @returns {Promise<AxiosResponse<any>>} - Returns the saved history.
+ * @returns {Promise<AxiosResponse<any>>} - Returns the saved history { history: [...] }.
  */
-export const updateChatHistory = (projectId, data) => apiClient.put(`/projects/${projectId}/chat_history`, data);
+export const updateChatHistory = (projectId, sessionId, data) => apiClient.put(`/projects/${projectId}/chat_history/${sessionId}`, data);
+
+// --- END MODIFIED ---
 
 
 // Optional: Add interceptors for error handling or adding auth tokens later
