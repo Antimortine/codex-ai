@@ -167,7 +167,6 @@ const styles = {
         border: '1px solid #ffdf7e',
         borderRadius: '3px',
     },
-    // --- ADDED: Styles for chapter plan/synopsis links ---
     chapterLinks: {
         fontSize: '0.85em',
         marginLeft: '15px',
@@ -175,7 +174,6 @@ const styles = {
         display: 'flex',
         gap: '15px',
     }
-    // --- END ADDED ---
 };
 
 const ChapterSection = memo(function ChapterSection({
@@ -275,12 +273,11 @@ const ChapterSection = memo(function ChapterSection({
                 )}
             </div>
 
-            {/* --- ADDED: Chapter Plan/Synopsis Links --- */}
+            {/* Chapter Plan/Synopsis Links */}
             <div style={styles.chapterLinks}>
                 <Link to={`/projects/${projectId}/chapters/${chapter.id}/plan`}>Edit Chapter Plan</Link>
                 <Link to={`/projects/${projectId}/chapters/${chapter.id}/synopsis`}>Edit Chapter Synopsis</Link>
             </div>
-            {/* --- END ADDED --- */}
 
 
             {/* Scene List or Split Area or Loading */}

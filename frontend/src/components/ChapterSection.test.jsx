@@ -99,6 +99,18 @@ describe('ChapterSection Component', () => {
             expect(screen.getByRole('button', { name: /delete chapter/i })).toBeInTheDocument();
         });
 
+        it('renders links to edit chapter plan and synopsis', () => {
+            renderChapterSection();
+            const planLink = screen.getByRole('link', { name: /edit chapter plan/i });
+            const synopsisLink = screen.getByRole('link', { name: /edit chapter synopsis/i });
+
+            expect(planLink).toBeInTheDocument();
+            expect(planLink).toHaveAttribute('href', `/projects/${mockProjectId}/chapters/${mockChapter.id}/plan`);
+
+            expect(synopsisLink).toBeInTheDocument();
+            expect(synopsisLink).toHaveAttribute('href', `/projects/${mockProjectId}/chapters/${mockChapter.id}/synopsis`);
+        });
+
         it('renders scene list with links and delete buttons when scenes exist', () => {
             renderChapterSection({ scenesForChapter: mockScenes });
             expect(screen.getByRole('link', { name: /1: Scene Alpha/i })).toBeInTheDocument();
@@ -316,9 +328,10 @@ describe('ChapterSection Component', () => {
             const input = screen.getByLabelText(/optional prompt\/summary for ai/i);
             const testString = 'Test summary';
             await user.type(input, testString);
+            // --- FIXED: Assert only call count ---
             expect(onSummaryChangeMock).toHaveBeenCalledTimes(testString.length);
-            // Check the argument of the *last* call
-            // expect(onSummaryChangeMock.mock.calls.pop()[1]).toBe(testString); // REMOVED this assertion
+            // We cannot reliably assert the final value with toHaveBeenLastCalledWith after user.type
+            // --- END FIXED ---
         });
 
         it('calls onGenerateScene when Add Scene using AI is clicked', async () => {
@@ -337,9 +350,10 @@ describe('ChapterSection Component', () => {
             const textarea = screen.getByLabelText(/paste full chapter content here to split/i);
             const testString = 'Split this';
             await user.type(textarea, testString);
+            // --- FIXED: Assert only call count ---
             expect(onSplitInputChangeMock).toHaveBeenCalledTimes(testString.length);
-            // Check the argument of the *last* call
-            // expect(onSplitInputChangeMock.mock.calls.pop()[1]).toBe(testString); // REMOVED this assertion
+            // We cannot reliably assert the final value with toHaveBeenLastCalledWith after user.type
+            // --- END FIXED ---
         });
 
         it('calls onSplitChapter when Split Chapter button is clicked', async () => {
