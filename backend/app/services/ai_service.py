@@ -26,7 +26,7 @@ from app.core.config import settings
 logger = logging.getLogger(__name__)
 PREVIOUS_SCENE_COUNT = settings.RAG_GENERATION_PREVIOUS_SCENE_COUNT
 
-# --- ADDED: Type hint for context dictionary ---
+# Type hint for context dictionary
 class LoadedContext(TypedDict, total=False):
     project_plan: Optional[str]
     project_synopsis: Optional[str]
@@ -34,7 +34,6 @@ class LoadedContext(TypedDict, total=False):
     chapter_synopsis: Optional[str]
     filter_paths: Set[str]
     chapter_title: Optional[str] # Include chapter title if loaded
-# --- END ADDED ---
 
 
 class AIService:
@@ -43,7 +42,7 @@ class AIService:
         if self.rag_engine is None: logger.critical("RagEngine instance is None during AIService init!")
         logger.info("AIService initialized.")
 
-    # --- ADDED: Context Loading Helper ---
+    # Context Loading Helper (already implemented in previous step)
     def _load_context(self, project_id: str, chapter_id: Optional[str] = None) -> LoadedContext:
         """
         Loads project-level and optionally chapter-level plan/synopsis.
@@ -98,32 +97,29 @@ class AIService:
             # Load Chapter Plan
             try:
                 chap_plan_path = self.file_service._get_chapter_plan_path(project_id, chapter_id)
-                # Use the new method that returns None on 404
                 context['chapter_plan'] = self.file_service.read_chapter_plan_file(project_id, chapter_id)
                 if context['chapter_plan'] is not None:
                     context['filter_paths'].add(str(chap_plan_path.resolve()))
                     logger.debug(f"  - Loaded chapter plan for {chapter_id} (path: {chap_plan_path})")
                 else:
                     logger.debug(f"  - Chapter plan file not found for {chapter_id}.")
-            except Exception as e: # Catch other potential errors during read
+            except Exception as e:
                  logger.error(f"  - Error loading chapter plan for {chapter_id}: {e}", exc_info=True)
 
             # Load Chapter Synopsis
             try:
                 chap_syn_path = self.file_service._get_chapter_synopsis_path(project_id, chapter_id)
-                # Use the new method that returns None on 404
                 context['chapter_synopsis'] = self.file_service.read_chapter_synopsis_file(project_id, chapter_id)
                 if context['chapter_synopsis'] is not None:
                     context['filter_paths'].add(str(chap_syn_path.resolve()))
                     logger.debug(f"  - Loaded chapter synopsis for {chapter_id} (path: {chap_syn_path})")
                 else:
                     logger.debug(f"  - Chapter synopsis file not found for {chapter_id}.")
-            except Exception as e: # Catch other potential errors during read
+            except Exception as e:
                  logger.error(f"  - Error loading chapter synopsis for {chapter_id}: {e}", exc_info=True)
 
         logger.debug(f"AIService: Context loading complete. Filter paths: {context['filter_paths']}")
         return context
-    # --- END ADDED ---
 
     async def query_project(self, project_id: str, query_text: str) -> Tuple[str, List[NodeWithScore], Optional[List[Dict[str, str]]]]:
         logger.info(f"AIService: Processing query for project {project_id}: '{query_text}'")
@@ -138,48 +134,58 @@ class AIService:
 
         direct_sources_data: List[Dict] = []
         entity_list = []
-        # --- MODIFIED: Directly included paths now starts with project context paths ---
-        directly_included_paths: Set[str] = paths_to_filter.copy() # Start with paths from _load_context
-        # --- END MODIFIED ---
+        directly_included_paths: Set[str] = paths_to_filter.copy() # Start with paths from project context
         direct_chapter_context: Optional[Dict[str, Optional[str]]] = None # For chapter plan/synopsis if matched
 
         logger.debug("AIService (Query): Compiling full entity list...")
         try:
             # Add project-level blocks that were successfully loaded
-            if explicit_plan is not None: entity_list.append({ 'type': 'Plan', 'name': 'Project Plan', 'id': 'plan', 'file_path': self.file_service._get_content_block_path(project_id, "plan.md") })
-            if explicit_synopsis is not None: entity_list.append({ 'type': 'Synopsis', 'name': 'Project Synopsis', 'id': 'synopsis', 'file_path': self.file_service._get_content_block_path(project_id, "synopsis.md") })
-            entity_list.append({ 'type': 'World', 'name': 'World Info', 'id': 'world', 'file_path': self.file_service._get_content_block_path(project_id, "world.md") })
+            # --- MODIFIED: Check for None before adding ---
+            if explicit_plan is not None:
+                try: entity_list.append({ 'type': 'Plan', 'name': 'Project Plan', 'id': 'plan', 'file_path': self.file_service._get_content_block_path(project_id, "plan.md") })
+                except Exception as e: logger.warning(f"Could not get path for project plan: {e}")
+            if explicit_synopsis is not None:
+                try: entity_list.append({ 'type': 'Synopsis', 'name': 'Project Synopsis', 'id': 'synopsis', 'file_path': self.file_service._get_content_block_path(project_id, "synopsis.md") })
+                except Exception as e: logger.warning(f"Could not get path for project synopsis: {e}")
+            # --- END MODIFIED ---
+            try: entity_list.append({ 'type': 'World', 'name': 'World Info', 'id': 'world', 'file_path': self.file_service._get_content_block_path(project_id, "world.md") })
+            except Exception as e: logger.warning(f"Could not get path for world info: {e}")
 
             project_metadata = self.file_service.read_project_metadata(project_id)
             for char_id, char_data in project_metadata.get('characters', {}).items():
                 char_name = char_data.get('name');
-                if char_name: entity_list.append({ 'type': 'Character', 'name': char_name, 'id': char_id, 'file_path': self.file_service._get_character_path(project_id, char_id) })
+                if char_name:
+                    try: entity_list.append({ 'type': 'Character', 'name': char_name, 'id': char_id, 'file_path': self.file_service._get_character_path(project_id, char_id) })
+                    except Exception as e: logger.warning(f"Could not get path for character {char_id}: {e}")
 
-            # --- ADDED: Include Chapters in entity list ---
             for chapter_id_meta, chapter_data_meta in project_metadata.get('chapters', {}).items():
                 chapter_title = chapter_data_meta.get('title')
                 if chapter_title:
-                    entity_list.append({
-                        'type': 'Chapter',
-                        'name': chapter_title,
-                        'id': chapter_id_meta,
-                        # Store paths for potential direct loading later
-                        'plan_path': self.file_service._get_chapter_plan_path(project_id, chapter_id_meta),
-                        'synopsis_path': self.file_service._get_chapter_synopsis_path(project_id, chapter_id_meta)
-                    })
-                # --- END ADDED ---
-                # Include Scenes within chapters
+                    try:
+                        entity_list.append({
+                            'type': 'Chapter',
+                            'name': chapter_title,
+                            'id': chapter_id_meta,
+                            'plan_path': self.file_service._get_chapter_plan_path(project_id, chapter_id_meta),
+                            'synopsis_path': self.file_service._get_chapter_synopsis_path(project_id, chapter_id_meta)
+                        })
+                    except Exception as e: logger.warning(f"Could not get paths for chapter {chapter_id_meta}: {e}")
+
                 try:
                     chapter_metadata = self.file_service.read_chapter_metadata(project_id, chapter_id_meta)
                     for scene_id, scene_data in chapter_metadata.get('scenes', {}).items():
                         scene_title = scene_data.get('title');
-                        if scene_title: entity_list.append({ 'type': 'Scene', 'name': scene_title, 'id': scene_id, 'file_path': self.file_service._get_scene_path(project_id, chapter_id_meta, scene_id), 'chapter_id': chapter_id_meta }) # Add chapter_id for context
+                        if scene_title:
+                            try: entity_list.append({ 'type': 'Scene', 'name': scene_title, 'id': scene_id, 'file_path': self.file_service._get_scene_path(project_id, chapter_id_meta, scene_id), 'chapter_id': chapter_id_meta })
+                            except Exception as e: logger.warning(f"Could not get path for scene {scene_id}: {e}")
                 except Exception as e: logger.error(f"AIService (Query): Error reading chapter metadata for {chapter_id_meta}: {e}", exc_info=True)
 
             notes_dir = self.file_service._get_project_path(project_id) / "notes"
             if self.file_service.path_exists(notes_dir) and notes_dir.is_dir():
                 for note_path in notes_dir.glob('*.md'):
-                    if note_path.is_file(): entity_list.append({ 'type': 'Note', 'name': note_path.stem, 'id': str(note_path), 'file_path': note_path })
+                    if note_path.is_file():
+                        try: entity_list.append({ 'type': 'Note', 'name': note_path.stem, 'id': str(note_path), 'file_path': note_path })
+                        except Exception as e: logger.warning(f"Could not process note path {note_path}: {e}")
         except Exception as e: logger.error(f"AIService (Query): Unexpected error compiling entity list for {project_id}: {e}", exc_info=True)
 
         logger.debug(f"AIService (Query): Compiled entity list with {len(entity_list)} items.")
@@ -188,27 +194,27 @@ class AIService:
             def normalize_name(name): return name.lower().strip()
             logger.debug(f"AIService (Query): Searching for entity names in normalized query: '{normalized_query}'")
             for entity in entity_list:
-                # Skip project plan/synopsis as they are always loaded explicitly
+                # Skip project plan/synopsis as they are always loaded explicitly (if available)
                 if entity['type'] in ['Plan', 'Synopsis']: continue
 
                 normalized_entity_name = normalize_name(entity['name']); pattern = rf"\b{re.escape(normalized_entity_name)}\b"
                 if re.search(pattern, normalized_query):
                     logger.info(f"AIService (Query): Found direct match: Type='{entity['type']}', Name='{entity['name']}'")
                     try:
-                        # --- MODIFIED: Handle Chapter direct match ---
                         if entity['type'] == 'Chapter':
-                            logger.debug(f"AIService (Query): Loading direct context for matched Chapter '{entity['name']}' (ID: {entity['id']})...")
+                            chapter_id_match = entity['id']
+                            logger.debug(f"AIService (Query): Loading direct context for matched Chapter '{entity['name']}' (ID: {chapter_id_match})...")
                             # Use _load_context to get chapter plan/synopsis
-                            matched_chapter_context = self._load_context(project_id, entity['id'])
+                            matched_chapter_context = self._load_context(project_id, chapter_id_match)
+                            # Store the loaded context to pass to the engine
                             direct_chapter_context = {
                                 'chapter_plan': matched_chapter_context.get('chapter_plan'),
                                 'chapter_synopsis': matched_chapter_context.get('chapter_synopsis'),
-                                'chapter_title': matched_chapter_context.get('chapter_title', entity['name']) # Pass title
+                                'chapter_title': matched_chapter_context.get('chapter_title', entity['name'])
                             }
                             # Add successfully loaded chapter file paths to filter set
                             directly_included_paths.update(matched_chapter_context.get('filter_paths', set()))
                             logger.info(f"AIService (Query): Loaded direct chapter context for '{entity['name']}'. Plan: {bool(direct_chapter_context['chapter_plan'])}, Synopsis: {bool(direct_chapter_context['chapter_synopsis'])}")
-                        # --- END MODIFIED ---
                         else: # Handle other entity types (World, Character, Scene, Note)
                             file_path_to_load = entity.get('file_path')
                             if not file_path_to_load or not isinstance(file_path_to_load, Path):
@@ -229,17 +235,15 @@ class AIService:
 
         logger.debug(f"AIService (Query): Final paths to filter from RAG: {directly_included_paths}")
         logger.debug("AIService (Query): Delegating query to RagEngine...")
-        # --- MODIFIED: Pass direct_chapter_context ---
         answer, source_nodes, direct_sources_info_list = await self.rag_engine.query(
             project_id=project_id,
             query_text=query_text,
-            explicit_plan=explicit_plan, # Can be None
-            explicit_synopsis=explicit_synopsis, # Can be None
+            explicit_plan=explicit_plan, # Pass potentially None
+            explicit_synopsis=explicit_synopsis, # Pass potentially None
             direct_sources_data=direct_sources_data,
             direct_chapter_context=direct_chapter_context, # Pass chapter context
             paths_to_filter=directly_included_paths
         )
-        # --- END MODIFIED ---
         return answer, source_nodes, direct_sources_info_list
 
     async def generate_scene_draft(self, project_id: str, chapter_id: str, request_data: AISceneGenerationRequest) -> Dict[str, str]:
@@ -256,7 +260,7 @@ class AIService:
         # --- END REFACTORED ---
 
         explicit_previous_scenes: List[Tuple[int, str]] = []
-        # (Loading previous scenes logic unchanged)
+        # Load previous scenes and add their paths to the filter set
         previous_scene_order = request_data.previous_scene_order
         if previous_scene_order is not None and previous_scene_order > 0 and PREVIOUS_SCENE_COUNT > 0:
             try:
@@ -271,9 +275,7 @@ class AIService:
                             scene_path = self.file_service._get_scene_path(project_id, chapter_id, scene_id_to_load)
                             content = self.file_service.read_text_file(scene_path)
                             explicit_previous_scenes.append((target_order, content))
-                            # --- ADDED: Add previous scene path to filter set ---
-                            paths_to_filter.add(str(scene_path.resolve()))
-                            # --- END ADDED ---
+                            paths_to_filter.add(str(scene_path.resolve())) # Add path to filter
                             loaded_count += 1
                         except HTTPException as scene_load_err: logger.warning(f"AIService (Gen): Scene file not found/error for order {target_order} (ID: {scene_id_to_load}): {scene_load_err.detail}")
             except Exception as general_err: logger.error(f"AIService (Gen): Unexpected error loading previous scenes: {general_err}", exc_info=True)
@@ -282,18 +284,16 @@ class AIService:
         logger.debug(f"AIService (Gen): Context prepared - Proj Plan: {bool(explicit_plan)}, Proj Syn: {bool(explicit_synopsis)}, Chap Plan: {bool(explicit_chapter_plan)}, Chap Syn: {bool(explicit_chapter_synopsis)}, Prev Scenes: {len(explicit_previous_scenes)}")
         logger.debug(f"AIService (Gen): Paths to filter from RAG: {paths_to_filter}")
         try:
-            # --- MODIFIED: Pass chapter context to engine ---
             generated_draft_dict = await self.rag_engine.generate_scene(
                 project_id=project_id, chapter_id=chapter_id, prompt_summary=request_data.prompt_summary,
                 previous_scene_order=request_data.previous_scene_order,
-                explicit_plan=explicit_plan, # Pass potentially None
-                explicit_synopsis=explicit_synopsis, # Pass potentially None
-                explicit_chapter_plan=explicit_chapter_plan, # Pass potentially None
-                explicit_chapter_synopsis=explicit_chapter_synopsis, # Pass potentially None
+                explicit_plan=explicit_plan,
+                explicit_synopsis=explicit_synopsis,
+                explicit_chapter_plan=explicit_chapter_plan,
+                explicit_chapter_synopsis=explicit_chapter_synopsis,
                 explicit_previous_scenes=explicit_previous_scenes,
                 paths_to_filter=paths_to_filter
             )
-            # --- END MODIFIED ---
             if not isinstance(generated_draft_dict, dict) or "title" not in generated_draft_dict or "content" not in generated_draft_dict: raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"AI scene generation returned an unexpected format: {generated_draft_dict}")
             if isinstance(generated_draft_dict["content"], str) and generated_draft_dict["content"].strip().startswith("Error:"): raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=generated_draft_dict['content'])
             return generated_draft_dict
@@ -313,7 +313,6 @@ class AIService:
 
         logger.debug(f"AIService (Rephrase): Paths to filter from RAG: {paths_to_filter}")
         try:
-            # --- MODIFIED: Pass potentially None context and filter paths ---
             suggestions = await self.rag_engine.rephrase(
                 project_id=project_id, selected_text=request_data.selected_text,
                 context_before=request_data.context_before, context_after=request_data.context_after,
@@ -321,7 +320,6 @@ class AIService:
                 explicit_synopsis=explicit_synopsis, # Pass potentially None
                 paths_to_filter=paths_to_filter
             )
-            # --- END MODIFIED ---
             if suggestions and isinstance(suggestions[0], str) and suggestions[0].startswith("Error:"): raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=suggestions[0])
             return suggestions
         except HTTPException as http_exc: logger.error(f"HTTP Exception during rephrase delegation: {http_exc.detail}", exc_info=True); raise http_exc
@@ -346,7 +344,6 @@ class AIService:
         logger.debug(f"AIService (Split): Paths to filter from RAG: {paths_to_filter}")
         try:
             logger.debug("AIService (Split): Delegating to ChapterSplitter...")
-            # --- MODIFIED: Pass chapter context to engine ---
             proposed_scenes = await self.rag_engine.split_chapter(
                 project_id=project_id, chapter_id=chapter_id, chapter_content=chapter_content,
                 explicit_plan=explicit_plan, # Pass potentially None
@@ -355,7 +352,6 @@ class AIService:
                 explicit_chapter_synopsis=explicit_chapter_synopsis, # Pass potentially None
                 paths_to_filter=paths_to_filter
             )
-            # --- END MODIFIED ---
             return proposed_scenes
         except HTTPException as http_exc: logger.error(f"HTTP Exception during chapter split delegation: {http_exc.detail}", exc_info=True); raise http_exc
         except Exception as e: logger.error(f"Unexpected error during chapter split delegation: {e}", exc_info=True); raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred during AI chapter splitting.")

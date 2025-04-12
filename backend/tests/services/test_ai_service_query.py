@@ -30,7 +30,7 @@ from llama_index.core.indices.vector_store import VectorStoreIndex
 # --- Test AIService.query_project Methods ---
 
 @pytest.mark.asyncio
-# --- MODIFIED: Patch the imported instances ---
+# --- MODIFIED: Patch rag_engine and file_service (for entity list compilation) ---
 @patch('app.services.ai_service.rag_engine', autospec=True)
 @patch('app.services.ai_service.file_service', autospec=True)
 # --- END MODIFIED ---
@@ -48,14 +48,14 @@ async def test_query_project_success_no_direct_match(mock_file_service: MagicMoc
     mock_filtered_source_nodes = [mock_node_scene]
     mock_direct_sources_info: Optional[List[Dict[str, str]]] = None
 
-    # Mock the _load_context helper
+    # Mock the _load_context helper return value
     mock_loaded_project_context: LoadedContext = {
         'project_plan': mock_plan_content,
         'project_synopsis': mock_synopsis_content,
         'filter_paths': {str(mock_plan_path), str(mock_synopsis_path)}
     }
 
-    # Mock entity list compilation (return empty for simplicity here)
+    # Mock entity list compilation parts (still needed before _load_context)
     mock_file_service.read_project_metadata.return_value = {"chapters": {}, "characters": {}}
     mock_file_service._get_content_block_path.side_effect = lambda pid, fname: {
         "plan.md": mock_plan_path.parent / "plan.md",
@@ -80,7 +80,7 @@ async def test_query_project_success_no_direct_match(mock_file_service: MagicMoc
         assert direct_info == mock_direct_sources_info
 
         # Verify mocks
-        mock_load_ctx.assert_called_once_with(project_id) # Only called once for project context
+        mock_load_ctx.assert_called_once_with(project_id) # Called once for project context
         # Verify rag_engine call
         mock_rag_engine.query.assert_awaited_once_with(
             project_id=project_id,
@@ -111,7 +111,9 @@ async def test_query_project_success_with_direct_chapter_match(mock_file_service
     mock_chapter_plan_path = Path(f"user_projects/{project_id}/chapters/{chapter_id}/plan.md").resolve()
     mock_chapter_synopsis_path = Path(f"user_projects/{project_id}/chapters/{chapter_id}/synopsis.md").resolve() # Path exists even if file doesn't
     mock_filtered_source_nodes = []
-    mock_direct_sources_info: Optional[List[Dict[str, str]]] = None # Info about the chapter itself isn't returned here
+    mock_direct_sources_info: Optional[List[Dict[str, str]]] = [ # Expected direct info
+         {'type': 'ChapterPlan', 'name': f"Plan for Chapter '{chapter_title}'"}
+    ]
 
     # Mock _load_context return values
     mock_loaded_project_context: LoadedContext = {
@@ -162,7 +164,7 @@ async def test_query_project_success_with_direct_chapter_match(mock_file_service
         # Assertions
         assert answer == mock_answer
         assert source_nodes == mock_filtered_source_nodes
-        assert direct_info == mock_direct_sources_info
+        assert direct_info == mock_direct_sources_info # Check direct info list
 
         # Verify mocks
         assert mock_load_ctx.call_count == 2

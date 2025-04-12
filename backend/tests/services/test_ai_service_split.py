@@ -16,7 +16,7 @@ import pytest
 from unittest.mock import MagicMock, AsyncMock, call, patch, ANY # Import ANY
 from fastapi import HTTPException, status
 from pathlib import Path # Import Path
-from typing import Set # Import Set
+from typing import Set, List, Optional, Dict # Added List, Optional, Dict
 
 from app.services.ai_service import AIService, LoadedContext # Import LoadedContext
 from app.services.file_service import FileService
@@ -29,9 +29,9 @@ from llama_index.core.indices.vector_store import VectorStoreIndex
 # --- Test AIService.split_chapter_into_scenes ---
 
 @pytest.mark.asyncio
-# --- MODIFIED: Patch imported instances ---
+# --- MODIFIED: Patch rag_engine and file_service (no longer needed for context) ---
 @patch('app.services.ai_service.rag_engine', autospec=True)
-@patch('app.services.ai_service.file_service', autospec=True)
+@patch('app.services.ai_service.file_service', autospec=True) # Keep for consistency
 # --- END MODIFIED ---
 async def test_split_chapter_success(mock_file_service: MagicMock, mock_rag_engine: MagicMock): # Args match patch order
     """Test successful chapter splitting."""
@@ -68,7 +68,6 @@ async def test_split_chapter_success(mock_file_service: MagicMock, mock_rag_engi
         # Assert
         assert result == mock_proposed_scenes
         mock_load_ctx.assert_called_once_with(project_id, chapter_id)
-        # --- FIXED: Added explicit_chapter_plan and explicit_chapter_synopsis ---
         mock_rag_engine.split_chapter.assert_awaited_once_with(
             project_id=project_id, chapter_id=chapter_id, chapter_content=chapter_content,
             explicit_plan=mock_plan,
@@ -77,7 +76,6 @@ async def test_split_chapter_success(mock_file_service: MagicMock, mock_rag_engi
             explicit_chapter_synopsis=mock_chapter_synopsis,
             paths_to_filter=mock_loaded_context['filter_paths']
         )
-        # --- END FIXED ---
 
 @pytest.mark.asyncio
 @patch('app.services.ai_service.rag_engine', autospec=True)
@@ -132,7 +130,6 @@ async def test_split_chapter_context_load_error(mock_file_service: MagicMock, mo
         # Assert
         assert result == mock_proposed_scenes # Should still succeed
         mock_load_ctx.assert_called_once_with(project_id, chapter_id)
-        # --- FIXED: Added explicit_chapter_plan and explicit_chapter_synopsis ---
         mock_rag_engine.split_chapter.assert_awaited_once_with(
             project_id=project_id, chapter_id=chapter_id, chapter_content=chapter_content,
             explicit_plan=None, # Correctly expect None
@@ -141,7 +138,6 @@ async def test_split_chapter_context_load_error(mock_file_service: MagicMock, mo
             explicit_chapter_synopsis=None, # Correctly expect None
             paths_to_filter=mock_loaded_context['filter_paths']
         )
-        # --- END FIXED ---
 
 # --- Test for splitter error remains unchanged ---
 @pytest.mark.asyncio

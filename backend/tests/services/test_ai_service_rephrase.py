@@ -17,7 +17,7 @@ from unittest.mock import MagicMock, AsyncMock, call, patch, ANY # Import ANY
 from fastapi import HTTPException, status
 from pathlib import Path
 import asyncio
-from typing import List, Optional # Added List, Optional
+from typing import List, Optional, Set # Import Set
 
 from app.services.ai_service import AIService, LoadedContext # Import LoadedContext
 from app.services.file_service import FileService
@@ -30,9 +30,9 @@ from llama_index.core.indices.vector_store import VectorStoreIndex
 # --- Test AIService.rephrase_text ---
 
 @pytest.mark.asyncio
-# --- MODIFIED: Patch the imported instances ---
+# --- MODIFIED: Patch rag_engine and file_service (no longer needed for context) ---
 @patch('app.services.ai_service.rag_engine', autospec=True)
-@patch('app.services.ai_service.file_service', autospec=True) # Keep file_service patch for consistency
+@patch('app.services.ai_service.file_service', autospec=True) # Keep for consistency if needed elsewhere
 # --- END MODIFIED ---
 async def test_rephrase_text_success(mock_file_service: MagicMock, mock_rag_engine: MagicMock): # Args match patch order
     """Test successful rephrase call."""

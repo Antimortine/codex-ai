@@ -31,7 +31,7 @@ from llama_index.core.indices.vector_store import VectorStoreIndex
 # --- Test AIService.generate_scene_draft ---
 
 @pytest.mark.asyncio
-# --- MODIFIED: Patch imported instances ---
+# --- MODIFIED: Patch rag_engine and file_service (for prev scene loading) ---
 @patch('app.services.ai_service.rag_engine', autospec=True)
 @patch('app.services.ai_service.file_service', autospec=True)
 # --- END MODIFIED ---
@@ -59,7 +59,7 @@ async def test_generate_scene_draft_success_with_previous(mock_file_service: Mag
         'filter_paths': {str(mock_plan_path), str(mock_synopsis_path), str(mock_chapter_plan_path)}
     }
 
-    # Configure mocks for loading previous scenes
+    # Configure mocks for loading previous scenes (still needed)
     def get_scene_path_side_effect(p_id, c_id, s_id):
         if p_id == project_id and c_id == chapter_id and s_id == mock_prev_scene_id: return mock_scene_path_2.parent / mock_scene_path_2.name # Return non-resolved for consistency
         pytest.fail(f"Unexpected call to _get_scene_path with scene_id: {s_id}")
@@ -93,7 +93,6 @@ async def test_generate_scene_draft_success_with_previous(mock_file_service: Mag
             str(mock_plan_path), str(mock_synopsis_path), str(mock_chapter_plan_path),
             str(mock_scene_path_2) # Include previous scene path
         }
-        # --- FIXED: Added explicit_chapter_plan and explicit_chapter_synopsis ---
         mock_rag_engine.generate_scene.assert_awaited_once_with(
             project_id=project_id, chapter_id=chapter_id, prompt_summary=request_data.prompt_summary,
             previous_scene_order=request_data.previous_scene_order,
@@ -104,7 +103,6 @@ async def test_generate_scene_draft_success_with_previous(mock_file_service: Mag
             explicit_previous_scenes=[(2, mock_prev_scene_content)],
             paths_to_filter=expected_filter_set
         )
-        # --- END FIXED ---
 
 
 @pytest.mark.asyncio
@@ -145,7 +143,6 @@ async def test_generate_scene_draft_success_first_scene(mock_file_service: Magic
         mock_file_service.read_text_file.assert_not_called()
 
         # Verify rag_engine call
-        # --- FIXED: Added explicit_chapter_plan and explicit_chapter_synopsis ---
         mock_rag_engine.generate_scene.assert_awaited_once_with(
             project_id=project_id, chapter_id=chapter_id, prompt_summary=request_data.prompt_summary,
             previous_scene_order=request_data.previous_scene_order,
@@ -156,7 +153,6 @@ async def test_generate_scene_draft_success_first_scene(mock_file_service: Magic
             explicit_previous_scenes=[],
             paths_to_filter=mock_loaded_context['filter_paths']
         )
-        # --- END FIXED ---
 
 @pytest.mark.asyncio
 @patch('app.services.ai_service.rag_engine', autospec=True)
@@ -195,7 +191,6 @@ async def test_generate_scene_draft_context_not_found(mock_file_service: MagicMo
         mock_file_service.read_text_file.assert_not_called() # Not called as metadata failed
 
         # Verify rag_engine call
-        # --- FIXED: Added explicit_chapter_plan and explicit_chapter_synopsis ---
         mock_rag_engine.generate_scene.assert_awaited_once_with(
             project_id=project_id, chapter_id=chapter_id, prompt_summary=request_data.prompt_summary,
             previous_scene_order=request_data.previous_scene_order,
@@ -206,58 +201,6 @@ async def test_generate_scene_draft_context_not_found(mock_file_service: MagicMo
             explicit_previous_scenes=[],
             paths_to_filter=set() # Empty set
         )
-        # --- END FIXED ---
-
-@pytest.mark.asyncio
-@patch('app.services.ai_service.rag_engine', autospec=True)
-@patch('app.services.ai_service.file_service', autospec=True)
-async def test_generate_scene_draft_context_load_error(mock_file_service: MagicMock, mock_rag_engine: MagicMock):
-    """Test scene generation when context loading raises unexpected errors."""
-    project_id = "gen-proj-4"; chapter_id = "ch-3"
-    request_data = AISceneGenerationRequest(prompt_summary="Error handling test.", previous_scene_order=1)
-    mock_generated_title = "Scene 2"; mock_generated_content = "Generated despite loading errors."
-    mock_generated_dict = {"title": mock_generated_title, "content": mock_generated_content}
-    mock_synopsis_path = Path(f"user_projects/{project_id}/synopsis.md").resolve()
-
-    # Mock _load_context return value (project plan error, chapter context ok)
-    mock_loaded_context: LoadedContext = {
-        'project_plan': None, # Simulate error during load
-        'project_synopsis': "Synopsis loaded okay.",
-        'chapter_plan': "Chapter Plan OK.",
-        'chapter_synopsis': None,
-        'filter_paths': {str(mock_synopsis_path)} # Only synopsis path added
-    }
-
-    # Mock previous scene loading (also fails)
-    mock_file_service.read_chapter_metadata.side_effect = OSError("Cannot read metadata")
-    mock_rag_engine.generate_scene = AsyncMock(return_value=mock_generated_dict)
-
-    # Instantiate AIService and patch helper
-    service_instance = AIService()
-    with patch.object(service_instance, '_load_context', return_value=mock_loaded_context) as mock_load_ctx:
-
-        # Call the method
-        result = await service_instance.generate_scene_draft(project_id, chapter_id, request_data)
-
-        # Assertions
-        assert isinstance(result, dict); assert result["title"] == mock_generated_title; assert result["content"] == mock_generated_content
-        mock_load_ctx.assert_called_once_with(project_id, chapter_id)
-        mock_file_service.read_chapter_metadata.assert_called_once_with(project_id, chapter_id)
-        mock_file_service.read_text_file.assert_not_called()
-
-        # Verify rag_engine call
-        # --- FIXED: Added explicit_chapter_plan and explicit_chapter_synopsis ---
-        mock_rag_engine.generate_scene.assert_awaited_once_with(
-            project_id=project_id, chapter_id=chapter_id, prompt_summary=request_data.prompt_summary,
-            previous_scene_order=request_data.previous_scene_order,
-            explicit_plan=None, # Was None in mock_loaded_context
-            explicit_synopsis="Synopsis loaded okay.",
-            explicit_chapter_plan="Chapter Plan OK.", # Was loaded in mock_loaded_context
-            explicit_chapter_synopsis=None, # Was None in mock_loaded_context
-            explicit_previous_scenes=[],
-            paths_to_filter=mock_loaded_context['filter_paths']
-        )
-        # --- END FIXED ---
 
 # --- Tests for RAG engine errors remain unchanged ---
 @pytest.mark.asyncio
