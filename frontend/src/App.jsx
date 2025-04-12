@@ -25,6 +25,10 @@ import WorldEditPage from './pages/WorldEditPage';
 import CharacterEditPage from './pages/CharacterEditPage';
 import SceneEditPage from './pages/SceneEditPage';
 import ProjectQueryPage from './pages/ProjectQueryPage'; // Import the new page
+// --- ADDED: Import new chapter edit pages ---
+import ChapterPlanEditPage from './pages/ChapterPlanEditPage';
+import ChapterSynopsisEditPage from './pages/ChapterSynopsisEditPage';
+// --- END ADDED ---
 
 import './App.css';
 
@@ -40,10 +44,11 @@ function App() {
         <Route path="projects/:projectId/world" element={<WorldEditPage />} />
         <Route path="projects/:projectId/characters/:characterId" element={<CharacterEditPage />} />
         <Route path="projects/:projectId/chapters/:chapterId/scenes/:sceneId" element={<SceneEditPage />} />
-        {/* --- ADDED: Route for the new query page --- */}
         <Route path="projects/:projectId/query" element={<ProjectQueryPage />} />
+        {/* --- ADDED: Routes for chapter plan/synopsis --- */}
+        <Route path="projects/:projectId/chapters/:chapterId/plan" element={<ChapterPlanEditPage />} />
+        <Route path="projects/:projectId/chapters/:chapterId/synopsis" element={<ChapterSynopsisEditPage />} />
         {/* --- END ADDED --- */}
-        {/* TODO: Add maybe a chapter detail page later? */}
         <Route path="*" element={<div><h2>404 Not Found</h2></div>} />
       </Route>
     </Routes>

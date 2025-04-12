@@ -54,7 +54,7 @@ export const getCharacter = (projectId, characterId) => apiClient.get(`/projects
 export const updateCharacter = (projectId, characterId, data) => apiClient.patch(`/projects/${projectId}/characters/${characterId}`, data);
 export const deleteCharacter = (projectId, characterId) => apiClient.delete(`/projects/${projectId}/characters/${characterId}`);
 
-// --- Content Block Endpoints (Plan, Synopsis, World) ---
+// --- Content Block Endpoints (Project Level) ---
 export const getPlan = (projectId) => apiClient.get(`/projects/${projectId}/plan`);
 export const updatePlan = (projectId, data) => apiClient.put(`/projects/${projectId}/plan`, data); // data: { content: "..." }
 
@@ -63,6 +63,14 @@ export const updateSynopsis = (projectId, data) => apiClient.put(`/projects/${pr
 
 export const getWorldInfo = (projectId) => apiClient.get(`/projects/${projectId}/world`);
 export const updateWorldInfo = (projectId, data) => apiClient.put(`/projects/${projectId}/world`, data); // data: { content: "..." }
+
+// --- ADDED: Content Block Endpoints (Chapter Level) ---
+export const getChapterPlan = (projectId, chapterId) => apiClient.get(`/projects/${projectId}/chapters/${chapterId}/plan`);
+export const updateChapterPlan = (projectId, chapterId, data) => apiClient.put(`/projects/${projectId}/chapters/${chapterId}/plan`, data); // data: { content: "..." }
+
+export const getChapterSynopsis = (projectId, chapterId) => apiClient.get(`/projects/${projectId}/chapters/${chapterId}/synopsis`);
+export const updateChapterSynopsis = (projectId, chapterId, data) => apiClient.put(`/projects/${projectId}/chapters/${chapterId}/synopsis`, data); // data: { content: "..." }
+// --- END ADDED ---
 
 
 // --- AI Endpoints ---
@@ -78,7 +86,7 @@ export const splitChapterIntoScenes = (projectId, chapterId, requestData = {}) =
 };
 export const rebuildProjectIndex = (projectId) => apiClient.post(`/ai/rebuild_index/${projectId}`);
 
-// --- MODIFIED: Chat History & Session Endpoints ---
+// --- Chat History & Session Endpoints ---
 
 // --- Chat Session CRUD ---
 /**
@@ -130,8 +138,6 @@ export const getChatHistory = (projectId, sessionId) => apiClient.get(`/projects
  * @returns {Promise<AxiosResponse<any>>} - Returns the saved history { history: [...] }.
  */
 export const updateChatHistory = (projectId, sessionId, data) => apiClient.put(`/projects/${projectId}/chat_history/${sessionId}`, data);
-
-// --- END MODIFIED ---
 
 
 // Optional: Add interceptors for error handling or adding auth tokens later

@@ -14,9 +14,7 @@
  * limitations under the License.
  */
 
-// --- MODIFICATION: Import React ---
 import React, { memo } from 'react';
-// --- END MODIFICATION ---
 import PropTypes from 'prop-types';
 import { Link } from 'react-router-dom';
 
@@ -26,96 +24,125 @@ const styles = {
         border: '1px solid #eee',
         padding: '10px',
         marginBottom: '10px',
+        backgroundColor: '#fff', // Added background for clarity
+        borderRadius: '4px', // Added border radius
     },
     titleArea: {
         display: 'flex',
         justifyContent: 'space-between',
         alignItems: 'center',
-        marginBottom: '5px',
+        marginBottom: '10px', // Increased margin
+        paddingBottom: '5px', // Added padding
+        borderBottom: '1px solid #eee', // Added border
     },
     titleEditInput: {
         marginRight: '0.5rem',
         fontSize: '1em',
-        padding: '2px 4px',
+        padding: '4px 6px', // Adjusted padding
     },
     titleEditActions: {
         marginLeft: '0.5rem',
+        display: 'flex', // Align buttons
+        gap: '5px', // Space between buttons
     },
     titleDisplay: {
         fontWeight: 'bold',
+        fontSize: '1.1em', // Slightly larger title
     },
     actionButton: {
-        marginLeft: '1rem',
-        fontSize: '0.9em',
+        marginLeft: '0.5rem', // Reduced margin
+        fontSize: '0.85em', // Slightly smaller
         cursor: 'pointer',
+        padding: '3px 8px', // Adjusted padding
+        border: '1px solid #ccc',
+        borderRadius: '3px',
+        backgroundColor: '#f8f9fa',
     },
     deleteButton: {
-        marginLeft: '1rem',
-        color: 'red',
+        marginLeft: '0.5rem', // Reduced margin
+        color: '#dc3545', // Bootstrap danger red
         cursor: 'pointer',
-        fontSize: '0.9em',
+        fontSize: '0.85em',
+        padding: '3px 8px',
+        border: '1px solid #dc3545',
+        borderRadius: '3px',
+        backgroundColor: '#f8f9fa',
     },
     sceneList: {
         listStyle: 'none',
-        paddingLeft: '20px',
+        paddingLeft: '15px', // Reduced padding
+        marginTop: '10px', // Added margin top
     },
     sceneListItem: {
-        marginBottom: '0.3rem',
+        marginBottom: '0.4rem', // Adjusted margin
         display: 'flex',
         justifyContent: 'space-between',
         alignItems: 'center',
+        fontSize: '0.95em', // Slightly larger scene text
     },
     sceneDeleteButton: {
         marginLeft: '1rem',
         fontSize: '0.8em',
-        color: 'orange',
+        color: '#fd7e14', // Bootstrap orange
         cursor: 'pointer',
+        background: 'none',
+        border: 'none',
+        padding: '2px 5px',
     },
     loadingText: {
         marginLeft: '20px',
+        fontStyle: 'italic',
+        color: '#6c757d', // Bootstrap secondary color
     },
     addGenerateArea: {
-        marginLeft: '20px',
-        marginTop: '10px',
+        marginLeft: '15px', // Reduced margin
+        marginTop: '15px', // Increased margin
         borderTop: '1px dashed #ccc',
-        paddingTop: '10px',
+        paddingTop: '15px', // Increased padding
     },
     generateInputArea: {
         marginTop: '10px',
-        padding: '5px',
+        padding: '8px', // Adjusted padding
         backgroundColor: '#f0f8ff',
         borderRadius: '3px',
+        display: 'flex', // Use flexbox
+        alignItems: 'center', // Align items vertically
+        flexWrap: 'wrap', // Allow wrapping
+        gap: '8px', // Space between items
     },
     summaryInput: {
         fontSize: '0.9em',
-        marginRight: '5px',
+        // marginRight: '5px', // Removed, using gap
         minWidth: '250px',
+        flexGrow: 1, // Allow input to grow
+        padding: '4px 6px',
     },
     errorText: {
         color: 'red',
         fontSize: '0.9em',
         marginTop: '5px',
+        width: '100%', // Ensure error takes full width if wrapped
     },
     inlineErrorText: {
         color: 'red',
         fontSize: '0.9em',
-        marginTop:'5px',
+        // marginTop:'5px', // Removed, using gap
         display: 'inline-block',
-        marginLeft: '10px',
+        // marginLeft: '10px', // Removed, using gap
     },
     loadingIndicator: {
-        marginLeft: '5px',
+        // marginLeft: '5px', // Removed, using gap
         fontStyle: 'italic',
         fontSize: '0.9em',
+        color: '#6c757d',
     },
-    // Styles for Split Chapter UI (re-using some modal styles)
     splitInputArea: {
         marginTop: '10px',
         padding: '10px',
         border: '1px dashed #ffc107',
         borderRadius: '4px',
         backgroundColor: '#fff9e6',
-        marginLeft: '20px', // Align with scene list area
+        marginLeft: '15px', // Align with scene list area
     },
     splitTextarea: {
         width: '98%',
@@ -128,16 +155,30 @@ const styles = {
         cursor: 'pointer',
         backgroundColor: '#ffc107',
         color: '#333',
+        padding: '4px 10px', // Adjusted padding
+        border: '1px solid #dda800',
+        borderRadius: '3px',
     },
     splitButtonDisabled: {
         cursor: 'not-allowed',
         backgroundColor: '#ffeeba',
         color: '#666',
+        padding: '4px 10px',
+        border: '1px solid #ffdf7e',
+        borderRadius: '3px',
+    },
+    // --- ADDED: Styles for chapter plan/synopsis links ---
+    chapterLinks: {
+        fontSize: '0.85em',
+        marginLeft: '15px',
+        marginTop: '8px',
+        display: 'flex',
+        gap: '15px',
     }
+    // --- END ADDED ---
 };
 
-// --- MODIFICATION: Wrap component definition in memo ---
-const ChapterSection = memo(function ChapterSection({ // Use memo and give the function a name for DevTools
+const ChapterSection = memo(function ChapterSection({
     chapter,
     scenesForChapter,
     isLoadingChapterScenes,
@@ -159,7 +200,6 @@ const ChapterSection = memo(function ChapterSection({ // Use memo and give the f
     onGenerateScene,
     onSummaryChange,
     onTitleInputChange,
-    // Split Chapter Props
     splitInputContentForThisChapter,
     isSplittingThisChapter,
     splitErrorForThisChapter,
@@ -167,7 +207,6 @@ const ChapterSection = memo(function ChapterSection({ // Use memo and give the f
     onSplitChapter,
 }) {
 
-    // --- Component logic remains the same ---
     const chapterHasScenes = scenesForChapter && scenesForChapter.length > 0;
     const disableChapterActions = isAnyOperationLoading || isLoadingChapterScenes;
     const disableGenerateButton = isAnyOperationLoading || isLoadingChapterScenes || isGeneratingSceneForThisChapter;
@@ -195,26 +234,27 @@ const ChapterSection = memo(function ChapterSection({ // Use memo and give the f
                             style={styles.titleEditInput}
                             aria-label="Chapter Title"
                         />
-                        <button
-                            onClick={() => onSaveChapter(chapter.id, editedChapterTitleForInput)}
-                            disabled={isSavingThisChapter || !editedChapterTitleForInput?.trim()}
-                        >
-                            {isSavingThisChapter ? 'Saving...' : 'Save'}
-                        </button>
-                        <button
-                            onClick={onCancelEditChapter}
-                            disabled={isSavingThisChapter}
-                            style={styles.titleEditActions}
-                        >
-                            Cancel
-                        </button>
+                        <span style={styles.titleEditActions}>
+                            <button
+                                onClick={() => onSaveChapter(chapter.id, editedChapterTitleForInput)}
+                                disabled={isSavingThisChapter || !editedChapterTitleForInput?.trim()}
+                            >
+                                {isSavingThisChapter ? 'Saving...' : 'Save'}
+                            </button>
+                            <button
+                                onClick={onCancelEditChapter}
+                                disabled={isSavingThisChapter}
+                            >
+                                Cancel
+                            </button>
+                        </span>
                         {saveChapterError && <p data-testid={`chapter-save-error-${chapter.id}`} style={styles.errorText}>Save Error: {saveChapterError}</p>}
                     </div>
                 ) : (
                     <strong data-testid={`chapter-title-${chapter.id}`} style={styles.titleDisplay}>{chapter.order}: {chapter.title}</strong>
                 )}
                 {!isEditingThisChapter && (
-                    <div>
+                    <div style={{ whiteSpace: 'nowrap' }}> {/* Prevent buttons wrapping */}
                         <button
                             onClick={() => onEditChapter(chapter)}
                             style={styles.actionButton}
@@ -234,6 +274,14 @@ const ChapterSection = memo(function ChapterSection({ // Use memo and give the f
                     </div>
                 )}
             </div>
+
+            {/* --- ADDED: Chapter Plan/Synopsis Links --- */}
+            <div style={styles.chapterLinks}>
+                <Link to={`/projects/${projectId}/chapters/${chapter.id}/plan`}>Edit Chapter Plan</Link>
+                <Link to={`/projects/${projectId}/chapters/${chapter.id}/synopsis`}>Edit Chapter Synopsis</Link>
+            </div>
+            {/* --- END ADDED --- */}
+
 
             {/* Scene List or Split Area or Loading */}
             {isLoadingChapterScenes ? (
@@ -325,7 +373,7 @@ const ChapterSection = memo(function ChapterSection({ // Use memo and give the f
             </div>
         </div>
     );
-}); // --- END MODIFICATION: Close memo HOC ---
+});
 
 // PropTypes remain the same
 ChapterSection.propTypes = {
