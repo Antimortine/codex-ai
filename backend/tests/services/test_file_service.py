@@ -15,12 +15,14 @@
 import pytest
 from pathlib import Path
 import json
+import time # Import time for timestamps
 from fastapi import HTTPException
 import sys
 from unittest.mock import patch, MagicMock, call, ANY # Import ANY
 
 # Import the service instance we are testing
 from app.services import file_service # Import the module itself
+# Import BASE_PROJECT_DIR from config
 from app.core.config import BASE_PROJECT_DIR
 # Import index_manager's module to specify the correct patch target
 import app.rag.index_manager
@@ -452,3 +454,146 @@ def test_add_update_delete_chat_session_metadata(temp_project_dir: Path, monkeyp
     file_service.file_service.delete_chat_session_metadata(project_id, "non-existent")
     meta = file_service.file_service.read_project_metadata(project_id)
     assert meta["chat_sessions"] == {session_id_1: {"name": "Updated First"}}
+
+# --- ADDED: Tests for get_project_last_content_modification ---
+
+def create_mock_path(path_str, is_dir, is_file, mtime, children=None, suffix='.txt', relative_parts=None):
+    """Helper to create a mock Path object."""
+    mock = MagicMock(spec=Path)
+    mock.name = Path(path_str).name
+    mock.is_dir.return_value = is_dir
+    mock.is_file.return_value = is_file
+    mock.stat.return_value.st_mtime = mtime
+    mock.suffix = suffix
+    mock.__str__.return_value = path_str
+    mock.resolve.return_value = mock # Simple resolve for testing
+
+    # Mock relative_to to return a mock object with parts
+    mock_relative = MagicMock()
+    mock_relative.parts = relative_parts if relative_parts is not None else Path(path_str).parts
+    mock.relative_to.return_value = mock_relative
+
+    # Mock rglob to return children if provided
+    if children is not None:
+        mock.rglob.return_value = children
+    else:
+        mock.rglob.return_value = []
+
+    return mock
+
+@patch('app.services.file_service.Path', autospec=True)
+def test_get_last_content_modification_empty_dir(mock_path_cls):
+    """Test with an empty directory."""
+    dir_mtime = time.time() - 1000
+    mock_project_path = create_mock_path("user_projects/proj_empty", is_dir=True, is_file=False, mtime=dir_mtime, children=[])
+    mock_path_cls.return_value = mock_project_path # Mock Path() constructor
+
+    # Mock path_exists used internally
+    with patch.object(file_service.file_service, 'path_exists', return_value=True):
+        result_mtime = file_service.file_service.get_project_last_content_modification(mock_project_path)
+
+    assert result_mtime == dir_mtime # Should return the directory's own mtime
+
+@patch('app.services.file_service.Path', autospec=True)
+def test_get_last_content_modification_only_irrelevant_files(mock_path_cls):
+    """Test with only files that should be ignored."""
+    dir_mtime = time.time() - 2000
+    file1_mtime = time.time() - 1500
+    file2_mtime = time.time() - 1800 # Older than file1, newer than dir
+
+    mock_file1 = create_mock_path("user_projects/proj_irrelevant/config.ini", is_dir=False, is_file=True, mtime=file1_mtime, suffix='.ini')
+    mock_file2 = create_mock_path("user_projects/proj_irrelevant/image.jpg", is_dir=False, is_file=True, mtime=file2_mtime, suffix='.jpg')
+    mock_project_path = create_mock_path("user_projects/proj_irrelevant", is_dir=True, is_file=False, mtime=dir_mtime, children=[mock_file1, mock_file2])
+    mock_path_cls.return_value = mock_project_path
+
+    with patch.object(file_service.file_service, 'path_exists', return_value=True):
+        result_mtime = file_service.file_service.get_project_last_content_modification(mock_project_path)
+
+    assert result_mtime == dir_mtime # Should return dir mtime as no relevant files found
+
+@patch('app.services.file_service.Path', autospec=True)
+def test_get_last_content_modification_finds_latest_md(mock_path_cls):
+    """Test finding the latest among .md and .json files."""
+    dir_mtime = time.time() - 3000
+    plan_mtime = time.time() - 2500
+    scene1_mtime = time.time() - 1000 # Latest
+    meta_mtime = time.time() - 2800
+    other_mtime = time.time() - 500 # Irrelevant but newest overall
+
+    mock_plan = create_mock_path("user_projects/proj_latest/plan.md", is_dir=False, is_file=True, mtime=plan_mtime, suffix='.md')
+    mock_scene1 = create_mock_path("user_projects/proj_latest/chapters/ch1/scene1.md", is_dir=False, is_file=True, mtime=scene1_mtime, suffix='.md')
+    mock_meta = create_mock_path("user_projects/proj_latest/project_meta.json", is_dir=False, is_file=True, mtime=meta_mtime, suffix='.json')
+    mock_other = create_mock_path("user_projects/proj_latest/temp.tmp", is_dir=False, is_file=True, mtime=other_mtime, suffix='.tmp')
+    mock_project_path = create_mock_path("user_projects/proj_latest", is_dir=True, is_file=False, mtime=dir_mtime, children=[mock_plan, mock_scene1, mock_meta, mock_other])
+    mock_path_cls.return_value = mock_project_path
+
+    with patch.object(file_service.file_service, 'path_exists', return_value=True):
+        result_mtime = file_service.file_service.get_project_last_content_modification(mock_project_path)
+
+    assert result_mtime == scene1_mtime # Should return the mtime of the latest relevant file
+
+@patch('app.services.file_service.Path', autospec=True)
+def test_get_last_content_modification_skips_excluded_dirs(mock_path_cls):
+    """Test that files within excluded directories are ignored."""
+    dir_mtime = time.time() - 4000
+    plan_mtime = time.time() - 3000 # This should be the latest relevant
+    venv_file_mtime = time.time() - 1000 # Newest overall, but excluded
+    chroma_file_mtime = time.time() - 2000 # Also excluded
+
+    mock_plan = create_mock_path("user_projects/proj_exclude/plan.md", is_dir=False, is_file=True, mtime=plan_mtime, suffix='.md', relative_parts=('plan.md',))
+    # Mock files within excluded dirs - need correct relative_parts
+    mock_venv_file = create_mock_path("user_projects/proj_exclude/venv/lib/site.py", is_dir=False, is_file=True, mtime=venv_file_mtime, suffix='.py', relative_parts=('venv', 'lib', 'site.py'))
+    mock_chroma_file = create_mock_path("user_projects/proj_exclude/chroma_db/data.log", is_dir=False, is_file=True, mtime=chroma_file_mtime, suffix='.log', relative_parts=('chroma_db', 'data.log'))
+    mock_project_path = create_mock_path("user_projects/proj_exclude", is_dir=True, is_file=False, mtime=dir_mtime, children=[mock_plan, mock_venv_file, mock_chroma_file])
+    mock_path_cls.return_value = mock_project_path
+
+    with patch.object(file_service.file_service, 'path_exists', return_value=True):
+        result_mtime = file_service.file_service.get_project_last_content_modification(mock_project_path)
+
+    assert result_mtime == plan_mtime # Should ignore files in venv and chroma_db
+
+@patch('app.services.file_service.Path', autospec=True)
+def test_get_last_content_modification_handles_stat_error(mock_path_cls):
+    """Test that it handles OSError when stating a file."""
+    dir_mtime = time.time() - 3000
+    plan_mtime = time.time() - 2000 # Should be the result
+    error_file_mtime = time.time() - 1000 # Would be latest, but stat fails
+
+    mock_plan = create_mock_path("user_projects/proj_stat_err/plan.md", is_dir=False, is_file=True, mtime=plan_mtime, suffix='.md')
+    mock_error_file = create_mock_path("user_projects/proj_stat_err/error.json", is_dir=False, is_file=True, mtime=error_file_mtime, suffix='.json')
+    # Make stat raise an error for this specific file
+    mock_error_file.stat.side_effect = OSError("Permission denied")
+    mock_project_path = create_mock_path("user_projects/proj_stat_err", is_dir=True, is_file=False, mtime=dir_mtime, children=[mock_plan, mock_error_file])
+    mock_path_cls.return_value = mock_project_path
+
+    with patch.object(file_service.file_service, 'path_exists', return_value=True):
+        result_mtime = file_service.file_service.get_project_last_content_modification(mock_project_path)
+
+    assert result_mtime == plan_mtime # Should ignore the file that caused stat error
+
+@patch('app.services.file_service.Path', autospec=True)
+def test_get_last_content_modification_non_existent_dir(mock_path_cls):
+    """Test when the project path doesn't exist."""
+    mock_project_path = create_mock_path("user_projects/proj_non_exist", is_dir=False, is_file=False, mtime=0)
+    mock_path_cls.return_value = mock_project_path
+
+    # Mock path_exists to return False
+    with patch.object(file_service.file_service, 'path_exists', return_value=False):
+        result_mtime = file_service.file_service.get_project_last_content_modification(mock_project_path)
+
+    assert result_mtime is None
+
+@patch('app.services.file_service.Path', autospec=True)
+def test_get_last_content_modification_path_is_file(mock_path_cls):
+    """Test when the provided path is a file, not a directory."""
+    file_mtime = time.time() - 500
+    mock_file_path = create_mock_path("user_projects/proj_is_file.md", is_dir=False, is_file=True, mtime=file_mtime, suffix='.md')
+    mock_path_cls.return_value = mock_file_path
+
+    # Mock path_exists to return True
+    with patch.object(file_service.file_service, 'path_exists', return_value=True):
+        result_mtime = file_service.file_service.get_project_last_content_modification(mock_file_path)
+
+    assert result_mtime is None # Should return None as it expects a directory
+
+# --- END ADDED ---
