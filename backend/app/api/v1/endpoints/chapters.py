@@ -1,4 +1,4 @@
-# Copyright 2025 Antimortine (antimortine@gmail.com)
+# Copyright 2025 Antimortine
 #
 # Licensed under the Apache License, Version 2.0 (the "License");
 # you may not use this file except in compliance with the License.
@@ -15,11 +15,20 @@
 from fastapi import APIRouter, HTTPException, status, Body, Path, Depends
 from typing import List
 from app.models.chapter import ChapterCreate, ChapterUpdate, ChapterRead, ChapterList
+# --- ADDED: Import ContentBlock models ---
+from app.models.content_block import ContentBlockRead, ContentBlockUpdate
+# --- END ADDED ---
 from app.models.common import Message
 # Import the specific service instance
 from app.services.chapter_service import chapter_service
+# --- ADDED: Import file_service ---
+from app.services.file_service import file_service
+# --- END ADDED ---
 # Import the project existence dependency from content_blocks or define it here/in deps.py
 from app.api.v1.endpoints.content_blocks import get_project_dependency
+# --- ADDED: Import chapter dependency ---
+from app.api.v1.endpoints.scenes import get_chapter_dependency
+# --- END ADDED ---
 
 router = APIRouter()
 
@@ -127,3 +136,89 @@ async def delete_chapter(
     # Service layer handles 404
     chapter_service.delete(project_id=project_id, chapter_id=chapter_id)
     return Message(message=f"Chapter {chapter_id} deleted successfully")
+
+# --- ADDED: Chapter Plan Endpoints ---
+@router.get(
+    "/{chapter_id}/plan",
+    response_model=ContentBlockRead,
+    tags=["Chapters", "Content Blocks"],
+    summary="Get Chapter Plan",
+    description="Retrieves the plan content for a specific chapter."
+)
+async def get_chapter_plan(ids: tuple[str, str] = Depends(get_chapter_dependency)):
+    """
+    Gets the plan.md content for a specific chapter.
+    Returns empty content if the file doesn't exist.
+    """
+    project_id, chapter_id = ids
+    content = file_service.read_chapter_plan_file(project_id, chapter_id)
+    return ContentBlockRead(project_id=project_id, content=content or "")
+
+@router.put(
+    "/{chapter_id}/plan",
+    response_model=ContentBlockRead,
+    tags=["Chapters", "Content Blocks"],
+    summary="Update Chapter Plan",
+    description="Updates (or creates) the plan content for a specific chapter. Triggers indexing."
+)
+async def update_chapter_plan(
+    content_in: ContentBlockUpdate = Body(...),
+    ids: tuple[str, str] = Depends(get_chapter_dependency)
+):
+    """
+    Updates the plan.md content for a specific chapter.
+
+    - **project_id**: The UUID of the parent project (in path).
+    - **chapter_id**: The UUID of the parent chapter (in path).
+    - **content_in**: ContentBlockUpdate model containing the new content.
+    """
+    project_id, chapter_id = ids
+    try:
+        file_service.write_chapter_plan_file(project_id, chapter_id, content_in.content)
+    except HTTPException as e:
+        raise e # Re-raise file/index errors
+    return ContentBlockRead(project_id=project_id, content=content_in.content)
+# --- END ADDED ---
+
+# --- ADDED: Chapter Synopsis Endpoints ---
+@router.get(
+    "/{chapter_id}/synopsis",
+    response_model=ContentBlockRead,
+    tags=["Chapters", "Content Blocks"],
+    summary="Get Chapter Synopsis",
+    description="Retrieves the synopsis content for a specific chapter."
+)
+async def get_chapter_synopsis(ids: tuple[str, str] = Depends(get_chapter_dependency)):
+    """
+    Gets the synopsis.md content for a specific chapter.
+    Returns empty content if the file doesn't exist.
+    """
+    project_id, chapter_id = ids
+    content = file_service.read_chapter_synopsis_file(project_id, chapter_id)
+    return ContentBlockRead(project_id=project_id, content=content or "")
+
+@router.put(
+    "/{chapter_id}/synopsis",
+    response_model=ContentBlockRead,
+    tags=["Chapters", "Content Blocks"],
+    summary="Update Chapter Synopsis",
+    description="Updates (or creates) the synopsis content for a specific chapter. Triggers indexing."
+)
+async def update_chapter_synopsis(
+    content_in: ContentBlockUpdate = Body(...),
+    ids: tuple[str, str] = Depends(get_chapter_dependency)
+):
+    """
+    Updates the synopsis.md content for a specific chapter.
+
+    - **project_id**: The UUID of the parent project (in path).
+    - **chapter_id**: The UUID of the parent chapter (in path).
+    - **content_in**: ContentBlockUpdate model containing the new content.
+    """
+    project_id, chapter_id = ids
+    try:
+        file_service.write_chapter_synopsis_file(project_id, chapter_id, content_in.content)
+    except HTTPException as e:
+        raise e # Re-raise file/index errors
+    return ContentBlockRead(project_id=project_id, content=content_in.content)
+# --- END ADDED ---

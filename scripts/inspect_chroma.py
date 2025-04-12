@@ -14,55 +14,129 @@
 
 import chromadb
 import sys
+import argparse # Import argparse
+from pathlib import Path # Import Path
 
 # --- Configuration (Match IndexManager) ---
-CHROMA_PERSIST_DIR = "../backend/chroma_db"
-CHROMA_COLLECTION_NAME = "codex_ai_documents"
+# Assume script is run from the root 'scripts/' directory
+DEFAULT_CHROMA_PERSIST_DIR = "../backend/chroma_db"
+DEFAULT_CHROMA_COLLECTION_NAME = "codex_ai_documents"
 
-try:
-    print(f"Connecting to ChromaDB at: {CHROMA_PERSIST_DIR}")
-    client = chromadb.PersistentClient(path=CHROMA_PERSIST_DIR)
+def inspect_chroma(db_path: str, collection_name: str, project_id_filter: str | None = None, limit: int = 5):
+    """
+    Connects to a persistent ChromaDB collection, displays its total count,
+    and shows sample documents, optionally filtering by project_id.
+    """
+    try:
+        resolved_db_path = Path(db_path).resolve()
+        print(f"Connecting to ChromaDB at: {resolved_db_path}")
+        if not resolved_db_path.exists() or not resolved_db_path.is_dir():
+            print(f"Error: ChromaDB persistence directory not found at '{resolved_db_path}'.", file=sys.stderr)
+            print("Please ensure the backend has run at least once to create the database or provide the correct path via --db-path.", file=sys.stderr)
+            sys.exit(1)
 
-    print(f"Getting collection: {CHROMA_COLLECTION_NAME}")
-    # Use get_collection to avoid creating if it doesn't exist (it should after indexing)
-    collection = client.get_collection(name=CHROMA_COLLECTION_NAME)
+        client = chromadb.PersistentClient(path=str(resolved_db_path)) # Use resolved path string
 
-    count = collection.count()
-    print(f"\nCollection '{CHROMA_COLLECTION_NAME}' found with {count} documents.")
+        print(f"Getting collection: {collection_name}")
+        try:
+            # Use get_collection to ensure it exists
+            collection = client.get_collection(name=collection_name)
+        except Exception as e:
+            print(f"Error: Could not get collection '{collection_name}'. Does it exist?", file=sys.stderr)
+            print(f"Details: {e}", file=sys.stderr)
+            sys.exit(1)
 
-    if count > 0:
-        print("\nGetting first few documents (max 5):")
-        # Peek at some data - includes embeddings, metadata, documents/text
-        results = collection.peek(limit=5)
-        # Or get all data if you prefer (might be large)
-        # results = collection.get(include=["metadatas", "documents"])
+        # --- Filtering Logic ---
+        where_filter = None
+        if project_id_filter:
+            where_filter = {"project_id": project_id_filter}
+            print(f"\nApplying filter: project_id == '{project_id_filter}'")
 
-        print("\n--- Sample Data ---")
-        if results.get("ids"):
-             for i, doc_id in enumerate(results["ids"]):
-                  print(f"ID: {doc_id}")
-                  if results.get("metadatas") and len(results["metadatas"]) > i:
-                       print(f"  Metadata: {results['metadatas'][i]}")
-                  if results.get("documents") and len(results["documents"]) > i:
-                       # Only print start of document if long
-                       doc_content = results['documents'][i]
-                       print(f"  Document: {doc_content[:100]}{'...' if len(doc_content) > 100 else ''}")
-                  print("-" * 10)
-        else:
-             print("Peek results format unexpected or empty.")
-        print("-------------------")
+        count = collection.count() # Total count in the collection
+        print(f"\nCollection '{collection_name}' found with {count} total documents.")
 
-    # Example: Get documents by specific ID (replace with an actual file path used)
-    # specific_id = r"user_projects\your_project_id\plan.md" # Use raw string for Windows paths
-    # try:
-    #     print(f"\nGetting specific document by ID: {specific_id}")
-    #     specific_doc = collection.get(ids=[specific_id], include=["metadatas", "documents"])
-    #     print(specific_doc)
-    # except Exception as e:
-    #     print(f"Could not get specific document (may not exist): {e}")
+        # Get filtered count if applicable
+        filtered_count = count
+        if where_filter:
+            try:
+                # Getting filtered results just to count is inefficient, but count() doesn't take where
+                # A more efficient way might involve querying with limit=0 and checking metadata,
+                # but ChromaDB's API for filtered count isn't direct. Let's get IDs.
+                filtered_ids = collection.get(where=where_filter, include=[])['ids']
+                filtered_count = len(filtered_ids)
+                print(f"Found {filtered_count} documents matching the filter.")
+            except Exception as e:
+                 print(f"Warning: Could not accurately determine filtered count. Error: {e}", file=sys.stderr)
+                 # Proceed to try and get data anyway
 
+        if filtered_count > 0:
+            print(f"\nGetting first few documents (limit {limit})" + (f" matching filter:" if where_filter else ":"))
+            # Peek doesn't support where filters directly as of chromadb 0.4.x
+            # We need to use get() with the filter
+            results = collection.get(
+                where=where_filter, # Apply filter here
+                limit=limit,
+                include=["metadatas", "documents"] # Specify what to include
+            )
 
-except Exception as e:
-    print(f"\nAn error occurred: {e}", file=sys.stderr)
-    import traceback
-    traceback.print_exc()
+            print("\n--- Sample Data ---")
+            if results and results.get("ids"):
+                 num_results = len(results["ids"])
+                 print(f"(Showing {num_results} out of {filtered_count} matching documents)")
+                 for i, doc_id in enumerate(results["ids"]):
+                      print(f"ID: {doc_id}")
+                      if results.get("metadatas") and len(results["metadatas"]) > i:
+                           print(f"  Metadata: {results['metadatas'][i]}")
+                      if results.get("documents") and len(results["documents"]) > i:
+                           doc_content = results['documents'][i] or "" # Handle potential None
+                           print(f"  Document: {doc_content[:150]}{'...' if len(doc_content) > 150 else ''}")
+                      print("-" * 10)
+            else:
+                 print("No documents found matching the criteria or results format unexpected.")
+            print("-------------------")
+        elif count > 0 and where_filter:
+             print("No documents found matching the specified filter.")
+        # --- End Filtering Logic ---
+
+    except Exception as e:
+        print(f"\nAn error occurred: {e}", file=sys.stderr)
+        import traceback
+        traceback.print_exc()
+        sys.exit(1)
+
+if __name__ == "__main__":
+    parser = argparse.ArgumentParser(
+        description="Inspects a ChromaDB collection used by Codex AI.",
+        formatter_class=argparse.ArgumentDefaultsHelpFormatter # Show defaults in help
+    )
+    parser.add_argument(
+        "--db-path",
+        default=DEFAULT_CHROMA_PERSIST_DIR,
+        help="Path to the ChromaDB persistence directory."
+    )
+    parser.add_argument(
+        "--collection",
+        default=DEFAULT_CHROMA_COLLECTION_NAME,
+        help="Name of the ChromaDB collection to inspect."
+    )
+    parser.add_argument(
+        "--project",
+        metavar="PROJECT_ID",
+        default=None,
+        help="Optional: Filter documents by a specific project_id."
+    )
+    parser.add_argument(
+        "--limit",
+        type=int,
+        default=5,
+        help="Maximum number of sample documents to display."
+    )
+
+    args = parser.parse_args()
+
+    inspect_chroma(
+        db_path=args.db_path,
+        collection_name=args.collection,
+        project_id_filter=args.project,
+        limit=args.limit
+    )

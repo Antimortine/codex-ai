@@ -30,6 +30,9 @@ from typing import List, Optional, Set # Import Set
 
 from app.models.ai import ProposedScene
 from app.core.config import settings # Import settings
+# --- ADDED: Import file_service ---
+from app.services.file_service import file_service
+# --- END ADDED ---
 
 logger = logging.getLogger(__name__)
 
@@ -75,8 +78,12 @@ class ChapterSplitter:
         project_id: str,
         chapter_id: str,
         chapter_content: str,
-        explicit_plan: str,
-        explicit_synopsis: str,
+        explicit_plan: Optional[str], # Now optional
+        explicit_synopsis: Optional[str], # Now optional
+        # --- ADDED: Chapter context ---
+        explicit_chapter_plan: Optional[str],
+        explicit_chapter_synopsis: Optional[str],
+        # --- END ADDED ---
         paths_to_filter: Optional[Set[str]] = None
         ) -> List[ProposedScene]:
         """
@@ -91,13 +98,24 @@ class ChapterSplitter:
             logger.warning("Chapter content is empty, cannot split.")
             return []
 
+        # --- ADDED: Get chapter title ---
+        chapter_title = f"Chapter {chapter_id}" # Default
+        try:
+            project_meta = file_service.read_project_metadata(project_id)
+            chapter_info = project_meta.get('chapters', {}).get(chapter_id)
+            if chapter_info and chapter_info.get('title'):
+                chapter_title = chapter_info['title']
+        except Exception as e:
+            logger.warning(f"Could not retrieve chapter title for {chapter_id}: {e}")
+        # --- END ADDED ---
+
         final_paths_to_filter_obj = {Path(p).resolve() for p in (paths_to_filter or set())}
         logger.debug(f"ChapterSplitter: Paths to filter (resolved): {final_paths_to_filter_obj}")
         retrieved_nodes: List[NodeWithScore] = []
         nodes_for_prompt: List[NodeWithScore] = []
 
         try:
-            # --- Retrieve RAG Context ---
+            # --- Retrieve RAG Context (Unchanged logic) ---
             logger.debug("Retrieving context for chapter splitting...")
             retrieval_query = f"Find context relevant to splitting the following chapter content into scenes: {chapter_content[:1000]}..."
             logger.debug(f"Constructed retrieval query for chapter split: '{retrieval_query}'")
@@ -114,7 +132,7 @@ class ChapterSplitter:
             else:
                 logger.debug("ChapterSplitter: No nodes retrieved.")
 
-            # --- ADDED: Deduplicate retrieved nodes before filtering ---
+            # --- Deduplication and Filtering (Unchanged logic) ---
             unique_retrieved_nodes_map = {}
             if retrieved_nodes:
                 for node_with_score in retrieved_nodes:
@@ -125,27 +143,25 @@ class ChapterSplitter:
             unique_retrieved_nodes = list(unique_retrieved_nodes_map.values())
             if len(unique_retrieved_nodes) < len(retrieved_nodes):
                 logger.debug(f"Deduplicated {len(retrieved_nodes) - len(unique_retrieved_nodes)} nodes based on content and file path.")
-            # --- END ADDED ---
 
-            # --- Filter unique retrieved nodes using Path objects ---
-            if unique_retrieved_nodes: # Filter the deduplicated list
+            if unique_retrieved_nodes:
                 logger.debug(f"ChapterSplitter: Starting node filtering against {len(final_paths_to_filter_obj)} filter paths.")
-                for node_with_score in unique_retrieved_nodes: # Iterate over unique nodes
+                for node_with_score in unique_retrieved_nodes:
                     node = node_with_score.node
                     node_path_str = node.metadata.get('file_path')
                     if not node_path_str:
                         logger.warning(f"Node {node.node_id} missing 'file_path' metadata. Including in prompt.")
-                        nodes_for_prompt.append(node_with_score) # Append NodeWithScore
+                        nodes_for_prompt.append(node_with_score)
                         continue
                     try:
                         node_path_obj = Path(node_path_str).resolve()
                         is_filtered = node_path_obj in final_paths_to_filter_obj
                         logger.debug(f"  Comparing Node Path: {node_path_obj} | In Filter Set: {is_filtered}")
                         if not is_filtered:
-                            nodes_for_prompt.append(node_with_score) # Append NodeWithScore
+                            nodes_for_prompt.append(node_with_score)
                     except Exception as e:
                         logger.error(f"Error resolving or comparing path '{node_path_str}' for node {node.node_id}. Including node. Error: {e}")
-                        nodes_for_prompt.append(node_with_score) # Append NodeWithScore
+                        nodes_for_prompt.append(node_with_score)
 
                 if len(nodes_for_prompt) < len(unique_retrieved_nodes):
                     logger.debug(f"Filtered {len(unique_retrieved_nodes) - len(nodes_for_prompt)} unique retrieved nodes based on paths_to_filter.")
@@ -157,7 +173,7 @@ class ChapterSplitter:
             else:
                 logger.debug("ChapterSplitter: No nodes remaining after filtering.")
 
-            # Format context using type and title (using filtered nodes)
+            # Format RAG context (Unchanged logic)
             rag_context_list = []
             if nodes_for_prompt:
                  for node_with_score in nodes_for_prompt:
@@ -183,19 +199,27 @@ class ChapterSplitter:
                 "For each scene, provide a concise title and the full Markdown content."
             )
 
-            max_context_len = 1500
-            truncated_plan = (explicit_plan or '')[:max_context_len] + ('...' if len(explicit_plan or '') > max_context_len else '')
-            truncated_synopsis = (explicit_synopsis or '')[:max_context_len] + ('...' if len(explicit_synopsis or '') > max_context_len else '')
-
             scene_start_delim = "<<<SCENE_START>>>"; scene_end_delim = "<<<SCENE_END>>>"; title_prefix = "TITLE:"; content_prefix = "CONTENT:"
 
             user_message_content = (
                 f"Analyze the chapter content provided below (between <<<CHAPTER_START>>> and <<<CHAPTER_END>>>) and split it into distinct scenes. "
-                f"The chapter ID is '{chapter_id}'.\n\n"
-                "Use the provided Project Plan, Synopsis, and Additional Context for context on the overall story and potential scene breaks.\n\n" # Added Additional Context mention
-                f"**Project Plan:**\n```markdown\n{truncated_plan or 'Not Available'}\n```\n\n"
-                f"**Project Synopsis:**\n```markdown\n{truncated_synopsis or 'Not Available'}\n```\n\n"
-                f"**Additional Retrieved Context:**\n```markdown\n{rag_context_str}\n```\n\n" # Added retrieved context section
+                f"The chapter ID is '{chapter_id}' and the chapter title is '{chapter_title}'.\n\n" # Added chapter title
+                "Use the provided Project Plan, Project Synopsis, Chapter Plan, Chapter Synopsis, and Additional Context for context on the overall story and potential scene breaks.\n\n" # Added Chapter Plan/Synopsis mention
+            )
+
+            # --- MODIFIED: Conditionally add context sections ---
+            if explicit_plan:
+                user_message_content += f"**Project Plan:**\n```markdown\n{explicit_plan}\n```\n\n"
+            if explicit_synopsis:
+                user_message_content += f"**Project Synopsis:**\n```markdown\n{explicit_synopsis}\n```\n\n"
+            if explicit_chapter_plan:
+                user_message_content += f"**Chapter Plan (for Chapter '{chapter_title}'):**\n```markdown\n{explicit_chapter_plan}\n```\n\n"
+            if explicit_chapter_synopsis:
+                user_message_content += f"**Chapter Synopsis (for Chapter '{chapter_title}'):**\n```markdown\n{explicit_chapter_synopsis}\n```\n\n"
+            # --- END MODIFIED ---
+
+            user_message_content += (
+                f"**Additional Retrieved Context:**\n```markdown\n{rag_context_str}\n```\n\n"
                 f"<<<CHAPTER_START>>>\n{chapter_content}\n<<<CHAPTER_END>>>\n\n"
                 f"**Output Format Requirement:** Your response MUST consist ONLY of scene blocks. Each scene block MUST start exactly with '{scene_start_delim}' on its own line, followed by a line starting exactly with '{title_prefix} ' and the scene title, followed by a line starting exactly with '{content_prefix}', followed by the full Markdown content of the scene (which can span multiple lines), and finally end exactly with '{scene_end_delim}' on its own line. Ensure the 'content' segments cover the original chapter without overlap or gaps. The title MUST be in the same language as the main chapter content."
                 f"\nExample:\n{scene_start_delim}\n{title_prefix} The Arrival\n{content_prefix}\nThe character arrived.\n{scene_end_delim}\n{scene_start_delim}\n{title_prefix} The Conversation\n{content_prefix}\nThey talked for hours.\n{scene_end_delim}"
@@ -212,7 +236,7 @@ class ChapterSplitter:
                  logger.warning("LLM returned an empty response for chapter splitting.")
                  raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Error: The AI failed to propose scene splits.")
 
-            # --- Parse the Response ---
+            # --- Parse the Response (Unchanged logic) ---
             logger.debug("Parsing LLM response for scene splits...")
             proposed_scenes = []
             scene_pattern = re.compile( rf"^{re.escape(scene_start_delim)}\s*?\n" rf"^{re.escape(title_prefix)}\s*(.*?)\s*?\n" rf"^{re.escape(content_prefix)}\s*?\n?" rf"(.*?)" rf"^{re.escape(scene_end_delim)}\s*?$", re.DOTALL | re.MULTILINE )
@@ -227,7 +251,7 @@ class ChapterSplitter:
             logger.info(f"Successfully parsed {len(proposed_scenes)} proposed scenes.")
             return proposed_scenes
 
-        # --- Exception Handling (Catch GoogleAPICallError) ---
+        # --- Exception Handling (Unchanged) ---
         except GoogleAPICallError as e:
              if _is_retryable_google_api_error(e):
                   logger.error(f"Rate limit error persisted after retries for chapter split: {e}", exc_info=False)

@@ -63,8 +63,15 @@ class QueryProcessor:
         return await self.llm.acomplete(prompt, temperature=settings.LLM_TEMPERATURE)
         # --- END MODIFIED ---
 
-    async def query(self, project_id: str, query_text: str, explicit_plan: str, explicit_synopsis: str,
+    async def query(self,
+                  project_id: str,
+                  query_text: str,
+                  explicit_plan: Optional[str], # Now optional
+                  explicit_synopsis: Optional[str], # Now optional
                   direct_sources_data: Optional[List[Dict]] = None,
+                  # --- ADDED: direct_chapter_context ---
+                  direct_chapter_context: Optional[Dict[str, Optional[str]]] = None,
+                  # --- END ADDED ---
                   paths_to_filter: Optional[Set[str]] = None
                   ) -> Tuple[str, List[NodeWithScore], Optional[List[Dict[str, str]]]]:
         logger.info(f"QueryProcessor: Received query for project '{project_id}': '{query_text}'")
@@ -81,6 +88,15 @@ class QueryProcessor:
                      "type": source.get("type", "Unknown"),
                      "name": source.get("name", "Unknown")
                  })
+        # --- ADDED: Include chapter context in direct sources info if present ---
+        if direct_chapter_context:
+            if not direct_sources_info_list: direct_sources_info_list = []
+            chapter_title = direct_chapter_context.get('chapter_title', 'Unknown Chapter')
+            if direct_chapter_context.get('chapter_plan'):
+                direct_sources_info_list.append({'type': 'ChapterPlan', 'name': f"Plan for Chapter '{chapter_title}'"})
+            if direct_chapter_context.get('chapter_synopsis'):
+                direct_sources_info_list.append({'type': 'ChapterSynopsis', 'name': f"Synopsis for Chapter '{chapter_title}'"})
+        # --- END ADDED ---
 
         try:
             # 1. Create Retriever & Retrieve Nodes
@@ -95,40 +111,36 @@ class QueryProcessor:
             else:
                 logger.debug("QueryProcessor: No nodes retrieved.")
 
-            # --- ADDED: Deduplicate retrieved nodes before filtering ---
+            # --- Deduplication and Filtering (Unchanged) ---
             unique_retrieved_nodes_map = {}
             if retrieved_nodes:
                 for node_with_score in retrieved_nodes:
                     node = node_with_score.node
-                    # Use text content and file path as a key for uniqueness
                     unique_key = (node.get_content(), node.metadata.get('file_path'))
-                    # Keep the node with the highest score if duplicates found
                     if unique_key not in unique_retrieved_nodes_map or node_with_score.score > unique_retrieved_nodes_map[unique_key].score:
                         unique_retrieved_nodes_map[unique_key] = node_with_score
             unique_retrieved_nodes = list(unique_retrieved_nodes_map.values())
             if len(unique_retrieved_nodes) < len(retrieved_nodes):
                 logger.debug(f"Deduplicated {len(retrieved_nodes) - len(unique_retrieved_nodes)} nodes based on content and file path.")
-            # --- END ADDED ---
 
-            # --- Filter unique retrieved nodes using Path objects ---
-            if unique_retrieved_nodes: # Filter the deduplicated list
+            if unique_retrieved_nodes:
                 logger.debug(f"QueryProcessor: Starting node filtering against {len(final_paths_to_filter_obj)} filter paths.")
-                for node_with_score in unique_retrieved_nodes: # Iterate over unique nodes
+                for node_with_score in unique_retrieved_nodes:
                     node = node_with_score.node
                     node_path_str = node.metadata.get('file_path')
                     if not node_path_str:
                         logger.warning(f"Node {node.node_id} missing 'file_path' metadata. Including in prompt.")
-                        nodes_for_prompt.append(node_with_score) # Append NodeWithScore
+                        nodes_for_prompt.append(node_with_score)
                         continue
                     try:
                         node_path_obj = Path(node_path_str).resolve()
                         is_filtered = node_path_obj in final_paths_to_filter_obj
                         logger.debug(f"  Comparing Node Path: {node_path_obj} | In Filter Set: {is_filtered}")
                         if not is_filtered:
-                            nodes_for_prompt.append(node_with_score) # Append NodeWithScore
+                            nodes_for_prompt.append(node_with_score)
                     except Exception as e:
                         logger.error(f"Error resolving or comparing path '{node_path_str}' for node {node.node_id}. Including node. Error: {e}")
-                        nodes_for_prompt.append(node_with_score) # Append NodeWithScore
+                        nodes_for_prompt.append(node_with_score)
 
                 if len(nodes_for_prompt) < len(unique_retrieved_nodes):
                     logger.debug(f"Filtered {len(unique_retrieved_nodes) - len(nodes_for_prompt)} unique retrieved nodes based on paths_to_filter.")
@@ -148,20 +160,39 @@ class QueryProcessor:
                 "Prioritize the Directly Requested Content if it seems most relevant to the query. "
                 "If the context doesn't contain the answer, say that you cannot answer based on the provided information."
             )
-            user_message_content = (
-                f"**User Query:**\n{query_text}\n\n"
-                f"**Project Plan:**\n```markdown\n{explicit_plan or 'Not Available'}\n```\n\n"
-                f"**Project Synopsis:**\n```markdown\n{explicit_synopsis or 'Not Available'}\n```\n\n"
-            )
+            user_message_content = f"**User Query:**\n{query_text}\n\n"
+
+            # --- MODIFIED: Conditionally add project context ---
+            if explicit_plan:
+                user_message_content += f"**Project Plan:**\n```markdown\n{explicit_plan}\n```\n\n"
+            if explicit_synopsis:
+                user_message_content += f"**Project Synopsis:**\n```markdown\n{explicit_synopsis}\n```\n\n"
+            # --- END MODIFIED ---
+
+            # --- MODIFIED: Conditionally add direct chapter context ---
+            if direct_chapter_context:
+                chapter_title = direct_chapter_context.get('chapter_title', 'Unknown Chapter')
+                chapter_plan = direct_chapter_context.get('chapter_plan')
+                chapter_synopsis = direct_chapter_context.get('chapter_synopsis')
+                has_direct_chapter_content = chapter_plan or chapter_synopsis
+                if has_direct_chapter_content:
+                    user_message_content += f"**Directly Requested Chapter Context (for Chapter '{chapter_title}'):**\n"
+                    if chapter_plan:
+                        user_message_content += f"--- Start Chapter Plan ---\n```markdown\n{chapter_plan}\n```\n--- End Chapter Plan ---\n\n"
+                    if chapter_synopsis:
+                        user_message_content += f"--- Start Chapter Synopsis ---\n```markdown\n{chapter_synopsis}\n```\n--- End Chapter Synopsis ---\n\n"
+            # --- END MODIFIED ---
+
+            # Add other direct sources (unchanged logic)
             if direct_sources_data:
                  user_message_content += "**Directly Requested Content:**\n"
                  for i, source_data in enumerate(direct_sources_data):
                       source_type = source_data.get('type', 'Unknown'); source_name = source_data.get('name', f'Source {i+1}'); source_content = source_data.get('content', ''); truncated_direct_content = source_content
                       user_message_content += (f"--- Start Directly Requested {source_type}: \"{source_name}\" ---\n" f"```markdown\n{truncated_direct_content}\n```\n" f"--- End Directly Requested {source_type}: \"{source_name}\" ---\n\n")
 
-            # --- Use filtered nodes_for_prompt and corrected formatting ---
+            # Add retrieved RAG context (unchanged logic, but uses filtered nodes)
             rag_context_list = []
-            if nodes_for_prompt: # Use filtered nodes
+            if nodes_for_prompt:
                  for node_with_score in nodes_for_prompt:
                       node = node_with_score.node
                       doc_type = node.metadata.get('document_type', 'Unknown')
@@ -187,11 +218,11 @@ class QueryProcessor:
             logger.info("LLM call complete.")
             if not answer: logger.warning("LLM query returned an empty response string."); answer = "(The AI did not provide an answer based on the context.)"
 
-            # --- Return the filtered nodes_for_prompt ---
+            # Return the filtered nodes_for_prompt
             logger.info(f"Query successful. Returning answer, {len(nodes_for_prompt)} filtered source nodes, and direct source info list (if any).")
             return answer, nodes_for_prompt, direct_sources_info_list
 
-        # --- Exception Handling ---
+        # --- Exception Handling (Unchanged) ---
         except GoogleAPICallError as e:
              if _is_retryable_google_api_error(e):
                  logger.error(f"Rate limit error persisted after retries for query: {e}", exc_info=False)

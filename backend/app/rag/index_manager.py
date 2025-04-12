@@ -147,6 +147,7 @@ class IndexManager:
         """
         Determines the document type and title based on its path and project metadata.
         For scenes, it also attempts to add chapter_id and chapter_title.
+        For chapter plan/synopsis, it adds chapter_id and chapter_title.
         Returns a dictionary containing metadata keys.
         """
         default_title = file_path.name
@@ -155,31 +156,19 @@ class IndexManager:
 
         try:
             relative_path_parts = file_path.relative_to(BASE_PROJECT_DIR / project_id).parts
+            # Project-level files
             if file_path.name == "plan.md" and len(relative_path_parts) == 1: details = {'document_type': 'Plan', 'document_title': 'Project Plan'}
             elif file_path.name == "synopsis.md" and len(relative_path_parts) == 1: details = {'document_type': 'Synopsis', 'document_title': 'Project Synopsis'}
             elif file_path.name == "world.md" and len(relative_path_parts) == 1: details = {'document_type': 'World', 'document_title': 'World Info'}
+            # Character files
             elif len(relative_path_parts) > 1 and relative_path_parts[0] == 'characters' and file_path.suffix == '.md':
                 character_id = file_path.stem; project_meta = fs.read_project_metadata(project_id)
                 char_name = project_meta.get('characters', {}).get(character_id, {}).get('name')
                 details = {'document_type': 'Character', 'document_title': char_name or character_id}
-            elif len(relative_path_parts) > 2 and relative_path_parts[0] == 'chapters' and relative_path_parts[2].endswith('.md'):
-                chapter_id = relative_path_parts[1]; scene_id = file_path.stem
-                scene_title = scene_id # Default to ID
+            # Chapter-level files (Scenes, Plan, Synopsis)
+            elif len(relative_path_parts) > 1 and relative_path_parts[0] == 'chapters':
+                chapter_id = relative_path_parts[1]
                 chapter_title = chapter_id # Default chapter title to ID
-
-                # Get Scene Title from chapter metadata
-                try:
-                    chapter_meta = fs.read_chapter_metadata(project_id, chapter_id)
-                    scene_meta = chapter_meta.get('scenes', {}).get(scene_id, {})
-                    title_from_meta = scene_meta.get('title') # Get title, could be None or empty string
-                    if title_from_meta:
-                        scene_title = title_from_meta
-                        logger.debug(f"Found scene title '{scene_title}' in chapter metadata for scene {scene_id}.")
-                    else:
-                        logger.warning(f"Scene title not found or empty in chapter metadata for scene {scene_id}. Using ID '{scene_id}' as title.")
-                except Exception as e:
-                    logger.warning(f"Could not read chapter metadata for {chapter_id} to get scene title for {scene_id}: {e}. Using ID '{scene_id}' as title.")
-
                 # Get Chapter Title from project metadata
                 try:
                     project_meta = fs.read_project_metadata(project_id)
@@ -193,12 +182,46 @@ class IndexManager:
                 except Exception as e:
                     logger.warning(f"Could not read project metadata to get chapter title for {chapter_id}: {e}. Using ID '{chapter_id}' as chapter title.")
 
-                details = {
-                    'document_type': 'Scene',
-                    'document_title': scene_title,
-                    'chapter_id': chapter_id,
-                    'chapter_title': chapter_title
-                }
+                # --- ADDED: Check for chapter plan/synopsis ---
+                if file_path.name == "plan.md" and len(relative_path_parts) == 3:
+                    details = {
+                        'document_type': 'ChapterPlan',
+                        'document_title': f"Plan for Chapter '{chapter_title}'",
+                        'chapter_id': chapter_id,
+                        'chapter_title': chapter_title
+                    }
+                elif file_path.name == "synopsis.md" and len(relative_path_parts) == 3:
+                    details = {
+                        'document_type': 'ChapterSynopsis',
+                        'document_title': f"Synopsis for Chapter '{chapter_title}'",
+                        'chapter_id': chapter_id,
+                        'chapter_title': chapter_title
+                    }
+                # --- END ADDED ---
+                # Scene files
+                elif len(relative_path_parts) > 2 and relative_path_parts[2].endswith('.md'): # Check if it's likely a scene file
+                    scene_id = file_path.stem
+                    scene_title = scene_id # Default to ID
+                    # Get Scene Title from chapter metadata
+                    try:
+                        chapter_meta = fs.read_chapter_metadata(project_id, chapter_id)
+                        scene_meta = chapter_meta.get('scenes', {}).get(scene_id, {})
+                        title_from_meta = scene_meta.get('title') # Get title, could be None or empty string
+                        if title_from_meta:
+                            scene_title = title_from_meta
+                            logger.debug(f"Found scene title '{scene_title}' in chapter metadata for scene {scene_id}.")
+                        else:
+                            logger.warning(f"Scene title not found or empty in chapter metadata for scene {scene_id}. Using ID '{scene_id}' as title.")
+                    except Exception as e:
+                        logger.warning(f"Could not read chapter metadata for {chapter_id} to get scene title for {scene_id}: {e}. Using ID '{scene_id}' as title.")
+
+                    details = {
+                        'document_type': 'Scene',
+                        'document_title': scene_title,
+                        'chapter_id': chapter_id,
+                        'chapter_title': chapter_title
+                    }
+            # Note files
             elif len(relative_path_parts) > 1 and relative_path_parts[0] == 'notes' and file_path.suffix == '.md':
                 details = {'document_type': 'Note', 'document_title': file_path.stem} # Use stem for Note title
         except Exception as e: logger.error(f"Error determining document details for {file_path}: {e}", exc_info=True)
@@ -282,8 +305,8 @@ class IndexManager:
                  # Add character name if applicable
                  if meta["document_type"] == "Character":
                      meta["character_name"] = meta["document_title"]
-                 # Add chapter info if applicable
-                 if meta["document_type"] == "Scene":
+                 # Add chapter info if applicable (Scenes, ChapterPlan, ChapterSynopsis)
+                 if meta["document_type"] in ["Scene", "ChapterPlan", "ChapterSynopsis"]:
                      meta["chapter_id"] = current_details.get('chapter_id', 'UNKNOWN')
                      meta["chapter_title"] = current_details.get('chapter_title', 'UNKNOWN')
                  logger.debug(f"Generated metadata for {file_name}: {meta}")

@@ -62,6 +62,9 @@ def create_mock_client_error(status_code: int, message: str = "API Error") -> Mo
 @patch('app.rag.scene_generator.file_service', autospec=True)
 async def test_generate_scene_success_with_context(mock_file_svc: MagicMock, mock_retriever_class: MagicMock, mock_llm: MagicMock, mock_index: MagicMock):
     project_id = "proj-sg-1"; chapter_id = "ch-sg-1"; prompt_summary = "Character enters the tavern."; previous_scene_order = 1; plan = "Plan: Go to tavern."; synopsis = "Synopsis: Hero needs info."; prev_scene_content = "## Scene 1\nHero walks down the street."; explicit_previous_scenes = [(1, prev_scene_content)]; chapter_title = "The Journey Begins"
+    # --- ADDED: Mock chapter context ---
+    chapter_plan = "Chapter Plan: Find the barkeep."; chapter_synopsis = "Chapter Synopsis: Tavern encounter."
+    # --- END ADDED ---
     mock_node1 = NodeWithScore(node=TextNode(id_='n1', text="Tavern description.", metadata={'file_path': 'world.md', 'project_id': project_id, 'document_type': 'World', 'document_title': 'World Info'}), score=0.85)
     retrieved_nodes = [mock_node1]; mock_llm_response_title = "The Tavern Door"; mock_llm_response_content = "He pushed open the heavy tavern door, revealing the smoky interior."; mock_llm_response_text = f"## {mock_llm_response_title}\n{mock_llm_response_content}"; expected_result_dict = {"title": mock_llm_response_title, "content": mock_llm_response_content}
     mock_file_svc.read_project_metadata.return_value = {"chapters": {chapter_id: {"title": chapter_title}}}
@@ -70,54 +73,109 @@ async def test_generate_scene_success_with_context(mock_file_svc: MagicMock, moc
     generator = SceneGenerator(index=mock_index, llm=mock_llm)
     # Patch the internal helper to check args
     with patch.object(generator, '_execute_llm_complete', wraps=generator._execute_llm_complete) as mock_execute_llm:
-        generated_draft = await generator.generate_scene(project_id, chapter_id, prompt_summary, previous_scene_order, plan, synopsis, explicit_previous_scenes)
+        # --- MODIFIED: Pass chapter context ---
+        generated_draft = await generator.generate_scene(
+            project_id, chapter_id, prompt_summary, previous_scene_order,
+            plan, synopsis,
+            chapter_plan, chapter_synopsis, # Pass chapter context
+            explicit_previous_scenes
+        )
+        # --- END MODIFIED ---
         assert generated_draft == expected_result_dict; mock_file_svc.read_project_metadata.assert_called_once_with(project_id); mock_retriever_instance.aretrieve.assert_awaited_once();
         mock_execute_llm.assert_awaited_once()
-        prompt_arg = mock_execute_llm.call_args[0][0]; assert prompt_summary in prompt_arg; assert plan in prompt_arg; assert synopsis in prompt_arg; assert prev_scene_content in prompt_arg; assert f"Chapter '{chapter_title}'" in prompt_arg; assert 'Source (World: "World Info")' in prompt_arg; assert "Tavern description." in prompt_arg; assert 'file_path' not in prompt_arg; assert "Output Format Requirement:" in prompt_arg
+        prompt_arg = mock_execute_llm.call_args[0][0]
+        assert prompt_summary in prompt_arg
+        assert "**Project Plan:**" in prompt_arg; assert plan in prompt_arg
+        assert "**Project Synopsis:**" in prompt_arg; assert synopsis in prompt_arg
+        # --- ADDED: Assert chapter context in prompt ---
+        assert f"**Chapter Plan (for Chapter '{chapter_title}'):**" in prompt_arg; assert chapter_plan in prompt_arg
+        assert f"**Chapter Synopsis (for Chapter '{chapter_title}'):**" in prompt_arg; assert chapter_synopsis in prompt_arg
+        # --- END ADDED ---
+        assert prev_scene_content in prompt_arg; assert f"Chapter '{chapter_title}'" in prompt_arg; assert 'Source (World: "World Info")' in prompt_arg; assert "Tavern description." in prompt_arg; assert 'file_path' not in prompt_arg; assert "Output Format Requirement:" in prompt_arg
 
 @pytest.mark.asyncio
 @patch('app.rag.scene_generator.VectorIndexRetriever', autospec=True)
 @patch('app.rag.scene_generator.file_service', autospec=True)
 async def test_generate_scene_success_first_scene(mock_file_svc: MagicMock, mock_retriever_class: MagicMock, mock_llm: MagicMock, mock_index: MagicMock):
     project_id = "proj-sg-2"; chapter_id = "ch-sg-2"; prompt_summary = "The story begins."; previous_scene_order = 0; plan = "Plan: Introduction."; synopsis = "Synopsis: A new beginning."; explicit_previous_scenes = []; chapter_title = "First Chapter"; retrieved_nodes = []
+    # --- ADDED: Mock chapter context (None) ---
+    chapter_plan = None; chapter_synopsis = None
+    # --- END ADDED ---
     mock_llm_response_title = "Chapter Start"; mock_llm_response_content = "The sun rose over the quiet village."; mock_llm_response_text = f"## {mock_llm_response_title}\n{mock_llm_response_content}"; expected_result_dict = {"title": mock_llm_response_title, "content": mock_llm_response_content}
     mock_file_svc.read_project_metadata.return_value = {"chapters": {chapter_id: {"title": chapter_title}}}
     mock_retriever_instance = mock_retriever_class.return_value; mock_retriever_instance.aretrieve = AsyncMock(return_value=retrieved_nodes)
     mock_llm.acomplete = AsyncMock(return_value=CompletionResponse(text=mock_llm_response_text)); mock_llm.callback_manager = None
     generator = SceneGenerator(index=mock_index, llm=mock_llm)
     with patch.object(generator, '_execute_llm_complete', wraps=generator._execute_llm_complete) as mock_execute_llm:
-        generated_draft = await generator.generate_scene(project_id, chapter_id, prompt_summary, previous_scene_order, plan, synopsis, explicit_previous_scenes)
+        # --- MODIFIED: Pass chapter context (None) ---
+        generated_draft = await generator.generate_scene(
+            project_id, chapter_id, prompt_summary, previous_scene_order,
+            plan, synopsis,
+            chapter_plan, chapter_synopsis, # Pass None
+            explicit_previous_scenes
+        )
+        # --- END MODIFIED ---
         assert generated_draft == expected_result_dict; mock_file_svc.read_project_metadata.assert_called_once_with(project_id); mock_retriever_instance.aretrieve.assert_awaited_once();
         mock_execute_llm.assert_awaited_once()
         prompt_arg = mock_execute_llm.call_args[0][0]; assert f"Chapter '{chapter_title}'" in prompt_arg;
         assert f"N/A (Generating the first scene of chapter '{chapter_title}')" in prompt_arg;
         assert "No additional context retrieved" in prompt_arg
+        # --- ADDED: Assert chapter context NOT in prompt ---
+        assert "**Chapter Plan" not in prompt_arg
+        assert "**Chapter Synopsis" not in prompt_arg
+        # --- END ADDED ---
 
 @pytest.mark.asyncio
 @patch('app.rag.scene_generator.VectorIndexRetriever', autospec=True)
 @patch('app.rag.scene_generator.file_service', autospec=True)
 async def test_generate_scene_success_no_rag_nodes(mock_file_svc: MagicMock, mock_retriever_class: MagicMock, mock_llm: MagicMock, mock_index: MagicMock):
     project_id = "proj-sg-3"; chapter_id = "ch-sg-3"; prompt_summary = None; previous_scene_order = 2; plan = "Plan"; synopsis = "Synopsis"; prev_scene_content = "## Scene 2\nSomething happened."; explicit_previous_scenes = [(2, prev_scene_content)]; retrieved_nodes = []; chapter_title = "Middle Chapter"
+    # --- ADDED: Mock chapter context ---
+    chapter_plan = "Chap Plan"; chapter_synopsis = None
+    # --- END ADDED ---
     mock_llm_response_title = "Aftermath"; mock_llm_response_content = "Following the previous events, the character reflected."; mock_llm_response_text = f"## {mock_llm_response_title}\n{mock_llm_response_content}"; expected_result_dict = {"title": mock_llm_response_title, "content": mock_llm_response_content}
     mock_file_svc.read_project_metadata.return_value = {"chapters": {chapter_id: {"title": chapter_title}}}
     mock_retriever_instance = mock_retriever_class.return_value; mock_retriever_instance.aretrieve = AsyncMock(return_value=retrieved_nodes)
     mock_llm.acomplete = AsyncMock(return_value=CompletionResponse(text=mock_llm_response_text)); mock_llm.callback_manager = None
     generator = SceneGenerator(index=mock_index, llm=mock_llm)
     with patch.object(generator, '_execute_llm_complete', wraps=generator._execute_llm_complete) as mock_execute_llm:
-        generated_draft = await generator.generate_scene(project_id, chapter_id, prompt_summary, previous_scene_order, plan, synopsis, explicit_previous_scenes)
+        # --- MODIFIED: Pass chapter context ---
+        generated_draft = await generator.generate_scene(
+            project_id, chapter_id, prompt_summary, previous_scene_order,
+            plan, synopsis,
+            chapter_plan, chapter_synopsis, # Pass context
+            explicit_previous_scenes
+        )
+        # --- END MODIFIED ---
         assert generated_draft == expected_result_dict; mock_file_svc.read_project_metadata.assert_called_once_with(project_id); mock_retriever_instance.aretrieve.assert_awaited_once();
         mock_execute_llm.assert_awaited_once()
         prompt_arg = mock_execute_llm.call_args[0][0]; assert f"Chapter '{chapter_title}'" in prompt_arg; assert "No additional context retrieved" in prompt_arg
+        # --- ADDED: Assert chapter context in prompt ---
+        assert f"**Chapter Plan (for Chapter '{chapter_title}'):**" in prompt_arg; assert chapter_plan in prompt_arg
+        assert "**Chapter Synopsis" not in prompt_arg # Synopsis was None
+        # --- END ADDED ---
 
+# --- Error handling tests remain largely the same, as context loading happens before the error point ---
 @pytest.mark.asyncio
 @patch('app.rag.scene_generator.VectorIndexRetriever', autospec=True)
 @patch('app.rag.scene_generator.file_service', autospec=True)
 async def test_generate_scene_retriever_error(mock_file_svc: MagicMock, mock_retriever_class: MagicMock, mock_llm: MagicMock, mock_index: MagicMock):
     project_id = "proj-sg-4"; chapter_id = "ch-sg-4"; prompt_summary = "Summary"; previous_scene_order = 1; plan = "Plan"; synopsis = "Synopsis"; explicit_previous_scenes = [(1, "Previous")]; chapter_title = "Error Chapter"
+    # --- ADDED: Mock chapter context (None) ---
+    chapter_plan = None; chapter_synopsis = None
+    # --- END ADDED ---
     mock_file_svc.read_project_metadata.return_value = {"chapters": {chapter_id: {"title": chapter_title}}}
     mock_retriever_instance = mock_retriever_class.return_value; mock_retriever_instance.aretrieve = AsyncMock(side_effect=RuntimeError("Retriever failed")); mock_llm.callback_manager = None
     generator = SceneGenerator(index=mock_index, llm=mock_llm)
-    with pytest.raises(HTTPException) as exc_info: await generator.generate_scene(project_id, chapter_id, prompt_summary, previous_scene_order, plan, synopsis, explicit_previous_scenes)
+    with pytest.raises(HTTPException) as exc_info:
+        # --- MODIFIED: Pass chapter context (None) ---
+        await generator.generate_scene(
+            project_id, chapter_id, prompt_summary, previous_scene_order,
+            plan, synopsis,
+            chapter_plan, chapter_synopsis, # Pass None
+            explicit_previous_scenes
+        )
+        # --- END MODIFIED ---
     assert exc_info.value.status_code == 500; assert "Error: An unexpected error occurred during scene generation. Please check logs." in exc_info.value.detail
     mock_file_svc.read_project_metadata.assert_called_once_with(project_id); mock_retriever_instance.aretrieve.assert_awaited_once(); mock_llm.acomplete.assert_not_awaited()
 
@@ -126,12 +184,23 @@ async def test_generate_scene_retriever_error(mock_file_svc: MagicMock, mock_ret
 @patch('app.rag.scene_generator.file_service', autospec=True)
 async def test_generate_scene_llm_error(mock_file_svc: MagicMock, mock_retriever_class: MagicMock, mock_llm: MagicMock, mock_index: MagicMock):
     project_id = "proj-sg-5"; chapter_id = "ch-sg-5"; prompt_summary = "Summary"; previous_scene_order = 1; plan = "Plan"; synopsis = "Synopsis"; explicit_previous_scenes = [(1, "Previous")]; chapter_title = "LLM Error Chapter"; retrieved_nodes = []
+    # --- ADDED: Mock chapter context (None) ---
+    chapter_plan = None; chapter_synopsis = None
+    # --- END ADDED ---
     mock_file_svc.read_project_metadata.return_value = {"chapters": {chapter_id: {"title": chapter_title}}}
     mock_retriever_instance = mock_retriever_class.return_value; mock_retriever_instance.aretrieve = AsyncMock(return_value=retrieved_nodes)
     generator = SceneGenerator(index=mock_index, llm=mock_llm)
     # Patch the internal helper to raise the error
     with patch.object(generator, '_execute_llm_complete', side_effect=ValueError("LLM failed validation")) as mock_execute_llm:
-        with pytest.raises(HTTPException) as exc_info: await generator.generate_scene(project_id, chapter_id, prompt_summary, previous_scene_order, plan, synopsis, explicit_previous_scenes)
+        with pytest.raises(HTTPException) as exc_info:
+            # --- MODIFIED: Pass chapter context (None) ---
+            await generator.generate_scene(
+                project_id, chapter_id, prompt_summary, previous_scene_order,
+                plan, synopsis,
+                chapter_plan, chapter_synopsis, # Pass None
+                explicit_previous_scenes
+            )
+            # --- END MODIFIED ---
         assert exc_info.value.status_code == 500; assert "Error: An unexpected error occurred during scene generation. Please check logs." in exc_info.value.detail
         mock_file_svc.read_project_metadata.assert_called_once_with(project_id); mock_retriever_instance.aretrieve.assert_awaited_once();
         mock_execute_llm.assert_awaited_once() # Check helper was called
@@ -141,12 +210,23 @@ async def test_generate_scene_llm_error(mock_file_svc: MagicMock, mock_retriever
 @patch('app.rag.scene_generator.file_service', autospec=True)
 async def test_generate_scene_llm_empty_response(mock_file_svc: MagicMock, mock_retriever_class: MagicMock, mock_llm: MagicMock, mock_index: MagicMock):
     project_id = "proj-sg-6"; chapter_id = "ch-sg-6"; prompt_summary = "Summary"; previous_scene_order = 1; plan = "Plan"; synopsis = "Synopsis"; explicit_previous_scenes = [(1, "Previous")]; chapter_title = "Empty Response Chapter"; retrieved_nodes = []
+    # --- ADDED: Mock chapter context (None) ---
+    chapter_plan = None; chapter_synopsis = None
+    # --- END ADDED ---
     mock_file_svc.read_project_metadata.return_value = {"chapters": {chapter_id: {"title": chapter_title}}}
     mock_retriever_instance = mock_retriever_class.return_value; mock_retriever_instance.aretrieve = AsyncMock(return_value=retrieved_nodes)
     generator = SceneGenerator(index=mock_index, llm=mock_llm)
     # Patch the internal helper to return empty text
     with patch.object(generator, '_execute_llm_complete', return_value=CompletionResponse(text="")) as mock_execute_llm:
-        with pytest.raises(HTTPException) as exc_info: await generator.generate_scene(project_id, chapter_id, prompt_summary, previous_scene_order, plan, synopsis, explicit_previous_scenes)
+        with pytest.raises(HTTPException) as exc_info:
+            # --- MODIFIED: Pass chapter context (None) ---
+            await generator.generate_scene(
+                project_id, chapter_id, prompt_summary, previous_scene_order,
+                plan, synopsis,
+                chapter_plan, chapter_synopsis, # Pass None
+                explicit_previous_scenes
+            )
+            # --- END MODIFIED ---
         assert exc_info.value.status_code == 500; assert "Error: The AI failed to generate a scene draft." in exc_info.value.detail
         mock_file_svc.read_project_metadata.assert_called_once_with(project_id); mock_retriever_instance.aretrieve.assert_awaited_once();
         mock_execute_llm.assert_awaited_once() # Check helper was called
@@ -156,13 +236,23 @@ async def test_generate_scene_llm_empty_response(mock_file_svc: MagicMock, mock_
 @patch('app.rag.scene_generator.file_service', autospec=True)
 async def test_generate_scene_llm_bad_format_response(mock_file_svc: MagicMock, mock_retriever_class: MagicMock, mock_llm: MagicMock, mock_index: MagicMock):
     project_id = "proj-sg-7"; chapter_id = "ch-sg-7"; prompt_summary = "Summary"; previous_scene_order = 1; plan = "Plan"; synopsis = "Synopsis"; explicit_previous_scenes = [(1, "Previous")]; chapter_title = "Bad Format Chapter"; retrieved_nodes = []
+    # --- ADDED: Mock chapter context (None) ---
+    chapter_plan = None; chapter_synopsis = None
+    # --- END ADDED ---
     mock_llm_response_text = "Just the content, no title heading."; expected_result_dict = {"title": "Untitled Scene", "content": mock_llm_response_text}
     mock_file_svc.read_project_metadata.return_value = {"chapters": {chapter_id: {"title": chapter_title}}}
     mock_retriever_instance = mock_retriever_class.return_value; mock_retriever_instance.aretrieve = AsyncMock(return_value=retrieved_nodes)
     mock_llm.acomplete = AsyncMock(return_value=CompletionResponse(text=mock_llm_response_text)); mock_llm.callback_manager = None
     generator = SceneGenerator(index=mock_index, llm=mock_llm)
     with patch.object(generator, '_execute_llm_complete', wraps=generator._execute_llm_complete) as mock_execute_llm:
-        generated_draft = await generator.generate_scene(project_id, chapter_id, prompt_summary, previous_scene_order, plan, synopsis, explicit_previous_scenes)
+        # --- MODIFIED: Pass chapter context (None) ---
+        generated_draft = await generator.generate_scene(
+            project_id, chapter_id, prompt_summary, previous_scene_order,
+            plan, synopsis,
+            chapter_plan, chapter_synopsis, # Pass None
+            explicit_previous_scenes
+        )
+        # --- END MODIFIED ---
         assert generated_draft == expected_result_dict; mock_file_svc.read_project_metadata.assert_called_once_with(project_id); mock_retriever_instance.aretrieve.assert_awaited_once();
         mock_execute_llm.assert_awaited_once()
 
@@ -181,6 +271,9 @@ async def test_generate_scene_handles_retry_failure_gracefully(
     plan = "Plan"; synopsis = "Synopsis"; explicit_previous_scenes = [(1, "Previous")]
     chapter_title = "Retry Fail Chapter"
     retrieved_nodes = []
+    # --- ADDED: Mock chapter context (None) ---
+    chapter_plan = None; chapter_synopsis = None
+    # --- END ADDED ---
 
     mock_file_svc.read_project_metadata.return_value = {"chapters": {chapter_id: {"title": chapter_title}}} # Mock chapter title lookup
     mock_retriever_instance = mock_retriever_class.return_value
@@ -195,9 +288,14 @@ async def test_generate_scene_handles_retry_failure_gracefully(
 
     # Call the main method, which contains the try/except block for the helper
     with pytest.raises(HTTPException) as exc_info:
+         # --- MODIFIED: Pass chapter context (None) ---
          await generator.generate_scene(
-             project_id, chapter_id, prompt_summary, previous_scene_order, plan, synopsis, explicit_previous_scenes
+             project_id, chapter_id, prompt_summary, previous_scene_order,
+             plan, synopsis,
+             chapter_plan, chapter_synopsis, # Pass None
+             explicit_previous_scenes
          )
+         # --- END MODIFIED ---
 
     # Assert the correct HTTPException is raised by the main method's error handling
     assert exc_info.value.status_code == 429
@@ -225,6 +323,9 @@ async def test_generate_scene_deduplicates_and_filters_nodes(
     mock_index: MagicMock
 ):
     project_id = "proj-sg-dedup-filter"; chapter_id = "ch-sg-dedup-filter"; prompt_summary = "Test dedup/filter"; previous_scene_order = 1; plan = "Plan"; synopsis = "Synopsis"; explicit_previous_scenes = [(1, "Previous")]; chapter_title = "Dedup Chapter"
+    # --- ADDED: Mock chapter context (None) ---
+    chapter_plan = None; chapter_synopsis = None
+    # --- END ADDED ---
     plan_path_str = f"user_projects/{project_id}/plan.md"
     world_path_str = f"user_projects/{project_id}/world.md"
     char1_path_str = f"user_projects/{project_id}/characters/c1.md"
@@ -267,9 +368,15 @@ async def test_generate_scene_deduplicates_and_filters_nodes(
     generator = SceneGenerator(index=mock_index, llm=mock_llm)
     with patch.object(generator, '_execute_llm_complete', wraps=generator._execute_llm_complete) as mock_execute_llm:
 
+        # --- MODIFIED: Pass chapter context (None) and filter set ---
         generated_draft = await generator.generate_scene(
-            project_id, chapter_id, prompt_summary, previous_scene_order, plan, synopsis, explicit_previous_scenes, paths_to_filter=paths_to_filter_set
+            project_id, chapter_id, prompt_summary, previous_scene_order,
+            plan, synopsis,
+            chapter_plan, chapter_synopsis, # Pass None
+            explicit_previous_scenes,
+            paths_to_filter=paths_to_filter_set
         )
+        # --- END MODIFIED ---
 
         assert generated_draft == expected_result_dict
         mock_retriever_instance.aretrieve.assert_awaited_once()

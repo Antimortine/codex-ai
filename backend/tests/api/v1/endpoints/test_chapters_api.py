@@ -15,18 +15,24 @@
 import pytest
 from fastapi.testclient import TestClient
 from unittest.mock import patch, MagicMock
-from fastapi import HTTPException, status
+from fastapi import HTTPException, status, Depends, Path # Import Path and Depends
+from pathlib import Path as FilePath # Import Path from pathlib AS FilePath to avoid name clash
 
 # Import the FastAPI app instance
 from app.main import app
 # Import the service instance *used by the endpoint module* to mock it
 from app.services.chapter_service import chapter_service
+from app.services.file_service import file_service
 # Import the service instance *used by the dependency* to mock it
 from app.services.project_service import project_service as project_service_for_dependency
 # Import models for type checking and response validation
 from app.models.chapter import ChapterRead, ChapterList, ChapterCreate, ChapterUpdate
+from app.models.content_block import ContentBlockRead, ContentBlockUpdate
 from app.models.project import ProjectRead # Needed for mocking project dependency
 from app.models.common import Message
+# --- ADDED: Import the actual dependency function to override ---
+from app.api.v1.endpoints.scenes import get_chapter_dependency
+# --- END ADDED ---
 
 # Create a TestClient instance
 client = TestClient(app)
@@ -37,16 +43,36 @@ CHAPTER_ID_1 = "chap-id-1"
 CHAPTER_ID_2 = "chap-id-2"
 NON_EXISTENT_PROJECT_ID = "project-404"
 NON_EXISTENT_CHAPTER_ID = "chapter-404"
+CHAPTER_PLAN_CONTENT = "# Chapter Plan\n\n- Outline point 1"
+CHAPTER_SYNOPSIS_CONTENT = "This chapter is about..."
+UPDATED_CONTENT = "Updated chapter block content."
 
 # --- Mock Dependency Helper ---
 def mock_project_exists(*args, **kwargs):
     project_id_arg = kwargs.get('project_id', args[0] if args else PROJECT_ID)
     if project_id_arg == NON_EXISTENT_PROJECT_ID:
          raise HTTPException(status_code=404, detail=f"Project {project_id_arg} not found")
-    return ProjectRead(id=project_id_arg, name=f"Mock Project {project_id_arg}")
+    # Return a simple object or dict mimicking ProjectRead enough for the check
+    return {'id': project_id_arg, 'name': f"Mock Project {project_id_arg}"}
+
+# --- Mock Chapter Dependency Implementation ---
+# This function will replace the real dependency during tests
+# It needs to be async because the real dependency is async
+async def override_get_chapter_dependency(project_id: str = Path(...), chapter_id: str = Path(...)):
+    # Simulate the dependency's logic using our constants
+    # Check project existence (simulated)
+    if project_id == NON_EXISTENT_PROJECT_ID:
+        raise HTTPException(status_code=404, detail=f"Project {project_id} not found")
+    # Check chapter existence (simulated)
+    if chapter_id == NON_EXISTENT_CHAPTER_ID:
+        raise HTTPException(status_code=404, detail=f"Chapter {chapter_id} not found in project {project_id}")
+    # If checks pass, return the IDs
+    return project_id, chapter_id
+# --- END Mock Chapter Dependency Implementation ---
+
 
 # --- Test Chapter API Endpoints ---
-
+# (Existing tests unchanged - Omitted for brevity)
 @patch('app.api.v1.endpoints.chapters.chapter_service', autospec=True)
 @patch('app.api.v1.endpoints.content_blocks.project_service', autospec=True)
 def test_create_chapter_success(mock_project_service_dep: MagicMock, mock_chapter_service: MagicMock):
@@ -64,15 +90,12 @@ def test_create_chapter_success(mock_project_service_dep: MagicMock, mock_chapte
     response = client.post(f"/api/v1/projects/{PROJECT_ID}/chapters/", json=chapter_data_in)
 
     assert response.status_code == status.HTTP_201_CREATED
-    # Assert specific fields
     response_data = response.json()
     assert response_data["id"] == CHAPTER_ID_1
     assert response_data["project_id"] == PROJECT_ID
     assert response_data["title"] == chapter_data_in["title"]
     assert response_data["order"] == chapter_data_in["order"]
-    # Verify dependency check
     mock_project_service_dep.get_by_id.assert_called_once_with(project_id=PROJECT_ID)
-    # Verify service call arguments
     mock_chapter_service.create.assert_called_once()
     call_args, call_kwargs = mock_chapter_service.create.call_args
     assert call_kwargs['project_id'] == PROJECT_ID
@@ -109,7 +132,6 @@ def test_create_chapter_validation_error(mock_project_service_dep: MagicMock, mo
     response = client.post(f"/api/v1/projects/{PROJECT_ID}/chapters/", json=invalid_data)
 
     assert response.status_code == status.HTTP_422_UNPROCESSABLE_ENTITY
-    # Check specific Pydantic v2 error structure
     response_data = response.json()
     assert response_data['detail'][0]['type'] == 'string_too_short'
     assert response_data['detail'][0]['loc'] == ['body', 'title']
@@ -128,7 +150,6 @@ def test_list_chapters_empty(mock_project_service_dep: MagicMock, mock_chapter_s
     response = client.get(f"/api/v1/projects/{PROJECT_ID}/chapters/")
 
     assert response.status_code == status.HTTP_200_OK
-    # Assert structure
     response_data = response.json()
     assert "chapters" in response_data
     assert isinstance(response_data["chapters"], list)
@@ -152,7 +173,6 @@ def test_list_chapters_with_data(mock_project_service_dep: MagicMock, mock_chapt
     assert "chapters" in response_data
     assert isinstance(response_data["chapters"], list)
     assert len(response_data["chapters"]) == 2
-    # Assert specific fields for each chapter
     assert response_data["chapters"][0]["id"] == CHAPTER_ID_1
     assert response_data["chapters"][0]["project_id"] == PROJECT_ID
     assert response_data["chapters"][0]["title"] == "Ch 1"
@@ -177,7 +197,6 @@ def test_get_chapter_success(mock_project_service_dep: MagicMock, mock_chapter_s
     response = client.get(f"/api/v1/projects/{PROJECT_ID}/chapters/{CHAPTER_ID_1}")
 
     assert response.status_code == status.HTTP_200_OK
-    # Assert specific fields
     response_data = response.json()
     assert response_data["id"] == CHAPTER_ID_1
     assert response_data["project_id"] == PROJECT_ID
@@ -192,7 +211,6 @@ def test_get_chapter_not_found(mock_project_service_dep: MagicMock, mock_chapter
     """Test getting a chapter that does not exist (404)."""
     mock_project_service_dep.get_by_id.side_effect = mock_project_exists # Project exists
     error_detail = f"Chapter {NON_EXISTENT_CHAPTER_ID} not found in project {PROJECT_ID}"
-    # Make the *chapter* service raise the 404
     mock_chapter_service.get_by_id.side_effect = HTTPException(
         status_code=status.HTTP_404_NOT_FOUND,
         detail=error_detail
@@ -210,7 +228,6 @@ def test_get_chapter_not_found(mock_project_service_dep: MagicMock, mock_chapter
 def test_get_chapter_project_not_found(mock_project_service_dep: MagicMock, mock_chapter_service: MagicMock):
     """Test getting a chapter when the project does not exist (404 from dependency)."""
     error_detail = f"Project {NON_EXISTENT_PROJECT_ID} not found"
-    # Make the *project* service raise the 404 within the dependency check
     mock_project_service_dep.get_by_id.side_effect = HTTPException(
         status_code=status.HTTP_404_NOT_FOUND,
         detail=error_detail
@@ -242,14 +259,12 @@ def test_update_chapter_success(mock_project_service_dep: MagicMock, mock_chapte
     response = client.patch(f"/api/v1/projects/{PROJECT_ID}/chapters/{CHAPTER_ID_1}", json=update_data)
 
     assert response.status_code == status.HTTP_200_OK
-    # Assert specific fields
     response_data = response.json()
     assert response_data["id"] == CHAPTER_ID_1
     assert response_data["project_id"] == PROJECT_ID
     assert response_data["title"] == update_data["title"]
     assert response_data["order"] == update_data["order"]
     mock_project_service_dep.get_by_id.assert_called_once_with(project_id=PROJECT_ID)
-    # Verify service call arguments
     mock_chapter_service.update.assert_called_once()
     call_args, call_kwargs = mock_chapter_service.update.call_args
     assert call_kwargs['project_id'] == PROJECT_ID
@@ -308,7 +323,6 @@ def test_delete_chapter_success(mock_project_service_dep: MagicMock, mock_chapte
     response = client.delete(f"/api/v1/projects/{PROJECT_ID}/chapters/{CHAPTER_ID_1}")
 
     assert response.status_code == status.HTTP_200_OK
-    # Assert specific message field
     response_data = response.json()
     assert "message" in response_data
     assert response_data["message"] == f"Chapter {CHAPTER_ID_1} deleted successfully"
@@ -332,3 +346,134 @@ def test_delete_chapter_not_found(mock_project_service_dep: MagicMock, mock_chap
     assert response.json() == {"detail": error_detail}
     mock_project_service_dep.get_by_id.assert_called_once_with(project_id=PROJECT_ID)
     mock_chapter_service.delete.assert_called_once_with(project_id=PROJECT_ID, chapter_id=NON_EXISTENT_CHAPTER_ID)
+
+
+# --- ADDED: Tests for Chapter Plan/Synopsis Endpoints ---
+
+# === GET Chapter Plan ===
+@patch('app.api.v1.endpoints.chapters.file_service', autospec=True)
+def test_get_chapter_plan_success(mock_file_svc: MagicMock):
+    """Test successful GET for chapter plan."""
+    # Override the dependency for this test
+    app.dependency_overrides[get_chapter_dependency] = override_get_chapter_dependency
+    mock_file_svc.read_chapter_plan_file.return_value = CHAPTER_PLAN_CONTENT
+
+    response = client.get(f"/api/v1/projects/{PROJECT_ID}/chapters/{CHAPTER_ID_1}/plan")
+
+    assert response.status_code == status.HTTP_200_OK
+    response_data = response.json()
+    assert response_data["project_id"] == PROJECT_ID
+    assert response_data["content"] == CHAPTER_PLAN_CONTENT
+    mock_file_svc.read_chapter_plan_file.assert_called_once_with(PROJECT_ID, CHAPTER_ID_1)
+    app.dependency_overrides = {} # Clear overrides after test
+
+@patch('app.api.v1.endpoints.chapters.file_service', autospec=True)
+def test_get_chapter_plan_not_found(mock_file_svc: MagicMock):
+    """Test GET chapter plan when file doesn't exist (returns empty)."""
+    app.dependency_overrides[get_chapter_dependency] = override_get_chapter_dependency
+    mock_file_svc.read_chapter_plan_file.return_value = None # Service returns None
+
+    response = client.get(f"/api/v1/projects/{PROJECT_ID}/chapters/{CHAPTER_ID_1}/plan")
+
+    assert response.status_code == status.HTTP_200_OK
+    response_data = response.json()
+    assert response_data["project_id"] == PROJECT_ID
+    assert response_data["content"] == "" # Endpoint returns empty string
+    mock_file_svc.read_chapter_plan_file.assert_called_once_with(PROJECT_ID, CHAPTER_ID_1)
+    app.dependency_overrides = {}
+
+# === PUT Chapter Plan ===
+@patch('app.api.v1.endpoints.chapters.file_service', autospec=True)
+def test_update_chapter_plan_success(mock_file_svc: MagicMock):
+    """Test successful PUT update for chapter plan."""
+    app.dependency_overrides[get_chapter_dependency] = override_get_chapter_dependency
+    mock_file_svc.write_chapter_plan_file.return_value = None
+    update_data = {"content": UPDATED_CONTENT}
+
+    response = client.put(f"/api/v1/projects/{PROJECT_ID}/chapters/{CHAPTER_ID_1}/plan", json=update_data)
+
+    assert response.status_code == status.HTTP_200_OK
+    response_data = response.json()
+    assert response_data["project_id"] == PROJECT_ID
+    assert response_data["content"] == UPDATED_CONTENT
+    mock_file_svc.write_chapter_plan_file.assert_called_once_with(PROJECT_ID, CHAPTER_ID_1, UPDATED_CONTENT)
+    app.dependency_overrides = {}
+
+# === GET Chapter Synopsis ===
+@patch('app.api.v1.endpoints.chapters.file_service', autospec=True)
+def test_get_chapter_synopsis_success(mock_file_svc: MagicMock):
+    """Test successful GET for chapter synopsis."""
+    app.dependency_overrides[get_chapter_dependency] = override_get_chapter_dependency
+    mock_file_svc.read_chapter_synopsis_file.return_value = CHAPTER_SYNOPSIS_CONTENT
+
+    response = client.get(f"/api/v1/projects/{PROJECT_ID}/chapters/{CHAPTER_ID_1}/synopsis")
+
+    assert response.status_code == status.HTTP_200_OK
+    response_data = response.json()
+    assert response_data["project_id"] == PROJECT_ID
+    assert response_data["content"] == CHAPTER_SYNOPSIS_CONTENT
+    mock_file_svc.read_chapter_synopsis_file.assert_called_once_with(PROJECT_ID, CHAPTER_ID_1)
+    app.dependency_overrides = {}
+
+@patch('app.api.v1.endpoints.chapters.file_service', autospec=True)
+def test_get_chapter_synopsis_not_found(mock_file_svc: MagicMock):
+    """Test GET chapter synopsis when file doesn't exist (returns empty)."""
+    app.dependency_overrides[get_chapter_dependency] = override_get_chapter_dependency
+    mock_file_svc.read_chapter_synopsis_file.return_value = None # Service returns None
+
+    response = client.get(f"/api/v1/projects/{PROJECT_ID}/chapters/{CHAPTER_ID_1}/synopsis")
+
+    assert response.status_code == status.HTTP_200_OK
+    response_data = response.json()
+    assert response_data["project_id"] == PROJECT_ID
+    assert response_data["content"] == "" # Endpoint returns empty string
+    mock_file_svc.read_chapter_synopsis_file.assert_called_once_with(PROJECT_ID, CHAPTER_ID_1)
+    app.dependency_overrides = {}
+
+# === PUT Chapter Synopsis ===
+@patch('app.api.v1.endpoints.chapters.file_service', autospec=True)
+def test_update_chapter_synopsis_success(mock_file_svc: MagicMock):
+    """Test successful PUT update for chapter synopsis."""
+    app.dependency_overrides[get_chapter_dependency] = override_get_chapter_dependency
+    mock_file_svc.write_chapter_synopsis_file.return_value = None
+    update_data = {"content": UPDATED_CONTENT}
+
+    response = client.put(f"/api/v1/projects/{PROJECT_ID}/chapters/{CHAPTER_ID_1}/synopsis", json=update_data)
+
+    assert response.status_code == status.HTTP_200_OK
+    response_data = response.json()
+    assert response_data["project_id"] == PROJECT_ID
+    assert response_data["content"] == UPDATED_CONTENT
+    mock_file_svc.write_chapter_synopsis_file.assert_called_once_with(PROJECT_ID, CHAPTER_ID_1, UPDATED_CONTENT)
+    app.dependency_overrides = {}
+
+# === Test Dependency Failure for Chapter Plan/Synopsis ===
+@patch('app.api.v1.endpoints.chapters.file_service', autospec=True)
+def test_get_chapter_plan_chapter_not_found(mock_file_svc: MagicMock):
+    """Test GET chapter plan when chapter dependency fails."""
+    error_detail = f"Chapter {NON_EXISTENT_CHAPTER_ID} not found in project {PROJECT_ID}"
+    # Override the dependency to raise 404
+    app.dependency_overrides[get_chapter_dependency] = lambda: (_ for _ in ()).throw(HTTPException(status_code=404, detail=error_detail))
+
+    response = client.get(f"/api/v1/projects/{PROJECT_ID}/chapters/{NON_EXISTENT_CHAPTER_ID}/plan")
+
+    assert response.status_code == status.HTTP_404_NOT_FOUND
+    assert response.json() == {"detail": error_detail} # Should now match the chapter error
+    mock_file_svc.read_chapter_plan_file.assert_not_called()
+    app.dependency_overrides = {} # Clear override
+
+@patch('app.api.v1.endpoints.chapters.file_service', autospec=True)
+def test_update_chapter_plan_chapter_not_found(mock_file_svc: MagicMock):
+    """Test PUT chapter plan when chapter dependency fails."""
+    error_detail = f"Chapter {NON_EXISTENT_CHAPTER_ID} not found in project {PROJECT_ID}"
+    app.dependency_overrides[get_chapter_dependency] = lambda: (_ for _ in ()).throw(HTTPException(status_code=404, detail=error_detail))
+    update_data = {"content": UPDATED_CONTENT}
+
+    response = client.put(f"/api/v1/projects/{PROJECT_ID}/chapters/{NON_EXISTENT_CHAPTER_ID}/plan", json=update_data)
+
+    assert response.status_code == status.HTTP_404_NOT_FOUND
+    assert response.json() == {"detail": error_detail} # Should now match the chapter error
+    mock_file_svc.write_chapter_plan_file.assert_not_called()
+    app.dependency_overrides = {} # Clear override
+
+# --- END ADDED ---

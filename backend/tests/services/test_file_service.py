@@ -74,6 +74,18 @@ def test_get_content_block_path():
     with pytest.raises(ValueError):
         file_service.file_service._get_content_block_path(project_id, "invalid_block.md")
 
+def test_get_chapter_plan_path():
+    project_id = "test-project-id"
+    chapter_id = "test-chapter-id"
+    expected_path = BASE_PROJECT_DIR / project_id / "chapters" / chapter_id / "plan.md"
+    assert file_service.file_service._get_chapter_plan_path(project_id, chapter_id) == expected_path
+
+def test_get_chapter_synopsis_path():
+    project_id = "test-project-id"
+    chapter_id = "test-chapter-id"
+    expected_path = BASE_PROJECT_DIR / project_id / "chapters" / chapter_id / "synopsis.md"
+    assert file_service.file_service._get_chapter_synopsis_path(project_id, chapter_id) == expected_path
+
 def test_get_project_metadata_path():
     project_id = "test-project-id"
     expected_path = BASE_PROJECT_DIR / project_id / "project_meta.json"
@@ -455,8 +467,8 @@ def test_add_update_delete_chat_session_metadata(temp_project_dir: Path, monkeyp
     meta = file_service.file_service.read_project_metadata(project_id)
     assert meta["chat_sessions"] == {session_id_1: {"name": "Updated First"}}
 
-# --- ADDED: Tests for get_project_last_content_modification ---
-
+# --- Tests for get_project_last_content_modification ---
+# (Unchanged - Omitted for brevity)
 def create_mock_path(path_str, is_dir, is_file, mtime, children=None, suffix='.txt', relative_parts=None):
     """Helper to create a mock Path object."""
     mock = MagicMock(spec=Path)
@@ -596,4 +608,90 @@ def test_get_last_content_modification_path_is_file(mock_path_cls):
 
     assert result_mtime is None # Should return None as it expects a directory
 
+# --- Tests for Chapter Plan/Synopsis Read Methods ---
+# (Unchanged - Omitted for brevity)
+def test_read_chapter_plan_file_success(temp_project_dir: Path, monkeypatch):
+    """Test reading an existing chapter plan file."""
+    monkeypatch.setattr(file_service, 'BASE_PROJECT_DIR', temp_project_dir)
+    project_id = "chap-plan-proj"
+    chapter_id = "ch1"
+    plan_path = file_service.file_service._get_chapter_plan_path(project_id, chapter_id)
+    content = "Chapter 1 plan details."
+    plan_path.parent.mkdir(parents=True, exist_ok=True)
+    plan_path.write_text(content, encoding='utf-8')
+
+    read_content = file_service.file_service.read_chapter_plan_file(project_id, chapter_id)
+    assert read_content == content
+
+def test_read_chapter_plan_file_not_found(temp_project_dir: Path, monkeypatch):
+    """Test reading a non-existent chapter plan file."""
+    monkeypatch.setattr(file_service, 'BASE_PROJECT_DIR', temp_project_dir)
+    project_id = "chap-plan-proj"
+    chapter_id = "ch2_no_plan"
+    # Ensure chapter dir exists, but not the plan file
+    chapter_path = file_service.file_service._get_chapter_path(project_id, chapter_id)
+    chapter_path.mkdir(parents=True, exist_ok=True)
+
+    read_content = file_service.file_service.read_chapter_plan_file(project_id, chapter_id)
+    assert read_content is None # Expect None when not found
+
+def test_read_chapter_synopsis_file_success(temp_project_dir: Path, monkeypatch):
+    """Test reading an existing chapter synopsis file."""
+    monkeypatch.setattr(file_service, 'BASE_PROJECT_DIR', temp_project_dir)
+    project_id = "chap-syn-proj"
+    chapter_id = "ch1"
+    synopsis_path = file_service.file_service._get_chapter_synopsis_path(project_id, chapter_id)
+    content = "Chapter 1 synopsis summary."
+    synopsis_path.parent.mkdir(parents=True, exist_ok=True)
+    synopsis_path.write_text(content, encoding='utf-8')
+
+    read_content = file_service.file_service.read_chapter_synopsis_file(project_id, chapter_id)
+    assert read_content == content
+
+def test_read_chapter_synopsis_file_not_found(temp_project_dir: Path, monkeypatch):
+    """Test reading a non-existent chapter synopsis file."""
+    monkeypatch.setattr(file_service, 'BASE_PROJECT_DIR', temp_project_dir)
+    project_id = "chap-syn-proj"
+    chapter_id = "ch2_no_synopsis"
+    chapter_path = file_service.file_service._get_chapter_path(project_id, chapter_id)
+    chapter_path.mkdir(parents=True, exist_ok=True)
+
+    read_content = file_service.file_service.read_chapter_synopsis_file(project_id, chapter_id)
+    assert read_content is None # Expect None when not found
+
+# --- ADDED: Tests for Chapter Plan/Synopsis Write Methods ---
+@patch('app.rag.index_manager.index_manager', autospec=True)
+def test_write_chapter_plan_file(mock_index_mgr: MagicMock, temp_project_dir: Path, monkeypatch):
+    """Test writing a chapter plan file and triggering index."""
+    monkeypatch.setattr(file_service, 'BASE_PROJECT_DIR', temp_project_dir)
+    project_id = "chap-plan-write"
+    chapter_id = "ch1"
+    plan_path = file_service.file_service._get_chapter_plan_path(project_id, chapter_id)
+    content = "New chapter plan content."
+
+    # Ensure chapter dir doesn't exist initially to test creation
+    assert not plan_path.parent.exists()
+
+    file_service.file_service.write_chapter_plan_file(project_id, chapter_id, content)
+
+    assert plan_path.exists()
+    assert plan_path.read_text(encoding='utf-8') == content
+    mock_index_mgr.index_file.assert_called_once_with(plan_path)
+
+@patch('app.rag.index_manager.index_manager', autospec=True)
+def test_write_chapter_synopsis_file(mock_index_mgr: MagicMock, temp_project_dir: Path, monkeypatch):
+    """Test writing a chapter synopsis file and triggering index."""
+    monkeypatch.setattr(file_service, 'BASE_PROJECT_DIR', temp_project_dir)
+    project_id = "chap-syn-write"
+    chapter_id = "ch1"
+    synopsis_path = file_service.file_service._get_chapter_synopsis_path(project_id, chapter_id)
+    content = "New chapter synopsis content."
+
+    assert not synopsis_path.parent.exists()
+
+    file_service.file_service.write_chapter_synopsis_file(project_id, chapter_id, content)
+
+    assert synopsis_path.exists()
+    assert synopsis_path.read_text(encoding='utf-8') == content
+    mock_index_mgr.index_file.assert_called_once_with(synopsis_path)
 # --- END ADDED ---

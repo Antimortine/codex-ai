@@ -150,7 +150,7 @@ def test_extract_project_id_base_dir(patched_index_manager_instance):
     assert extracted_id is None
 
 # --- _get_document_details Tests ---
-# (Plan, Synopsis, World, Character tests unchanged - omitted)
+# (Plan, Synopsis, World, Character, Scene, Note, Unknown tests unchanged - omitted)
 def test_get_document_details_plan(patched_index_manager_instance):
     manager, _ = patched_index_manager_instance
     project_id = "proj_details"
@@ -357,6 +357,74 @@ def test_get_document_details_scene_project_metadata_read_error(patched_index_ma
     mock_internal_file_service.read_chapter_metadata.assert_called_once_with(project_id, chapter_id)
     mock_internal_file_service.read_project_metadata.assert_called_once_with(project_id)
 
+# --- ADDED: Tests for Chapter Plan/Synopsis ---
+def test_get_document_details_chapter_plan(patched_index_manager_instance):
+    manager, _ = patched_index_manager_instance
+    project_id = "proj_details_chap_plan"
+    chapter_id = "ch_plan"
+    chapter_title = "Planning Chapter"
+    file_path = BASE_PROJECT_DIR / project_id / "chapters" / chapter_id / "plan.md"
+    # --- ADDED: Explicitly reset side effect ---
+    mock_internal_file_service.read_project_metadata.side_effect = None
+    # --- END ADDED ---
+    # Mock project metadata to provide chapter title
+    mock_internal_file_service.read_project_metadata.return_value = {
+        "chapters": {chapter_id: {"title": chapter_title}}
+    }
+    details = manager._get_document_details(file_path, project_id)
+    assert details == {
+        'document_type': 'ChapterPlan',
+        'document_title': f"Plan for Chapter '{chapter_title}'",
+        'chapter_id': chapter_id,
+        'chapter_title': chapter_title
+    }
+    mock_internal_file_service.read_project_metadata.assert_called_once_with(project_id)
+    mock_internal_file_service.read_chapter_metadata.assert_not_called() # Not needed for chapter plan
+
+def test_get_document_details_chapter_synopsis(patched_index_manager_instance):
+    manager, _ = patched_index_manager_instance
+    project_id = "proj_details_chap_syn"
+    chapter_id = "ch_syn"
+    chapter_title = "Synopsis Chapter"
+    file_path = BASE_PROJECT_DIR / project_id / "chapters" / chapter_id / "synopsis.md"
+    # --- ADDED: Explicitly reset side effect ---
+    mock_internal_file_service.read_project_metadata.side_effect = None
+    # --- END ADDED ---
+    # Mock project metadata to provide chapter title
+    mock_internal_file_service.read_project_metadata.return_value = {
+        "chapters": {chapter_id: {"title": chapter_title}}
+    }
+    details = manager._get_document_details(file_path, project_id)
+    assert details == {
+        'document_type': 'ChapterSynopsis',
+        'document_title': f"Synopsis for Chapter '{chapter_title}'",
+        'chapter_id': chapter_id,
+        'chapter_title': chapter_title
+    }
+    mock_internal_file_service.read_project_metadata.assert_called_once_with(project_id)
+    mock_internal_file_service.read_chapter_metadata.assert_not_called() # Not needed for chapter synopsis
+
+def test_get_document_details_chapter_plan_no_chapter_title(patched_index_manager_instance):
+    manager, _ = patched_index_manager_instance
+    project_id = "proj_details_chap_plan_no_title"
+    chapter_id = "ch_plan_no_title"
+    file_path = BASE_PROJECT_DIR / project_id / "chapters" / chapter_id / "plan.md"
+    # --- ADDED: Explicitly reset side effect ---
+    mock_internal_file_service.read_project_metadata.side_effect = None
+    # --- END ADDED ---
+    # Mock project metadata missing the chapter title
+    mock_internal_file_service.read_project_metadata.return_value = {
+        "chapters": {chapter_id: {}} # Missing title
+    }
+    details = manager._get_document_details(file_path, project_id)
+    assert details == {
+        'document_type': 'ChapterPlan',
+        'document_title': f"Plan for Chapter '{chapter_id}'", # Fallback title uses ID
+        'chapter_id': chapter_id,
+        'chapter_title': chapter_id # Fallback chapter title uses ID
+    }
+    mock_internal_file_service.read_project_metadata.assert_called_once_with(project_id)
+# --- END ADDED ---
 
 def test_get_document_details_note(patched_index_manager_instance):
     manager, _ = patched_index_manager_instance
@@ -492,6 +560,55 @@ def test_index_file_success_scene_file(
 
     mock_simple_directory_reader_instance.load_data.assert_called_once()
     manager.index.insert_nodes.assert_called_once_with([mock_document])
+
+# --- ADDED: Test indexing chapter plan/synopsis ---
+@patch('pathlib.Path.is_file')
+@patch('pathlib.Path.stat')
+def test_index_file_success_chapter_plan(
+    mock_stat: MagicMock,
+    mock_is_file: MagicMock,
+    patched_index_manager_instance
+):
+    """Test indexing a chapter plan file."""
+    manager, mocks = patched_index_manager_instance
+    project_id = "proj_chap_plan_index"
+    chapter_id = "ch_plan_idx"
+    chapter_title = "The Planning Chapter"
+    file_path = BASE_PROJECT_DIR / project_id / "chapters" / chapter_id / "plan.md"
+    doc_id = str(file_path)
+    mock_is_file.return_value = True
+    mock_stat.return_value.st_size = 80
+    mock_document = MagicMock(name="MockDocumentChapPlan")
+    mock_simple_directory_reader_instance.load_data.return_value = [mock_document]
+
+    # --- ADDED: Explicitly reset side effect ---
+    mock_internal_file_service.read_project_metadata.side_effect = None
+    # --- END ADDED ---
+    # Mock project metadata read
+    mock_internal_file_service.read_project_metadata.return_value = {
+        "chapters": {chapter_id: {"title": chapter_title}}
+    }
+
+    manager.index_file(file_path)
+
+    mock_is_file.assert_called_once()
+    mock_stat.assert_called_once()
+    manager.index.delete_ref_doc.assert_called_once_with(ref_doc_id=doc_id, delete_from_docstore=True)
+    mocks["sdr_cls"].assert_called_once_with(input_files=[file_path], file_metadata=ANY)
+    assert callable(mocks["sdr_cls"].call_args.kwargs['file_metadata'])
+
+    # Verify the metadata generated by file_metadata_func
+    metadata_func = mocks["sdr_cls"].call_args.kwargs['file_metadata']
+    generated_meta = metadata_func(str(file_path))
+    assert generated_meta['project_id'] == project_id
+    assert generated_meta['document_type'] == 'ChapterPlan'
+    assert generated_meta['document_title'] == f"Plan for Chapter '{chapter_title}'"
+    assert generated_meta['chapter_id'] == chapter_id
+    assert generated_meta['chapter_title'] == chapter_title
+
+    mock_simple_directory_reader_instance.load_data.assert_called_once()
+    manager.index.insert_nodes.assert_called_once_with([mock_document])
+# --- END ADDED ---
 
 
 @patch('pathlib.Path.is_file')

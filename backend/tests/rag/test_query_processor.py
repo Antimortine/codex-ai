@@ -91,13 +91,15 @@ async def test_query_success_with_nodes(
     with patch.object(processor, '_execute_llm_complete', wraps=processor._execute_llm_complete) as mock_execute_llm:
 
         # Pass the filter set to the query method
+        # --- MODIFIED: Pass None for direct_chapter_context ---
         answer, source_nodes, direct_info = await processor.query(
-            project_id, query_text, plan, synopsis, paths_to_filter=paths_to_filter_set
+            project_id, query_text, plan, synopsis, paths_to_filter=paths_to_filter_set, direct_chapter_context=None
         )
+        # --- END MODIFIED ---
 
         assert answer == expected_answer
         assert source_nodes == expected_filtered_nodes
-        assert direct_info is None
+        assert direct_info is None # No direct sources passed or matched
         mock_retriever_class.assert_called_once_with(index=mock_index, similarity_top_k=settings.RAG_QUERY_SIMILARITY_TOP_K, filters=ANY)
         mock_retriever_instance.aretrieve.assert_awaited_once_with(query_text)
         mock_execute_llm.assert_awaited_once() # Check the helper was awaited once
@@ -105,13 +107,18 @@ async def test_query_success_with_nodes(
         internal_call_args, internal_call_kwargs = mock_execute_llm.call_args
         prompt_arg = internal_call_args[0] # The prompt is the first positional arg
         assert query_text in prompt_arg
+        assert "**Project Plan:**" in prompt_arg # Check section exists
         assert plan in prompt_arg
+        assert "**Project Synopsis:**" in prompt_arg # Check section exists
         assert synopsis in prompt_arg
         # Check prompt includes only the non-filtered node
         assert 'Source (Plan: "Project Plan")' not in prompt_arg # Should be filtered
         assert "The hero wants to climb." not in prompt_arg # Should be filtered
         assert 'Source (Scene: "Opening Scene")' in prompt_arg
         assert "Goal is the summit." in prompt_arg
+        # --- ADDED: Check chapter context is NOT in prompt ---
+        assert "**Directly Requested Chapter Context" not in prompt_arg
+        # --- END ADDED ---
 
 
 @pytest.mark.asyncio
@@ -124,21 +131,23 @@ async def test_query_success_no_nodes(
     project_id = "proj-qp-2"
     query_text = "Any mention of dragons?"
     plan = "No dragons here."
-    synopsis = "A dragon-free story."
+    synopsis = None # Simulate synopsis missing
     retrieved_nodes = [] # No nodes retrieved
     expected_filtered_nodes = [] # Still empty after filtering
     paths_to_filter_set = {str(Path(f"user_projects/{project_id}/plan.md").resolve())} # Example filter
 
-    expected_answer = "Based on the plan and synopsis, there is no mention of dragons."
+    expected_answer = "Based on the plan, there is no mention of dragons."
     mock_retriever_instance = mock_retriever_class.return_value
     mock_retriever_instance.aretrieve = AsyncMock(return_value=retrieved_nodes)
     mock_llm.acomplete = AsyncMock(return_value=CompletionResponse(text=expected_answer))
     processor = QueryProcessor(index=mock_index, llm=mock_llm)
     with patch.object(processor, '_execute_llm_complete', wraps=processor._execute_llm_complete) as mock_execute_llm:
 
+        # --- MODIFIED: Pass None for direct_chapter_context ---
         answer, source_nodes, direct_info = await processor.query(
-            project_id, query_text, plan, synopsis, paths_to_filter=paths_to_filter_set
+            project_id, query_text, plan, synopsis, paths_to_filter=paths_to_filter_set, direct_chapter_context=None
         )
+        # --- END MODIFIED ---
 
         assert answer == expected_answer
         assert source_nodes == expected_filtered_nodes # Should be empty
@@ -147,7 +156,80 @@ async def test_query_success_no_nodes(
         mock_execute_llm.assert_awaited_once()
         internal_call_args, internal_call_kwargs = mock_execute_llm.call_args
         prompt_arg = internal_call_args[0]
+        assert "**Project Plan:**" in prompt_arg # Check section exists
+        assert plan in prompt_arg
+        assert "**Project Synopsis:**" not in prompt_arg # Check section is omitted
         assert "No additional relevant context snippets were retrieved via search." in prompt_arg
+        assert "**Directly Requested Chapter Context" not in prompt_arg
+
+# --- ADDED: Test with direct chapter context ---
+@pytest.mark.asyncio
+@patch('app.rag.query_processor.VectorIndexRetriever', autospec=True)
+async def test_query_success_with_direct_chapter_context(
+    mock_retriever_class: MagicMock,
+    mock_llm: MagicMock,
+    mock_index: MagicMock
+):
+    project_id = "proj-qp-chap-ctx"
+    query_text = "What happens in Chapter Alpha?" # Query mentions chapter
+    plan = "Overall plan."
+    synopsis = "Overall synopsis."
+    chapter_title = "Chapter Alpha"
+    chapter_plan = "Plan for Alpha."
+    chapter_synopsis = "Synopsis for Alpha."
+    direct_chapter_context = {
+        'chapter_plan': chapter_plan,
+        'chapter_synopsis': chapter_synopsis,
+        'chapter_title': chapter_title
+    }
+    retrieved_nodes = [] # No RAG nodes for simplicity
+    expected_filtered_nodes = []
+    paths_to_filter_set = { # Paths passed from AIService
+        str(Path(f"user_projects/{project_id}/plan.md").resolve()),
+        str(Path(f"user_projects/{project_id}/synopsis.md").resolve()),
+        str(Path(f"user_projects/{project_id}/chapters/ch-alpha/plan.md").resolve()),
+        str(Path(f"user_projects/{project_id}/chapters/ch-alpha/synopsis.md").resolve())
+    }
+
+    expected_answer = "In Chapter Alpha, the plan is Plan for Alpha and the synopsis is Synopsis for Alpha."
+    mock_retriever_instance = mock_retriever_class.return_value
+    mock_retriever_instance.aretrieve = AsyncMock(return_value=retrieved_nodes)
+    mock_llm.acomplete = AsyncMock(return_value=CompletionResponse(text=expected_answer))
+    processor = QueryProcessor(index=mock_index, llm=mock_llm)
+    with patch.object(processor, '_execute_llm_complete', wraps=processor._execute_llm_complete) as mock_execute_llm:
+
+        # Pass the direct chapter context
+        answer, source_nodes, direct_info = await processor.query(
+            project_id, query_text, plan, synopsis,
+            paths_to_filter=paths_to_filter_set,
+            direct_chapter_context=direct_chapter_context
+        )
+
+        assert answer == expected_answer
+        assert source_nodes == expected_filtered_nodes
+        # Check direct_info includes chapter context
+        assert direct_info is not None
+        assert len(direct_info) == 2
+        assert {'type': 'ChapterPlan', 'name': f"Plan for Chapter '{chapter_title}'"} in direct_info
+        assert {'type': 'ChapterSynopsis', 'name': f"Synopsis for Chapter '{chapter_title}'"} in direct_info
+
+        mock_retriever_instance.aretrieve.assert_awaited_once_with(query_text)
+        mock_execute_llm.assert_awaited_once()
+        internal_call_args, internal_call_kwargs = mock_execute_llm.call_args
+        prompt_arg = internal_call_args[0]
+        assert "**Project Plan:**" in prompt_arg
+        assert plan in prompt_arg
+        assert "**Project Synopsis:**" in prompt_arg
+        assert synopsis in prompt_arg
+        # Check chapter context sections
+        assert f"**Directly Requested Chapter Context (for Chapter '{chapter_title}'):**" in prompt_arg
+        assert "--- Start Chapter Plan ---" in prompt_arg
+        assert chapter_plan in prompt_arg
+        assert "--- Start Chapter Synopsis ---" in prompt_arg
+        assert chapter_synopsis in prompt_arg
+        assert "No additional relevant context snippets were retrieved via search." in prompt_arg
+# --- END ADDED ---
+
 
 @pytest.mark.asyncio
 @patch('app.rag.query_processor.VectorIndexRetriever', autospec=True)
@@ -163,7 +245,9 @@ async def test_query_retriever_error(
     mock_retriever_instance = mock_retriever_class.return_value
     mock_retriever_instance.aretrieve = AsyncMock(side_effect=RuntimeError("Retriever connection failed"))
     processor = QueryProcessor(index=mock_index, llm=mock_llm)
-    answer, source_nodes, direct_info = await processor.query(project_id, query_text, plan, synopsis)
+    # --- MODIFIED: Pass None for direct_chapter_context ---
+    answer, source_nodes, direct_info = await processor.query(project_id, query_text, plan, synopsis, direct_chapter_context=None)
+    # --- END MODIFIED ---
     assert "Sorry, an internal error occurred processing the query." in answer
     assert source_nodes == [] # Expect empty list on error
     assert direct_info is None
@@ -192,9 +276,11 @@ async def test_query_llm_error_non_retryable(
     processor = QueryProcessor(index=mock_index, llm=mock_llm)
     with patch.object(processor, '_execute_llm_complete', side_effect=ValueError("LLM prompt validation failed")) as mock_decorated_method:
 
+        # --- MODIFIED: Pass None for direct_chapter_context ---
         answer, source_nodes, direct_info = await processor.query(
-            project_id, query_text, plan, synopsis, paths_to_filter=paths_to_filter_set
+            project_id, query_text, plan, synopsis, paths_to_filter=paths_to_filter_set, direct_chapter_context=None
         )
+        # --- END MODIFIED ---
 
         assert "Sorry, an internal error occurred processing the query." in answer
         assert source_nodes == [] # Error handler returns empty list now
@@ -223,9 +309,11 @@ async def test_query_llm_empty_response(
     processor = QueryProcessor(index=mock_index, llm=mock_llm)
     with patch.object(processor, '_execute_llm_complete', return_value=CompletionResponse(text="")) as mock_decorated_method:
 
+        # --- MODIFIED: Pass None for direct_chapter_context ---
         answer, source_nodes, direct_info = await processor.query(
-            project_id, query_text, plan, synopsis, paths_to_filter=paths_to_filter_set
+            project_id, query_text, plan, synopsis, paths_to_filter=paths_to_filter_set, direct_chapter_context=None
         )
+        # --- END MODIFIED ---
 
         assert "(The AI did not provide an answer based on the context.)" in answer
         assert source_nodes == expected_filtered_nodes # Should be empty
@@ -234,7 +322,7 @@ async def test_query_llm_empty_response(
         mock_decorated_method.assert_awaited_once() # Check the helper was called
 
 
-# --- Tests for Retry Logic ---
+# --- Tests for Retry Logic (Unchanged) ---
 @pytest.mark.asyncio
 async def test_query_retry_success(mock_llm: MagicMock, mock_index: MagicMock):
     """Test retry logic succeeds on the third attempt."""
@@ -336,9 +424,11 @@ async def test_query_handles_retry_failure_gracefully(
     # Patch the internal helper method that is decorated
     with patch.object(processor, '_execute_llm_complete', side_effect=final_error) as mock_decorated_method:
 
+        # --- MODIFIED: Pass None for direct_chapter_context ---
         answer, source_nodes, direct_info = await processor.query(
-            project_id, query_text, plan, synopsis, paths_to_filter=paths_to_filter_set
+            project_id, query_text, plan, synopsis, paths_to_filter=paths_to_filter_set, direct_chapter_context=None
         )
+        # --- END MODIFIED ---
 
         assert "Rate limit exceeded for query after multiple retries" in answer
         # Filtered nodes should still be returned even if LLM call fails
@@ -408,9 +498,11 @@ async def test_query_deduplicates_and_filters_nodes(
     with patch.object(processor, '_execute_llm_complete', wraps=processor._execute_llm_complete) as mock_execute_llm:
 
         # Pass the filter set to the query method
+        # --- MODIFIED: Pass None for direct_chapter_context ---
         answer, source_nodes, direct_info = await processor.query(
-            project_id, query_text, plan, synopsis, paths_to_filter=paths_to_filter_set
+            project_id, query_text, plan, synopsis, paths_to_filter=paths_to_filter_set, direct_chapter_context=None
         )
+        # --- END MODIFIED ---
 
         # Assertions
         assert answer == expected_answer
@@ -464,9 +556,11 @@ async def test_query_node_without_filepath_is_not_filtered(
     processor = QueryProcessor(index=mock_index, llm=mock_llm)
     with patch.object(processor, '_execute_llm_complete', wraps=processor._execute_llm_complete) as mock_execute_llm:
 
+        # --- MODIFIED: Pass None for direct_chapter_context ---
         answer, source_nodes, direct_info = await processor.query(
-            project_id, query_text, plan, synopsis, paths_to_filter=paths_to_filter_set
+            project_id, query_text, plan, synopsis, paths_to_filter=paths_to_filter_set, direct_chapter_context=None
         )
+        # --- END MODIFIED ---
 
         assert source_nodes == expected_final_nodes # Only the node without path should remain
         internal_call_args, internal_call_kwargs = mock_execute_llm.call_args

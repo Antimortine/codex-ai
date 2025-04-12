@@ -65,11 +65,19 @@ class FileService:
         return self._get_project_path(project_id) / "notes"
 
     def _get_content_block_path(self, project_id: str, block_name: str) -> Path:
-        """Returns the path to a content block file (plan, synopsis, world)."""
+        """Returns the path to a project-level content block file (plan, synopsis, world)."""
         allowed_blocks = {"plan.md", "synopsis.md", "world.md"}
         if block_name not in allowed_blocks:
-            raise ValueError(f"Invalid content block name: {block_name}")
+            raise ValueError(f"Invalid project-level content block name: {block_name}")
         return self._get_project_path(project_id) / block_name
+
+    def _get_chapter_plan_path(self, project_id: str, chapter_id: str) -> Path:
+        """Returns the path to the plan.md file within a specific chapter directory."""
+        return self._get_chapter_path(project_id, chapter_id) / "plan.md"
+
+    def _get_chapter_synopsis_path(self, project_id: str, chapter_id: str) -> Path:
+        """Returns the path to the synopsis.md file within a specific chapter directory."""
+        return self._get_chapter_path(project_id, chapter_id) / "synopsis.md"
 
     def _get_project_metadata_path(self, project_id: str) -> Path:
         """Path to the project's metadata file."""
@@ -244,25 +252,6 @@ class FileService:
             logger.error(f"Error finding markdown files in {project_path}: {e}", exc_info=True)
             return []
 
-    # --- REVISED: Get Directory Last Modified Time (DEPRECATED) ---
-    # def get_directory_last_modified(self, path: Path) -> Optional[float]:
-    #     """
-    #     DEPRECATED: Gets the last modified time (Unix timestamp) of a directory.
-    #     This is often unreliable for tracking content changes within the directory.
-    #     Use get_project_last_content_modification instead for sorting projects.
-    #     Returns None if the path doesn't exist, isn't a directory, or an error occurs.
-    #     """
-    #     if not self.path_exists(path) or not path.is_dir():
-    #         return None
-    #     try:
-    #         # Use path.stat().st_mtime for consistency with Path object usage
-    #         return path.stat().st_mtime
-    #     except OSError as e:
-    #         logger.error(f"Error getting mtime for directory {path}: {e}")
-    #         return None
-    # --- END REVISED ---
-
-    # --- ADDED: Get Last Content Modification Time ---
     def get_project_last_content_modification(self, project_path: Path) -> Optional[float]:
         """
         Recursively finds the last modification time (Unix timestamp) of any relevant
@@ -301,7 +290,6 @@ class FileService:
         except Exception as e:
              logger.error(f"Unexpected error getting last modification time for project {project_path}: {e}", exc_info=True)
              return None
-    # --- END ADDED ---
 
 
     # --- Specific Structure Creators ---
@@ -324,17 +312,58 @@ class FileService:
          chapter_path = self._get_chapter_path(project_id, chapter_id)
          self.create_directory(chapter_path)
          self.write_chapter_metadata(project_id, chapter_id, {"scenes": {}})
+         # Note: We don't create chapter plan/synopsis by default
 
     # --- Methods for Content Blocks with Indexing ---
     def write_content_block_file(self, project_id: str, block_name: str, content: str):
-        """Writes content block file AND triggers indexing."""
+        """Writes project-level content block file AND triggers indexing."""
         path = self._get_content_block_path(project_id, block_name)
         self.write_text_file(path, content, trigger_index=True)
 
     def read_content_block_file(self, project_id: str, block_name: str) -> str:
-         """Reads content block file."""
+         """Reads project-level content block file."""
          path = self._get_content_block_path(project_id, block_name)
          return self.read_text_file(path)
+
+    def read_chapter_plan_file(self, project_id: str, chapter_id: str) -> Optional[str]:
+        """Reads chapter-level plan.md file, returning None if not found."""
+        path = self._get_chapter_plan_path(project_id, chapter_id)
+        try:
+            return self.read_text_file(path)
+        except HTTPException as e:
+            if e.status_code == 404:
+                logger.debug(f"Chapter plan file not found: {path}")
+                return None
+            logger.error(f"Error reading chapter plan file {path}: {e.detail}")
+            raise e # Re-raise other errors
+
+    def read_chapter_synopsis_file(self, project_id: str, chapter_id: str) -> Optional[str]:
+        """Reads chapter-level synopsis.md file, returning None if not found."""
+        path = self._get_chapter_synopsis_path(project_id, chapter_id)
+        try:
+            return self.read_text_file(path)
+        except HTTPException as e:
+            if e.status_code == 404:
+                logger.debug(f"Chapter synopsis file not found: {path}")
+                return None
+            logger.error(f"Error reading chapter synopsis file {path}: {e.detail}")
+            raise e # Re-raise other errors
+
+    # --- ADDED: Chapter-Level Plan/Synopsis Write Methods ---
+    def write_chapter_plan_file(self, project_id: str, chapter_id: str, content: str):
+        """Writes chapter-level plan.md file AND triggers indexing."""
+        path = self._get_chapter_plan_path(project_id, chapter_id)
+        # Ensure chapter directory exists (write_text_file handles this)
+        self.write_text_file(path, content, trigger_index=True)
+        logger.info(f"Wrote and triggered index for chapter plan: {path}")
+
+    def write_chapter_synopsis_file(self, project_id: str, chapter_id: str, content: str):
+        """Writes chapter-level synopsis.md file AND triggers indexing."""
+        path = self._get_chapter_synopsis_path(project_id, chapter_id)
+        # Ensure chapter directory exists (write_text_file handles this)
+        self.write_text_file(path, content, trigger_index=True)
+        logger.info(f"Wrote and triggered index for chapter synopsis: {path}")
+    # --- END ADDED ---
 
     # --- Centralized Metadata I/O Methods ---
     def read_project_metadata(self, project_id: str) -> dict:

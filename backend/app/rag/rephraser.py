@@ -71,8 +71,8 @@ class Rephraser:
         selected_text: str,
         context_before: Optional[str],
         context_after: Optional[str],
-        explicit_plan: str,
-        explicit_synopsis: str,
+        explicit_plan: Optional[str], # Now optional
+        explicit_synopsis: Optional[str], # Now optional
         paths_to_filter: Optional[Set[str]] = None
         ) -> List[str]:
         logger.info(f"Rephraser: Starting rephrase for project '{project_id}'. Text: '{selected_text[:50]}...'")
@@ -87,7 +87,7 @@ class Rephraser:
         nodes_for_prompt: List[NodeWithScore] = []
 
         try:
-            # 1. Construct Retrieval Query & Retrieve Context
+            # 1. Construct Retrieval Query & Retrieve Context (Unchanged logic)
             retrieval_context = f"{context_before or ''} {selected_text} {context_after or ''}".strip()
             retrieval_query = (
                 f"Find context relevant to rephrasing the specific text: '{selected_text}'. "
@@ -108,7 +108,7 @@ class Rephraser:
             else:
                 logger.debug("Rephraser: No nodes retrieved.")
 
-            # --- ADDED: Deduplicate retrieved nodes before filtering ---
+            # --- Deduplication and Filtering (Unchanged logic) ---
             unique_retrieved_nodes_map = {}
             if retrieved_nodes:
                 for node_with_score in retrieved_nodes:
@@ -119,27 +119,25 @@ class Rephraser:
             unique_retrieved_nodes = list(unique_retrieved_nodes_map.values())
             if len(unique_retrieved_nodes) < len(retrieved_nodes):
                 logger.debug(f"Deduplicated {len(retrieved_nodes) - len(unique_retrieved_nodes)} nodes based on content and file path.")
-            # --- END ADDED ---
 
-            # --- Filter unique retrieved nodes using Path objects ---
-            if unique_retrieved_nodes: # Filter the deduplicated list
+            if unique_retrieved_nodes:
                 logger.debug(f"Rephraser: Starting node filtering against {len(final_paths_to_filter_obj)} filter paths.")
-                for node_with_score in unique_retrieved_nodes: # Iterate over unique nodes
+                for node_with_score in unique_retrieved_nodes:
                     node = node_with_score.node
                     node_path_str = node.metadata.get('file_path')
                     if not node_path_str:
                         logger.warning(f"Node {node.node_id} missing 'file_path' metadata. Including in prompt.")
-                        nodes_for_prompt.append(node_with_score) # Append NodeWithScore
+                        nodes_for_prompt.append(node_with_score)
                         continue
                     try:
                         node_path_obj = Path(node_path_str).resolve()
                         is_filtered = node_path_obj in final_paths_to_filter_obj
                         logger.debug(f"  Comparing Node Path: {node_path_obj} | In Filter Set: {is_filtered}")
                         if not is_filtered:
-                            nodes_for_prompt.append(node_with_score) # Append NodeWithScore
+                            nodes_for_prompt.append(node_with_score)
                     except Exception as e:
                         logger.error(f"Error resolving or comparing path '{node_path_str}' for node {node.node_id}. Including node. Error: {e}")
-                        nodes_for_prompt.append(node_with_score) # Append NodeWithScore
+                        nodes_for_prompt.append(node_with_score)
 
                 if len(nodes_for_prompt) < len(unique_retrieved_nodes):
                     logger.debug(f"Filtered {len(unique_retrieved_nodes) - len(nodes_for_prompt)} unique retrieved nodes based on paths_to_filter.")
@@ -151,9 +149,9 @@ class Rephraser:
             else:
                 logger.debug("Rephraser: No nodes remaining after filtering.")
 
-            # --- Format context using type and title (using filtered nodes) ---
+            # --- Format RAG context (Unchanged logic) ---
             rag_context_list = []
-            if nodes_for_prompt: # Use filtered nodes
+            if nodes_for_prompt:
                  for node_with_score in nodes_for_prompt:
                       node = node_with_score.node
                       doc_type = node.metadata.get('document_type', 'Unknown')
@@ -168,21 +166,26 @@ class Rephraser:
             logger.debug(f"Rephraser: Final rag_context_str for prompt:\n---\n{rag_context_str}\n---")
 
 
-            # 2. Build Rephrase Prompt (Uses updated rag_context_str and adds Plan/Synopsis)
+            # 2. Build Rephrase Prompt
             logger.debug("Building rephrase prompt...")
             system_prompt = (
                 "You are an expert writing assistant. Your task is to rephrase the user's selected text, providing several alternative phrasings. "
                 "Use the surrounding text and the broader project context provided (Plan, Synopsis, Retrieved Snippets) to ensure the suggestions fit naturally and maintain consistency with the overall narrative style and tone."
             )
-            max_plan_synopsis_len = 1000
-            truncated_plan = (explicit_plan or '')[:max_plan_synopsis_len] + ('...' if len(explicit_plan or '') > max_plan_synopsis_len else '')
-            truncated_synopsis = (explicit_synopsis or '')[:max_plan_synopsis_len] + ('...' if len(explicit_synopsis or '') > max_plan_synopsis_len else '')
 
             user_message_content = (
                 f"Please provide {settings.RAG_REPHRASE_SUGGESTION_COUNT} alternative ways to phrase the 'Text to Rephrase' below, considering the context.\n\n"
-                f"**Project Plan:**\n```markdown\n{truncated_plan or 'Not Available'}\n```\n\n"
-                f"**Project Synopsis:**\n```markdown\n{truncated_synopsis or 'Not Available'}\n```\n\n"
-                f"**Additional Retrieved Context:**\n```markdown\n{rag_context_str}\n```\n\n" # This now uses titles/types and filtered nodes
+            )
+
+            # --- MODIFIED: Conditionally add project context ---
+            if explicit_plan:
+                user_message_content += f"**Project Plan:**\n```markdown\n{explicit_plan}\n```\n\n"
+            if explicit_synopsis:
+                user_message_content += f"**Project Synopsis:**\n```markdown\n{explicit_synopsis}\n```\n\n"
+            # --- END MODIFIED ---
+
+            user_message_content += (
+                f"**Additional Retrieved Context:**\n```markdown\n{rag_context_str}\n```\n\n"
             )
             if context_before or context_after:
                  user_message_content += "**Surrounding Text:**\n```\n"
@@ -227,7 +230,7 @@ class Rephraser:
             logger.info(f"Successfully parsed {len(suggestions)} rephrase suggestions for project '{project_id}'.")
             return suggestions
 
-        # --- Exception Handling (Catch GoogleAPICallError) ---
+        # --- Exception Handling (Unchanged) ---
         except GoogleAPICallError as e:
              if _is_retryable_google_api_error(e):
                   logger.error(f"Rate limit error persisted after retries for rephrase: {e}", exc_info=False)

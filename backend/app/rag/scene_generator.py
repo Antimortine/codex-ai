@@ -75,8 +75,12 @@ class SceneGenerator:
         chapter_id: str,
         prompt_summary: Optional[str],
         previous_scene_order: Optional[int],
-        explicit_plan: str,
-        explicit_synopsis: str,
+        explicit_plan: Optional[str], # Now optional
+        explicit_synopsis: Optional[str], # Now optional
+        # --- ADDED: Chapter context ---
+        explicit_chapter_plan: Optional[str],
+        explicit_chapter_synopsis: Optional[str],
+        # --- END ADDED ---
         explicit_previous_scenes: List[Tuple[int, str]], # Contains (order, content)
         paths_to_filter: Optional[Set[str]] = None
         ) -> Dict[str, str]:
@@ -104,7 +108,7 @@ class SceneGenerator:
             logger.warning(f"Could not retrieve chapter title for {chapter_id}: {e}")
 
         try:
-            # --- 1. Retrieve RAG Context ---
+            # --- 1. Retrieve RAG Context (Unchanged logic) ---
             retrieval_query_parts = [
                 f"Relevant context for writing the next scene in chapter '{chapter_title}'."
             ]
@@ -125,7 +129,7 @@ class SceneGenerator:
             else:
                 logger.debug("SceneGenerator: No nodes retrieved.")
 
-            # --- ADDED: Deduplicate retrieved nodes before filtering ---
+            # --- Deduplication and Filtering (Unchanged logic) ---
             unique_retrieved_nodes_map = {}
             if retrieved_nodes:
                 for node_with_score in retrieved_nodes:
@@ -136,27 +140,25 @@ class SceneGenerator:
             unique_retrieved_nodes = list(unique_retrieved_nodes_map.values())
             if len(unique_retrieved_nodes) < len(retrieved_nodes):
                 logger.debug(f"Deduplicated {len(retrieved_nodes) - len(unique_retrieved_nodes)} nodes based on content and file path.")
-            # --- END ADDED ---
 
-            # --- Filter unique retrieved nodes using Path objects ---
-            if unique_retrieved_nodes: # Filter the deduplicated list
+            if unique_retrieved_nodes:
                 logger.debug(f"SceneGenerator: Starting node filtering against {len(final_paths_to_filter_obj)} filter paths.")
-                for node_with_score in unique_retrieved_nodes: # Iterate over unique nodes
+                for node_with_score in unique_retrieved_nodes:
                     node = node_with_score.node
                     node_path_str = node.metadata.get('file_path')
                     if not node_path_str:
                         logger.warning(f"Node {node.node_id} missing 'file_path' metadata. Including in prompt.")
-                        nodes_for_prompt.append(node_with_score) # Append NodeWithScore
+                        nodes_for_prompt.append(node_with_score)
                         continue
                     try:
                         node_path_obj = Path(node_path_str).resolve()
                         is_filtered = node_path_obj in final_paths_to_filter_obj
                         logger.debug(f"  Comparing Node Path: {node_path_obj} | In Filter Set: {is_filtered}")
                         if not is_filtered:
-                            nodes_for_prompt.append(node_with_score) # Append NodeWithScore
+                            nodes_for_prompt.append(node_with_score)
                     except Exception as e:
                         logger.error(f"Error resolving or comparing path '{node_path_str}' for node {node.node_id}. Including node. Error: {e}")
-                        nodes_for_prompt.append(node_with_score) # Append NodeWithScore
+                        nodes_for_prompt.append(node_with_score)
 
                 if len(nodes_for_prompt) < len(unique_retrieved_nodes):
                     logger.debug(f"Filtered {len(unique_retrieved_nodes) - len(nodes_for_prompt)} unique retrieved nodes based on paths_to_filter.")
@@ -168,18 +170,17 @@ class SceneGenerator:
             else:
                 logger.debug("SceneGenerator: No nodes remaining after filtering.")
 
-            # --- Format context using type and title (using filtered nodes) ---
+            # --- Format RAG context (Unchanged logic) ---
             rag_context_list = []
-            if nodes_for_prompt: # Use filtered nodes
+            if nodes_for_prompt:
                  for node_with_score in nodes_for_prompt:
                       node = node_with_score.node
                       doc_type = node.metadata.get('document_type', 'Unknown')
                       doc_title = node.metadata.get('document_title', 'Unknown Source')
-                      char_name = node.metadata.get('character_name') # Keep character name if present
+                      char_name = node.metadata.get('character_name')
                       char_info = f" (Character: {char_name})" if char_name and doc_type != 'Character' else ""
                       source_label = f"Source ({doc_type}: \"{doc_title}\"{char_info})"
-
-                      node_content = node.get_content(); max_node_len = 500 # Keep truncation
+                      node_content = node.get_content(); max_node_len = 500
                       truncated_content = node_content[:max_node_len] + ('...' if len(node_content) > max_node_len else '')
                       rag_context_list.append(f"{source_label}\n\n{truncated_content}")
             rag_context_str = "\n\n---\n\n".join(rag_context_list) if rag_context_list else "No additional context retrieved via search."
@@ -190,7 +191,7 @@ class SceneGenerator:
             system_prompt = (
                 "You are an expert writing assistant helping a user draft the next scene in their creative writing project. "
                 "Generate a coherent and engaging scene draft in Markdown format. "
-                "Pay close attention to the provided Project Plan, Synopsis, and the content of the Immediately Previous Scene(s) to ensure consistency and logical progression. "
+                "Pay close attention to the provided Project Plan, Project Synopsis, Chapter Plan, Chapter Synopsis, and the content of the Immediately Previous Scene(s) to ensure consistency and logical progression. " # Added Chapter Plan/Synopsis
                 "Also consider the Additional Context retrieved via search."
             )
             previous_scenes_prompt_part = ""
@@ -211,16 +212,23 @@ class SceneGenerator:
             else:
                  previous_scenes_prompt_part = f"**Previous Scene(s):** N/A (Generating the first scene of chapter '{chapter_title}')\n\n"
             main_instruction = f"Guidance for new scene: '{prompt_summary}'.\n\n" if prompt_summary else "Generate the next logical scene based on the context.\n\n"
-            max_plan_synopsis_len = 1000
-            truncated_plan = (explicit_plan or '')[:max_plan_synopsis_len] + ('...' if len(explicit_plan or '') > max_plan_synopsis_len else '')
-            truncated_synopsis = (explicit_synopsis or '')[:max_plan_synopsis_len] + ('...' if len(explicit_synopsis or '') > max_plan_synopsis_len else '')
 
-            user_message_content = (
-                f"{main_instruction}"
-                f"**Project Plan:**\n```markdown\n{truncated_plan}\n```\n\n"
-                f"**Project Synopsis:**\n```markdown\n{truncated_synopsis}\n```\n\n"
+            user_message_content = f"{main_instruction}"
+
+            # --- MODIFIED: Conditionally add context sections ---
+            if explicit_plan:
+                user_message_content += f"**Project Plan:**\n```markdown\n{explicit_plan}\n```\n\n"
+            if explicit_synopsis:
+                user_message_content += f"**Project Synopsis:**\n```markdown\n{explicit_synopsis}\n```\n\n"
+            if explicit_chapter_plan:
+                user_message_content += f"**Chapter Plan (for Chapter '{chapter_title}'):**\n```markdown\n{explicit_chapter_plan}\n```\n\n"
+            if explicit_chapter_synopsis:
+                user_message_content += f"**Chapter Synopsis (for Chapter '{chapter_title}'):**\n```markdown\n{explicit_chapter_synopsis}\n```\n\n"
+            # --- END MODIFIED ---
+
+            user_message_content += (
                 f"{previous_scenes_prompt_part}"
-                f"**Additional Retrieved Context:**\n```markdown\n{rag_context_str}\n```\n\n" # This now uses titles/types and filtered nodes
+                f"**Additional Retrieved Context:**\n```markdown\n{rag_context_str}\n```\n\n"
                 f"**New Scene Details:**\n"
                 f"- Belongs to: Chapter '{chapter_title}' (ID: {chapter_id})\n"
                 f"- Should logically follow the provided previous scene(s).\n\n"
@@ -233,7 +241,7 @@ class SceneGenerator:
             generated_text = llm_response.text.strip() if llm_response else ""
             if not generated_text: raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Error: The AI failed to generate a scene draft. Please try again.")
 
-            # --- 4. Parse the Response (Logic remains the same) ---
+            # --- 4. Parse the Response (Unchanged logic) ---
             logger.debug("Parsing LLM response for title and content...")
             title = "Untitled Scene"; content = generated_text
             title_match = re.search(r"^\s*##\s+(.+?)\s*$", generated_text, re.MULTILINE)
@@ -250,7 +258,7 @@ class SceneGenerator:
             logger.info(f"Scene generation processed. Title: '{generated_draft['title']}'")
             return generated_draft
 
-        # --- Exception handling (Catch GoogleAPICallError) ---
+        # --- Exception handling (Unchanged) ---
         except GoogleAPICallError as e:
              if _is_retryable_google_api_error(e): raise HTTPException(status_code=status.HTTP_429_TOO_MANY_REQUESTS, detail=f"Error: Rate limit exceeded after multiple retries. Please wait and try again.") from e
              else: raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Error: An unexpected error occurred while communicating with the AI service. Details: {e}") from e
