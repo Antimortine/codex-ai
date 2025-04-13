@@ -23,7 +23,8 @@ import {
     listScenes, createScene, deleteScene,
     generateSceneDraft,
     splitChapterIntoScenes,
-    rebuildProjectIndex // Import the new API function
+    rebuildProjectIndex,
+    compileChapterContent // <-- Import the new API function
 } from '../api/codexApi';
 import ChapterSection from '../components/ChapterSection';
 
@@ -42,7 +43,6 @@ const modalStyles = {
     splitCreateButton: { backgroundColor: '#28a745', color: 'white', marginRight: '10px' },
     generatedTitle: { marginTop: '0', marginBottom: '10px', borderBottom: '1px solid #ccc', paddingBottom: '5px' }
 };
-// --- ADDED: Style for rebuild button area ---
 const rebuildStyle = {
     container: {
         marginTop: '1rem',
@@ -68,7 +68,6 @@ const rebuildStyle = {
         color: '#155724',
     }
 };
-// --- END ADDED ---
 
 
 function ProjectDetailPage() {
@@ -115,10 +114,13 @@ function ProjectDetailPage() {
     const [isSplittingChapter, setIsSplittingChapter] = useState(false);
     const [splittingChapterId, setSplittingChapterId] = useState(null);
     const [splitError, setSplitError] = useState(null);
-    // --- ADDED: State for Rebuild Index ---
     const [isRebuildingIndex, setIsRebuildingIndex] = useState(false);
     const [rebuildError, setRebuildError] = useState(null);
     const [rebuildSuccessMessage, setRebuildSuccessMessage] = useState('');
+    // --- ADDED: State for Compile Chapter ---
+    const [isCompilingChapter, setIsCompilingChapter] = useState(false);
+    const [compilingChapterId, setCompilingChapterId] = useState(null);
+    const [compileError, setCompileError] = useState(null);
     // --- END ADDED ---
     // --- END State variables ---
 
@@ -178,8 +180,17 @@ function ProjectDetailPage() {
                         const sortedChapters = (chaptersResult.data.chapters || []).sort((a, b) => a.order - b.order);
                         setChapters(sortedChapters);
                         const initialSummaries = {}; const initialSplitContent = {};
-                        sortedChapters.forEach(ch => { initialSummaries[ch.id] = ''; initialSplitContent[ch.id] = ''; });
-                        setGenerationSummaries(initialSummaries); setSplitInputContent(initialSplitContent);
+                        // --- ADDED: Initialize compile error state ---
+                        const initialCompileErrors = {};
+                        // --- END ADDED ---
+                        sortedChapters.forEach(ch => {
+                            initialSummaries[ch.id] = '';
+                            initialSplitContent[ch.id] = '';
+                            initialCompileErrors[ch.id] = null; // Initialize compile error
+                        });
+                        setGenerationSummaries(initialSummaries);
+                        setSplitInputContent(initialSplitContent);
+                        setCompileError(initialCompileErrors); // Set initial state for compile errors
                     } else { console.error("[ProjectDetail] fetchChaptersAndChars: chaptersResult is null/undefined after await."); setError(prev => prev ? `${prev} | Failed to load chapters (null result).` : 'Failed to load chapters (null result).'); }
                     if (charactersResult) { const chars = charactersResult.data.characters || []; setCharacters(chars); }
                     else { console.error("[ProjectDetail] fetchChaptersAndChars: charactersResult is null/undefined after await."); setError(prev => prev ? `${prev} | Failed to load characters (null result).` : 'Failed to load characters (null result).'); }
@@ -225,7 +236,7 @@ function ProjectDetailPage() {
         };
         fetchAllScenes();
         return () => { isMounted = false; };
-    }, [chapters, projectId, isLoadingChapters]); // This hook should ONLY depend on chapters, projectId, isLoadingChapters
+    }, [chapters, projectId, isLoadingChapters]);
 
 
     // --- Action Handlers ---
@@ -601,7 +612,6 @@ function ProjectDetailPage() {
         }
     }, [generationError, chapterIdForGeneratedScene, generatingChapterId]);
 
-    // --- ADDED: Handler for Rebuild Index ---
     const handleRebuildIndex = useCallback(async () => {
         if (!window.confirm(`Rebuild the search index for project "${project?.name || projectId}"? This can take a moment and will delete the existing index first.`)) {
             return;
@@ -621,11 +631,43 @@ function ProjectDetailPage() {
             setIsRebuildingIndex(false);
         }
     }, [projectId, project?.name]);
+
+    // --- ADDED: Handler for Compile Chapter ---
+    const handleCompileChapter = useCallback(async (chapterId) => {
+        setCompilingChapterId(chapterId);
+        setIsCompilingChapter(true);
+        setCompileError(prev => ({ ...prev, [chapterId]: null })); // Clear previous error for this chapter
+
+        try {
+            // Call API (initially with default params)
+            const response = await compileChapterContent(projectId, chapterId);
+            const { filename, content } = response.data;
+
+            // Trigger download
+            const blob = new Blob([content], { type: 'text/markdown;charset=utf-8;' });
+            const url = URL.createObjectURL(blob);
+            const link = document.createElement('a');
+            link.href = url;
+            link.setAttribute('download', filename || `chapter-${chapterId}.md`);
+            document.body.appendChild(link);
+            link.click();
+            document.body.removeChild(link);
+            URL.revokeObjectURL(url);
+
+        } catch (err) {
+            console.error(`Error compiling chapter ${chapterId}:`, err);
+            const msg = err.response?.data?.detail || err.message || 'Failed to compile chapter.';
+            setCompileError(prev => ({ ...prev, [chapterId]: msg }));
+        } finally {
+            setIsCompilingChapter(false);
+            setCompilingChapterId(null);
+        }
+    }, [projectId]);
     // --- END ADDED ---
 
 
     // --- Combined Loading State ---
-    const isAnyOperationLoading = isSavingName || isSavingChapter || isGeneratingScene || isCreatingSceneFromDraft || isSplittingChapter || isCreatingScenesFromSplit || isRebuildingIndex; // Added isRebuildingIndex
+    const isAnyOperationLoading = isSavingName || isSavingChapter || isGeneratingScene || isCreatingSceneFromDraft || isSplittingChapter || isCreatingScenesFromSplit || isRebuildingIndex || isCompilingChapter; // Added isCompilingChapter
 
     // --- Rendering Logic (remains the same) ---
      if (isLoadingProject) {
@@ -729,6 +771,11 @@ function ProjectDetailPage() {
                                     splitErrorForThisChapter={splittingChapterId === chapter.id ? splitError : null}
                                     onSplitInputChange={handleSplitInputChange}
                                     onSplitChapter={handleSplitChapter}
+                                    // --- ADDED: Props for Compile Chapter ---
+                                    isCompilingThisChapter={isCompilingChapter && compilingChapterId === chapter.id}
+                                    compileErrorForThisChapter={compileError ? compileError[chapter.id] : null}
+                                    onCompileChapter={handleCompileChapter}
+                                    // --- END ADDED ---
                                 />
                             ))
                         )}
@@ -758,7 +805,7 @@ function ProjectDetailPage() {
                  <ul style={{ listStyle: 'none', paddingLeft: 0 }}> <li style={{ marginBottom: '0.5rem' }}> <Link to={`/projects/${projectId}/plan`}>Edit Plan</Link> </li> <li style={{ marginBottom: '0.5rem' }}> <Link to={`/projects/${projectId}/synopsis`}>Edit Synopsis</Link> </li> <li style={{ marginBottom: '0.5rem' }}> <Link to={`/projects/${projectId}/world`}>Edit World Info</Link> </li> </ul>
             </section>
 
-            {/* --- ADDED: Rebuild Index Section --- */}
+            {/* --- Rebuild Index Section --- */}
             <hr />
             <section style={rebuildStyle.container}>
                 <h3>Project Index Management</h3>
@@ -774,7 +821,7 @@ function ProjectDetailPage() {
                 {rebuildError && <span style={{...rebuildStyle.message, ...rebuildStyle.error}} data-testid="rebuild-error">{rebuildError}</span>}
                 {rebuildSuccessMessage && <span style={{...rebuildStyle.message, ...rebuildStyle.success}} data-testid="rebuild-success">{rebuildSuccessMessage}</span>}
             </section>
-            {/* --- END ADDED --- */}
+            {/* --- END Rebuild Index Section --- */}
 
         </div>
     );

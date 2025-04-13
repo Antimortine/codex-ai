@@ -68,6 +68,24 @@ const styles = {
         borderRadius: '3px',
         backgroundColor: '#f8f9fa',
     },
+    // --- ADDED: Compile button style ---
+    compileButton: {
+        marginLeft: '0.5rem',
+        fontSize: '0.85em',
+        cursor: 'pointer',
+        padding: '3px 8px',
+        border: '1px solid #17a2b8', // Info color
+        borderRadius: '3px',
+        backgroundColor: '#f8f9fa',
+        color: '#17a2b8',
+    },
+    compileErrorText: {
+        color: 'red',
+        fontSize: '0.9em',
+        marginTop: '5px',
+        display: 'block', // Ensure it takes its own line if needed
+    },
+    // --- END ADDED ---
     sceneList: {
         listStyle: 'none',
         paddingLeft: '15px', // Reduced padding
@@ -112,7 +130,6 @@ const styles = {
     },
     summaryInput: {
         fontSize: '0.9em',
-        // marginRight: '5px', // Removed, using gap
         minWidth: '250px',
         flexGrow: 1, // Allow input to grow
         padding: '4px 6px',
@@ -126,12 +143,9 @@ const styles = {
     inlineErrorText: {
         color: 'red',
         fontSize: '0.9em',
-        // marginTop:'5px', // Removed, using gap
         display: 'inline-block',
-        // marginLeft: '10px', // Removed, using gap
     },
     loadingIndicator: {
-        // marginLeft: '5px', // Removed, using gap
         fontStyle: 'italic',
         fontSize: '0.9em',
         color: '#6c757d',
@@ -173,6 +187,8 @@ const styles = {
         marginTop: '8px',
         display: 'flex',
         gap: '15px',
+        alignItems: 'center', // Align items vertically
+        flexWrap: 'wrap', // Allow wrapping if needed
     }
 };
 
@@ -203,6 +219,11 @@ const ChapterSection = memo(function ChapterSection({
     splitErrorForThisChapter,
     onSplitInputChange,
     onSplitChapter,
+    // --- ADDED: Compile Props ---
+    isCompilingThisChapter,
+    compileErrorForThisChapter,
+    onCompileChapter,
+    // --- END ADDED ---
 }) {
 
     const chapterHasScenes = scenesForChapter && scenesForChapter.length > 0;
@@ -216,7 +237,9 @@ const ChapterSection = memo(function ChapterSection({
                            : isAnyOperationLoading ? "Another operation is in progress..."
                            : "Split this chapter into scenes using AI";
     const splitButtonStyle = disableSplitButton ? styles.splitButtonDisabled : styles.splitButton;
-
+    // --- ADDED: Compile button disabled state ---
+    const disableCompileButton = disableChapterActions || isCompilingThisChapter || !chapterHasScenes;
+    // --- END ADDED ---
 
     return (
         <div data-testid={`chapter-section-${chapter.id}`} style={styles.chapterSection}>
@@ -252,7 +275,17 @@ const ChapterSection = memo(function ChapterSection({
                     <strong data-testid={`chapter-title-${chapter.id}`} style={styles.titleDisplay}>{chapter.order}: {chapter.title}</strong>
                 )}
                 {!isEditingThisChapter && (
-                    <div style={{ whiteSpace: 'nowrap' }}> {/* Prevent buttons wrapping */}
+                    <div style={{ whiteSpace: 'nowrap', display: 'flex', alignItems: 'center' }}> {/* Flex for alignment */}
+                        {/* --- ADDED: Compile Button --- */}
+                         <button
+                             onClick={() => onCompileChapter(chapter.id)}
+                             style={styles.compileButton}
+                             disabled={disableCompileButton}
+                             title={!chapterHasScenes ? "Chapter has no scenes to compile" : disableCompileButton ? "Operation in progress..." : "Compile chapter content to Markdown"}
+                         >
+                             {isCompilingThisChapter ? 'Compiling...' : 'Compile Chapter'}
+                         </button>
+                        {/* --- END ADDED --- */}
                         <button
                             onClick={() => onEditChapter(chapter)}
                             style={styles.actionButton}
@@ -272,6 +305,11 @@ const ChapterSection = memo(function ChapterSection({
                     </div>
                 )}
             </div>
+
+            {/* --- ADDED: Display Compile Error --- */}
+            {compileErrorForThisChapter && <p data-testid={`compile-error-${chapter.id}`} style={styles.compileErrorText}>Compile Error: {compileErrorForThisChapter}</p>}
+            {/* --- END ADDED --- */}
+
 
             {/* Chapter Plan/Synopsis Links */}
             <div style={styles.chapterLinks}>
@@ -372,7 +410,7 @@ const ChapterSection = memo(function ChapterSection({
     );
 });
 
-// PropTypes remain the same
+// --- ADDED: PropTypes for Compile Chapter ---
 ChapterSection.propTypes = {
     chapter: PropTypes.shape({
         id: PropTypes.string.isRequired,
@@ -409,6 +447,11 @@ ChapterSection.propTypes = {
     splitErrorForThisChapter: PropTypes.string,
     onSplitInputChange: PropTypes.func.isRequired,
     onSplitChapter: PropTypes.func.isRequired,
+    // Compile Chapter Props
+    isCompilingThisChapter: PropTypes.bool.isRequired,
+    compileErrorForThisChapter: PropTypes.string,
+    onCompileChapter: PropTypes.func.isRequired,
 };
+// --- END ADDED ---
 
 export default ChapterSection;

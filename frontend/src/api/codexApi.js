@@ -64,12 +64,24 @@ export const updateSynopsis = (projectId, data) => apiClient.put(`/projects/${pr
 export const getWorldInfo = (projectId) => apiClient.get(`/projects/${projectId}/world`);
 export const updateWorldInfo = (projectId, data) => apiClient.put(`/projects/${projectId}/world`, data); // data: { content: "..." }
 
-// --- ADDED: Content Block Endpoints (Chapter Level) ---
+// --- Content Block Endpoints (Chapter Level) ---
 export const getChapterPlan = (projectId, chapterId) => apiClient.get(`/projects/${projectId}/chapters/${chapterId}/plan`);
 export const updateChapterPlan = (projectId, chapterId, data) => apiClient.put(`/projects/${projectId}/chapters/${chapterId}/plan`, data); // data: { content: "..." }
 
 export const getChapterSynopsis = (projectId, chapterId) => apiClient.get(`/projects/${projectId}/chapters/${chapterId}/synopsis`);
 export const updateChapterSynopsis = (projectId, chapterId, data) => apiClient.put(`/projects/${projectId}/chapters/${chapterId}/synopsis`, data); // data: { content: "..." }
+
+// --- Chapter Compilation Endpoint ---
+/**
+ * Compiles chapter content.
+ * @param {string} projectId - Project ID.
+ * @param {string} chapterId - Chapter ID.
+ * @param {object} params - Optional query parameters { include_titles?: boolean, separator?: string }.
+ * @returns {Promise<AxiosResponse<any>>} - Expected data: { filename: string, content: string }
+ */
+export const compileChapterContent = (projectId, chapterId, params = {}) => {
+    return apiClient.get(`/projects/${projectId}/chapters/${chapterId}/compile`, { params });
+};
 // --- END ADDED ---
 
 
