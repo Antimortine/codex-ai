@@ -38,6 +38,13 @@ vi.mock('../api/codexApi', async () => {
   };
 });
 
+// Mock ChapterSection component to avoid prop validation issues
+vi.mock('../components/ChapterSection', () => {
+  return {
+    default: ({ chapter }) => <div data-testid={`chapter-section-${chapter.id}`}>{chapter.title}</div>
+  };
+});
+
 // Import the mocked API functions
 import { 
   getProject, 

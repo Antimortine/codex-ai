@@ -14,12 +14,15 @@
  * limitations under the License.
  */
 
-/**
- * This file is a simple wrapper that imports the refactored ProjectDetailPage component.
- * The component has been refactored into a more modular structure with separate components and hooks.
- * See the ProjectDetail directory for the full implementation.
- */
+import React from 'react';
 
-import ProjectDetailPage from './ProjectDetail';
+// Mock implementation of ChapterSection for testing
+const ChapterSection = ({ chapter, projectId }) => (
+  <div data-testid={`chapter-section-${chapter.id}`}>
+    <h3>{chapter.title}</h3>
+    <div>Chapter ID: {chapter.id}</div>
+    <div>Project ID: {projectId}</div>
+  </div>
+);
 
-export default ProjectDetailPage;
+export default ChapterSection;

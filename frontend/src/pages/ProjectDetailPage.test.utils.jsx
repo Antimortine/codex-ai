@@ -30,20 +30,51 @@ export const TEST_CHARACTER_NAME = 'Test Character';
 export const NEW_CHAPTER_TITLE = 'New Chapter';
 export const UPDATED_CHAPTER_TITLE = 'Updated Chapter';
 
-// Helper function to create a router wrapper
+// Helper function to create a router wrapper with enhanced cleanup
 export function renderWithRouter(ui, route = `/projects/${TEST_PROJECT_ID}`) {
   window.history.pushState({}, 'Test page', route);
   
-  return {
-    ...render(
-      <MemoryRouter initialEntries={[route]}>
-        <Routes>
-          <Route path="/projects/:projectId" element={ui} />
-        </Routes>
-      </MemoryRouter>
-    ),
+  // Create a container that will be cleaned up properly
+  const container = document.createElement('div');
+  document.body.appendChild(container);
+  
+  const result = render(
+    <MemoryRouter initialEntries={[route]}>
+      <Routes>
+        <Route path="/projects/:projectId" element={ui} />
+      </Routes>
+    </MemoryRouter>,
+    { container }
+  );
+  
+  // Enhance the cleanup function to properly handle asynchronous operations
+  const originalCleanup = result.cleanup;
+  result.cleanup = () => {
+    // Remove from DOM first to trigger unmounting
+    if (container.parentNode) {
+      container.parentNode.removeChild(container);
+    }
+    
+    // Now run the original cleanup
+    originalCleanup();
+    
+    // Add a small delay to allow async operations to settle
+    return new Promise(resolve => setTimeout(resolve, 10));
   };
+  
+  return result;
 }
 
-// Helper to wait for promises to resolve
-export const flushPromises = () => new Promise(resolve => setTimeout(resolve, 0));
+// Helper to wait for promises to resolve with a bit more time for React state updates
+export const flushPromises = (ms = 50) => new Promise(resolve => setTimeout(resolve, ms));
+
+// Helper to safely unmount components and wait for cleanup
+export const unmountSafely = async (container) => {
+  // First remove from DOM
+  if (container && container.parentNode) {
+    container.parentNode.removeChild(container);
+  }
+  
+  // Then wait for any pending state updates
+  await flushPromises(100);
+};

@@ -19,6 +19,7 @@ import { waitFor } from '@testing-library/react';
 import { act } from 'react-dom/test-utils';
 import userEvent from '@testing-library/user-event';
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
+// Import the refactored component wrapper
 import ProjectDetailPage from './ProjectDetailPage';
 import {
   renderWithRouter,
@@ -27,6 +28,26 @@ import {
   TEST_PROJECT_NAME,
   UPDATED_PROJECT_NAME
 } from './ProjectDetailPage.test.utils';
+
+// We'll use a different approach to handle component dependencies
+
+// Mock ChapterSection component to avoid prop validation issues
+vi.mock('../components/ChapterSection', () => {
+  return {
+    default: ({ chapter, scenesForChapter, onDeleteChapter }) => (
+      <div data-testid={`chapter-section-${chapter.id}`}>
+        {chapter.title}
+        {scenesForChapter && <div>Scenes: {scenesForChapter.length}</div>}
+        <button 
+          data-testid={`delete-chapter-${chapter.id}`}
+          onClick={() => onDeleteChapter && onDeleteChapter()}
+        >
+          Delete
+        </button>
+      </div>
+    )
+  };
+});
 
 // Mock API calls used by ProjectDetailPage
 vi.mock('../api/codexApi', async () => {

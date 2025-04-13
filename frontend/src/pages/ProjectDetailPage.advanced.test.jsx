@@ -39,6 +39,23 @@ vi.mock('../api/codexApi', async () => {
   };
 });
 
+// Mock ChapterSection component to avoid prop validation issues
+vi.mock('../components/ChapterSection', () => {
+  return {
+    default: ({ chapter, onCompileChapter }) => (
+      <div data-testid={`chapter-section-${chapter.id}`}>
+        {chapter.title}
+        <button 
+          data-testid={`compile-button-${chapter.id}`} 
+          onClick={() => onCompileChapter && onCompileChapter()}
+        >
+          Compile
+        </button>
+      </div>
+    )
+  };
+});
+
 // Import the mocked API functions
 import { 
   getProject, 
