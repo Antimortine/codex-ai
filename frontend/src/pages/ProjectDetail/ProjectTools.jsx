@@ -48,7 +48,7 @@ const styles = {
     },
     linkButton: {
         padding: '10px 15px',
-        backgroundColor: '#0f9d58',
+        backgroundColor: '#0f9d58', // Green color for links
         color: 'white',
         border: 'none',
         borderRadius: '4px',
@@ -80,27 +80,29 @@ function ProjectTools({
     rebuildError,
     rebuildSuccessMessage,
     onRebuildIndex,
-    isAnyOperationLoading
+    isAnyOperationLoading // Used to disable rebuild if other ops are running
 }) {
     return (
         <section style={styles.container}>
             <div style={styles.header}>
                 <h2 style={styles.heading}>Project Tools</h2>
             </div>
-            
+
             <div style={styles.buttonContainer}>
+                {/* Rebuild Index Button */}
                 <button
                     onClick={onRebuildIndex}
                     disabled={isRebuildingIndex || isAnyOperationLoading}
                     style={{
-                        ...styles.toolButton,
+                        ...styles.toolButton, // Blue color for actions
                         ...(isRebuildingIndex || isAnyOperationLoading ? styles.disabledButton : {})
                     }}
                     data-testid="rebuild-index-button"
                 >
                     {isRebuildingIndex ? 'Rebuilding Index...' : 'Rebuild Search Index'}
                 </button>
-                
+
+                {/* Query Project AI Link */}
                 <Link
                     to={`/projects/${projectId}/query`}
                     style={styles.linkButton}
@@ -108,15 +110,8 @@ function ProjectTools({
                 >
                     Query Project AI
                 </Link>
-                
-                <Link
-                    to={`/projects/${projectId}/timeline`}
-                    style={styles.linkButton}
-                    data-testid="timeline-link"
-                >
-                    View Timeline
-                </Link>
-                
+
+                {/* Project Notes Link - ADDED */}
                 <Link
                     to={`/projects/${projectId}/notes`}
                     style={styles.linkButton}
@@ -124,15 +119,28 @@ function ProjectTools({
                 >
                     Project Notes
                 </Link>
+                {/* END ADDED */}
+
+                {/* Placeholder for Timeline Link (if implemented later) */}
+                {/*
+                <Link
+                    to={`/projects/${projectId}/timeline`}
+                    style={styles.linkButton}
+                    data-testid="timeline-link"
+                >
+                    View Timeline
+                </Link>
+                */}
+
             </div>
-            
-            {/* Display error or success messages */}
+
+            {/* Display error or success messages for Rebuild Index */}
             {rebuildError && (
                 <div style={styles.errorMessage} data-testid="rebuild-error">
                     {rebuildError}
                 </div>
             )}
-            
+
             {rebuildSuccessMessage && (
                 <div style={styles.successMessage} data-testid="rebuild-success">
                     {rebuildSuccessMessage}

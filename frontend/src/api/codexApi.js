@@ -71,6 +71,48 @@ export const updateChapterPlan = (projectId, chapterId, data) => apiClient.put(`
 export const getChapterSynopsis = (projectId, chapterId) => apiClient.get(`/projects/${projectId}/chapters/${chapterId}/synopsis`);
 export const updateChapterSynopsis = (projectId, chapterId, data) => apiClient.put(`/projects/${projectId}/chapters/${chapterId}/synopsis`, data); // data: { content: "..." }
 
+// --- Note Endpoints --- ADDED
+/**
+ * Lists all notes for a project, sorted by last modified descending.
+ * @param {string} projectId - The ID of the project.
+ * @returns {Promise<AxiosResponse<any>>} - Expected data: { notes: [{id, title, last_modified}, ...] }
+ */
+export const listNotes = (projectId) => apiClient.get(`/projects/${projectId}/notes/`);
+
+/**
+ * Creates a new note for a project.
+ * @param {string} projectId - The ID of the project.
+ * @param {object} data - The request body. e.g., { title: "New Note Title" }
+ * @returns {Promise<AxiosResponse<any>>} - Returns the created note {id, title, last_modified}.
+ */
+export const createNote = (projectId, data) => apiClient.post(`/projects/${projectId}/notes/`, data);
+
+/**
+ * Gets a specific note by ID, including its content.
+ * @param {string} projectId - The ID of the project.
+ * @param {string} noteId - The ID of the note.
+ * @returns {Promise<AxiosResponse<any>>} - Returns the full note {id, title, content, last_modified}.
+ */
+export const getNote = (projectId, noteId) => apiClient.get(`/projects/${projectId}/notes/${noteId}`);
+
+/**
+ * Updates a specific note (title and/or content).
+ * @param {string} projectId - The ID of the project.
+ * @param {string} noteId - The ID of the note.
+ * @param {object} data - The request body. e.g., { title?: "Updated Title", content?: "Updated content." }
+ * @returns {Promise<AxiosResponse<any>>} - Returns the updated note {id, title, content, last_modified}.
+ */
+export const updateNote = (projectId, noteId, data) => apiClient.patch(`/projects/${projectId}/notes/${noteId}`, data);
+
+/**
+ * Deletes a specific note.
+ * @param {string} projectId - The ID of the project.
+ * @param {string} noteId - The ID of the note to delete.
+ * @returns {Promise<AxiosResponse<any>>} - Returns a success message {message: "..."}.
+ */
+export const deleteNote = (projectId, noteId) => apiClient.delete(`/projects/${projectId}/notes/${noteId}`);
+// --- END ADDED ---
+
 // --- Chapter Compilation Endpoint ---
 /**
  * Compiles chapter content.
@@ -82,7 +124,6 @@ export const updateChapterSynopsis = (projectId, chapterId, data) => apiClient.p
 export const compileChapterContent = (projectId, chapterId, params = {}) => {
     return apiClient.get(`/projects/${projectId}/chapters/${chapterId}/compile`, { params });
 };
-// --- END ADDED ---
 
 
 // --- AI Endpoints ---

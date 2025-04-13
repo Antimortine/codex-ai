@@ -24,10 +24,14 @@ import SynopsisEditPage from './pages/SynopsisEditPage';
 import WorldEditPage from './pages/WorldEditPage';
 import CharacterEditPage from './pages/CharacterEditPage';
 import SceneEditPage from './pages/SceneEditPage';
-import ProjectQueryPage from './pages/ProjectQueryPage'; // Import the new page
+import ProjectQueryPage from './pages/ProjectQueryPage';
 // --- ADDED: Import new chapter edit pages ---
 import ChapterPlanEditPage from './pages/ChapterPlanEditPage';
 import ChapterSynopsisEditPage from './pages/ChapterSynopsisEditPage';
+// --- END ADDED ---
+// --- ADDED: Import new note pages (Placeholders for now) ---
+import ProjectNotesPage from './pages/ProjectNotesPage'; // Assuming this file will be created
+import NoteEditPage from './pages/NoteEditPage';       // Assuming this file will be created
 // --- END ADDED ---
 
 import './App.css';
@@ -48,6 +52,10 @@ function App() {
         {/* --- ADDED: Routes for chapter plan/synopsis --- */}
         <Route path="projects/:projectId/chapters/:chapterId/plan" element={<ChapterPlanEditPage />} />
         <Route path="projects/:projectId/chapters/:chapterId/synopsis" element={<ChapterSynopsisEditPage />} />
+        {/* --- END ADDED --- */}
+        {/* --- ADDED: Routes for project notes --- */}
+        <Route path="projects/:projectId/notes" element={<ProjectNotesPage />} />
+        <Route path="projects/:projectId/notes/:noteId" element={<NoteEditPage />} />
         {/* --- END ADDED --- */}
         <Route path="*" element={<div><h2>404 Not Found</h2></div>} />
       </Route>
