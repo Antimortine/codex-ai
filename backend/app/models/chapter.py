@@ -28,9 +28,14 @@ class ChapterUpdate(BaseModel):
     order: Optional[int] = Field(None, ge=1)
 
 # Properties returned when reading a chapter
-class ChapterRead(IDModel, ChapterCreate):
+# --- MODIFIED: Remove inheritance from ChapterCreate ---
+class ChapterRead(IDModel):
+# --- END MODIFIED ---
     project_id: str = Field(..., description="ID of the parent project")
-    # Inherits id, title, order
+    # Define fields explicitly for reading
+    title: str = Field(...)
+    # Apply validation for reading - order should always be >= 1 if data is consistent
+    order: int = Field(..., ge=1)
     pass
 
 # Wrapper for list response

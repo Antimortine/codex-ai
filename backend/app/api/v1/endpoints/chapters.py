@@ -12,8 +12,11 @@
 # See the License for the specific language governing permissions and
 # limitations under the License.
 
-from fastapi import APIRouter, HTTPException, status, Body, Path, Depends
-from typing import List
+from fastapi import APIRouter, HTTPException, status, Body, Path, Depends, Query # Import Query
+from typing import List, Dict # Import Dict
+# --- ADDED: Import unquote ---
+from urllib.parse import unquote
+# --- END ADDED ---
 from app.models.chapter import ChapterCreate, ChapterUpdate, ChapterRead, ChapterList
 # --- ADDED: Import ContentBlock models ---
 from app.models.content_block import ContentBlockRead, ContentBlockUpdate
@@ -29,8 +32,10 @@ from app.api.v1.endpoints.content_blocks import get_project_dependency
 # --- ADDED: Import chapter dependency ---
 from app.api.v1.endpoints.scenes import get_chapter_dependency
 # --- END ADDED ---
+import logging # Import logging
 
 router = APIRouter()
+logger = logging.getLogger(__name__) # Get logger
 
 # --- Endpoint Implementations ---
 
@@ -137,7 +142,7 @@ async def delete_chapter(
     chapter_service.delete(project_id=project_id, chapter_id=chapter_id)
     return Message(message=f"Chapter {chapter_id} deleted successfully")
 
-# --- ADDED: Chapter Plan Endpoints ---
+# --- Chapter Plan Endpoints ---
 @router.get(
     "/{chapter_id}/plan",
     response_model=ContentBlockRead,
@@ -178,9 +183,8 @@ async def update_chapter_plan(
     except HTTPException as e:
         raise e # Re-raise file/index errors
     return ContentBlockRead(project_id=project_id, content=content_in.content)
-# --- END ADDED ---
 
-# --- ADDED: Chapter Synopsis Endpoints ---
+# --- Chapter Synopsis Endpoints ---
 @router.get(
     "/{chapter_id}/synopsis",
     response_model=ContentBlockRead,
@@ -221,4 +225,47 @@ async def update_chapter_synopsis(
     except HTTPException as e:
         raise e # Re-raise file/index errors
     return ContentBlockRead(project_id=project_id, content=content_in.content)
-# --- END ADDED ---
+
+# --- Chapter Compile Endpoint ---
+@router.get(
+    "/{chapter_id}/compile",
+    response_model=Dict[str, str], # Simple dict response for now
+    tags=["Chapters", "Compilation"],
+    summary="Compile Chapter Content",
+    description="Compiles all scenes within a chapter into a single Markdown string, suitable for download."
+)
+async def compile_chapter(
+    include_titles: bool = Query(True, description="Include scene titles as H2 headings."),
+    # --- MODIFIED: Decode separator explicitly ---
+    separator_raw: str = Query("\n\n---\n\n", alias="separator", description="Separator string between scene blocks (URL-encoded newlines as %0A)."),
+    # --- END MODIFIED ---
+    ids: tuple[str, str] = Depends(get_chapter_dependency)
+):
+    """
+    Compiles scene content for a chapter.
+
+    - **project_id**: The UUID of the project.
+    - **chapter_id**: The UUID of the chapter.
+    - **include_titles**: Query parameter to control inclusion of H2 titles.
+    - **separator**: Query parameter to control the separator between scenes. Use %0A for newlines.
+    """
+    project_id, chapter_id = ids
+    # --- MODIFIED: Explicitly decode ---
+    separator = unquote(separator_raw)
+    logger.info(f"Compile request for chapter {chapter_id}, project {project_id}. Titles: {include_titles}, Decoded Separator: '{repr(separator)}'")
+    # --- END MODIFIED ---
+    try:
+        # Service layer handles logic and 404s
+        result = chapter_service.compile_chapter_content(
+            project_id=project_id,
+            chapter_id=chapter_id,
+            include_titles=include_titles,
+            separator=separator # Pass decoded separator
+        )
+        return result
+    except HTTPException as e:
+        logger.warning(f"HTTPException compiling chapter {chapter_id}: {e.status_code} - {e.detail}")
+        raise e
+    except Exception as e:
+        logger.error(f"Unexpected error compiling chapter {chapter_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Internal error compiling chapter content: {e}")

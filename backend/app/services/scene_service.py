@@ -15,7 +15,9 @@
 from fastapi import HTTPException, status
 from app.models.scene import SceneCreate, SceneUpdate, SceneRead, SceneList
 from app.services.file_service import file_service
+# --- MODIFIED: Keep chapter_service import at top level ---
 from app.services.chapter_service import chapter_service
+# --- END MODIFIED ---
 from app.models.common import generate_uuid
 # --- ADDED: Import index_manager ---
 from app.rag.index_manager import index_manager
@@ -206,7 +208,7 @@ class SceneService:
         content_updated = False
         # Always initialize scene_path here so we have it for both content updates and indexing
         scene_path = file_service._get_scene_path(project_id, chapter_id, scene_id)
-        
+
         if scene_in.content is not None and scene_in.content != existing_scene.content:
             # --- Write MD file WITHOUT triggering index ---
             logger.debug(f"Writing updated scene file {scene_path} WITHOUT triggering index.")
@@ -235,8 +237,8 @@ class SceneService:
                 chapter_data = project_metadata.get('chapters', {}).get(chapter_id, {})
                 if chapter_data and 'title' in chapter_data:
                     chapter_title = chapter_data['title']
-                    
-                # Create preloaded metadata dictionary with current values 
+
+                # Create preloaded metadata dictionary with current values
                 # This avoids race condition with recently written metadata files
                 preloaded_metadata = {
                     "document_type": "Scene",
@@ -244,7 +246,7 @@ class SceneService:
                     "chapter_id": chapter_id,
                     "chapter_title": chapter_title
                 }
-                
+
                 logger.info(f"Explicitly triggering index update for scene file with preloaded metadata: {scene_path}")
                 if index_manager:
                     index_manager.index_file(scene_path, preloaded_metadata=preloaded_metadata)

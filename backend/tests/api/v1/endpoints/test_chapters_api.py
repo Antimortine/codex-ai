@@ -17,6 +17,10 @@ from fastapi.testclient import TestClient
 from unittest.mock import patch, MagicMock
 from fastapi import HTTPException, status, Depends, Path # Import Path and Depends
 from pathlib import Path as FilePath # Import Path from pathlib AS FilePath to avoid name clash
+from typing import Dict # Import Dict
+# --- ADDED: Import for URL encoding ---
+from urllib.parse import quote
+# --- END ADDED ---
 
 # Import the FastAPI app instance
 from app.main import app
@@ -72,7 +76,7 @@ async def override_get_chapter_dependency(project_id: str = Path(...), chapter_i
 
 
 # --- Test Chapter API Endpoints ---
-# (Existing tests unchanged - Omitted for brevity)
+
 @patch('app.api.v1.endpoints.chapters.chapter_service', autospec=True)
 @patch('app.api.v1.endpoints.content_blocks.project_service', autospec=True)
 def test_create_chapter_success(mock_project_service_dep: MagicMock, mock_chapter_service: MagicMock):
@@ -348,9 +352,7 @@ def test_delete_chapter_not_found(mock_project_service_dep: MagicMock, mock_chap
     mock_chapter_service.delete.assert_called_once_with(project_id=PROJECT_ID, chapter_id=NON_EXISTENT_CHAPTER_ID)
 
 
-# --- ADDED: Tests for Chapter Plan/Synopsis Endpoints ---
-
-# === GET Chapter Plan ===
+# --- Test Chapter Plan/Synopsis Endpoints ---
 @patch('app.api.v1.endpoints.chapters.file_service', autospec=True)
 def test_get_chapter_plan_success(mock_file_svc: MagicMock):
     """Test successful GET for chapter plan."""
@@ -382,7 +384,6 @@ def test_get_chapter_plan_not_found(mock_file_svc: MagicMock):
     mock_file_svc.read_chapter_plan_file.assert_called_once_with(PROJECT_ID, CHAPTER_ID_1)
     app.dependency_overrides = {}
 
-# === PUT Chapter Plan ===
 @patch('app.api.v1.endpoints.chapters.file_service', autospec=True)
 def test_update_chapter_plan_success(mock_file_svc: MagicMock):
     """Test successful PUT update for chapter plan."""
@@ -399,7 +400,6 @@ def test_update_chapter_plan_success(mock_file_svc: MagicMock):
     mock_file_svc.write_chapter_plan_file.assert_called_once_with(PROJECT_ID, CHAPTER_ID_1, UPDATED_CONTENT)
     app.dependency_overrides = {}
 
-# === GET Chapter Synopsis ===
 @patch('app.api.v1.endpoints.chapters.file_service', autospec=True)
 def test_get_chapter_synopsis_success(mock_file_svc: MagicMock):
     """Test successful GET for chapter synopsis."""
@@ -430,7 +430,6 @@ def test_get_chapter_synopsis_not_found(mock_file_svc: MagicMock):
     mock_file_svc.read_chapter_synopsis_file.assert_called_once_with(PROJECT_ID, CHAPTER_ID_1)
     app.dependency_overrides = {}
 
-# === PUT Chapter Synopsis ===
 @patch('app.api.v1.endpoints.chapters.file_service', autospec=True)
 def test_update_chapter_synopsis_success(mock_file_svc: MagicMock):
     """Test successful PUT update for chapter synopsis."""
@@ -447,7 +446,6 @@ def test_update_chapter_synopsis_success(mock_file_svc: MagicMock):
     mock_file_svc.write_chapter_synopsis_file.assert_called_once_with(PROJECT_ID, CHAPTER_ID_1, UPDATED_CONTENT)
     app.dependency_overrides = {}
 
-# === Test Dependency Failure for Chapter Plan/Synopsis ===
 @patch('app.api.v1.endpoints.chapters.file_service', autospec=True)
 def test_get_chapter_plan_chapter_not_found(mock_file_svc: MagicMock):
     """Test GET chapter plan when chapter dependency fails."""
@@ -476,4 +474,84 @@ def test_update_chapter_plan_chapter_not_found(mock_file_svc: MagicMock):
     mock_file_svc.write_chapter_plan_file.assert_not_called()
     app.dependency_overrides = {} # Clear override
 
-# --- END ADDED ---
+
+# --- Compile Endpoint Tests ---
+@patch('app.api.v1.endpoints.chapters.chapter_service', autospec=True)
+def test_compile_chapter_success(mock_chapter_svc: MagicMock):
+    """Test successful compilation with default parameters."""
+    app.dependency_overrides[get_chapter_dependency] = override_get_chapter_dependency # Mock dependency
+    mock_compiled_data = {
+        "filename": "compiled-chapter.md",
+        "content": "## S1\n\nContent 1.\n\n---\n\n## S2\n\nContent 2."
+    }
+    mock_chapter_svc.compile_chapter_content.return_value = mock_compiled_data
+
+    response = client.get(f"/api/v1/projects/{PROJECT_ID}/chapters/{CHAPTER_ID_1}/compile")
+
+    assert response.status_code == status.HTTP_200_OK
+    assert response.json() == mock_compiled_data
+    # Check default parameters were passed to service
+    mock_chapter_svc.compile_chapter_content.assert_called_once_with(
+        project_id=PROJECT_ID,
+        chapter_id=CHAPTER_ID_1,
+        include_titles=True,
+        separator="\n\n---\n\n"
+    )
+    app.dependency_overrides = {} # Clear override
+
+@patch('app.api.v1.endpoints.chapters.chapter_service', autospec=True)
+def test_compile_chapter_custom_params(mock_chapter_svc: MagicMock):
+    """Test successful compilation with custom parameters."""
+    app.dependency_overrides[get_chapter_dependency] = override_get_chapter_dependency
+    mock_compiled_data = {
+        "filename": "custom-compile.md",
+        "content": "Content 1.\n\nContent 2."
+    }
+    mock_chapter_svc.compile_chapter_content.return_value = mock_compiled_data
+    # --- CORRECTED: Use URL encoding for separator ---
+    custom_separator_url = quote("\n\n") # URL encode the desired separator
+    custom_separator_expected = "\n\n" # Expected value in service call
+    # --- END CORRECTION ---
+
+    response = client.get(f"/api/v1/projects/{PROJECT_ID}/chapters/{CHAPTER_ID_1}/compile?include_titles=false&separator={custom_separator_url}")
+
+    assert response.status_code == status.HTTP_200_OK
+    assert response.json() == mock_compiled_data
+    # Check custom parameters were passed to service
+    mock_chapter_svc.compile_chapter_content.assert_called_once_with(
+        project_id=PROJECT_ID,
+        chapter_id=CHAPTER_ID_1,
+        include_titles=False,
+        separator=custom_separator_expected # Check against the decoded value
+    )
+    app.dependency_overrides = {}
+
+@patch('app.api.v1.endpoints.chapters.chapter_service', autospec=True)
+def test_compile_chapter_service_error(mock_chapter_svc: MagicMock):
+    """Test compilation when the service layer raises an error."""
+    app.dependency_overrides[get_chapter_dependency] = override_get_chapter_dependency
+    error_detail = "Failed during scene aggregation"
+    mock_chapter_svc.compile_chapter_content.side_effect = HTTPException(
+        status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+        detail=error_detail
+    )
+
+    response = client.get(f"/api/v1/projects/{PROJECT_ID}/chapters/{CHAPTER_ID_1}/compile")
+
+    assert response.status_code == status.HTTP_500_INTERNAL_SERVER_ERROR
+    assert response.json() == {"detail": error_detail}
+    mock_chapter_svc.compile_chapter_content.assert_called_once()
+    app.dependency_overrides = {}
+
+@patch('app.api.v1.endpoints.chapters.chapter_service', autospec=True)
+def test_compile_chapter_dependency_error(mock_chapter_svc: MagicMock):
+    """Test compilation when chapter dependency fails (chapter not found)."""
+    error_detail = f"Chapter {NON_EXISTENT_CHAPTER_ID} not found in project {PROJECT_ID}"
+    app.dependency_overrides[get_chapter_dependency] = lambda: (_ for _ in ()).throw(HTTPException(status_code=404, detail=error_detail))
+
+    response = client.get(f"/api/v1/projects/{PROJECT_ID}/chapters/{NON_EXISTENT_CHAPTER_ID}/compile")
+
+    assert response.status_code == status.HTTP_404_NOT_FOUND
+    assert response.json() == {"detail": error_detail}
+    mock_chapter_svc.compile_chapter_content.assert_not_called()
+    app.dependency_overrides = {}
