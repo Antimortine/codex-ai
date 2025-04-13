@@ -25,7 +25,7 @@ import {
   flushPromises,
   TEST_PROJECT_ID,
   TEST_PROJECT_NAME
-} from './ProjectDetailPage.test.utils';
+} from '../utils/testing';
 
 // Mock API calls used by ProjectDetailPage
 vi.mock('../api/codexApi', async () => {
@@ -75,7 +75,7 @@ describe('ProjectDetailPage Edit Validation Tests', () => {
     const user = userEvent.setup();
     
     // Render with our router helper
-    const { container } = renderWithRouter(<ProjectDetailPage />);
+    const { container } = renderWithRouter(<ProjectDetailPage />, `/projects/${TEST_PROJECT_ID}`);
     
     // Wait for initial data load
     await waitFor(() => {
@@ -151,7 +151,7 @@ describe('ProjectDetailPage Edit Validation Tests', () => {
     const veryLongName = 'A'.repeat(300); // Excessively long name
     
     // Render with our router helper
-    const { container } = renderWithRouter(<ProjectDetailPage />);
+    const { container } = renderWithRouter(<ProjectDetailPage />, `/projects/${TEST_PROJECT_ID}`);
     
     // Wait for initial data load
     await waitFor(() => {

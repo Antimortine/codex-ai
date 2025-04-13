@@ -26,7 +26,7 @@ import {
   TEST_PROJECT_ID,
   TEST_CHARACTER_ID,
   TEST_CHARACTER_NAME
-} from './ProjectDetailPage.test.utils';
+} from '../utils/testing';
 
 // Mock API calls used by ProjectDetailPage
 vi.mock('../api/codexApi', async () => {
@@ -90,7 +90,7 @@ describe('ProjectDetailPage Character Tests', () => {
     createCharacter.mockResolvedValue({ data: { id: 'char-new', name: 'New Test Character' } });
     
     // Render with our router helper
-    const { container } = renderWithRouter(<ProjectDetailPage />);
+    const { container } = renderWithRouter(<ProjectDetailPage />, `/projects/${TEST_PROJECT_ID}`);
     
     // Wait for initial data load
     await waitFor(() => {
@@ -278,7 +278,7 @@ describe('ProjectDetailPage Character Tests', () => {
     window.confirm = vi.fn(() => true);
     
     // Render with our router helper
-    const { container } = renderWithRouter(<ProjectDetailPage />);
+    const { container } = renderWithRouter(<ProjectDetailPage />, `/projects/${TEST_PROJECT_ID}`);
     
     // Wait for initial data load to complete
     await waitFor(() => {

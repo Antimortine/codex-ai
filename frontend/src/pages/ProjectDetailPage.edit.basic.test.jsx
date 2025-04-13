@@ -27,7 +27,7 @@ import {
   TEST_PROJECT_ID,
   TEST_PROJECT_NAME,
   UPDATED_PROJECT_NAME
-} from './ProjectDetailPage.test.utils';
+} from '../utils/testing';
 
 // We'll use a different approach to handle component dependencies
 
@@ -102,7 +102,7 @@ describe('ProjectDetailPage Edit Basic Tests', () => {
     updateProject.mockResolvedValue({ data: { id: TEST_PROJECT_ID, name: UPDATED_PROJECT_NAME } });
     
     // Render with our router helper
-    const { container } = renderWithRouter(<ProjectDetailPage />);
+    const { container } = renderWithRouter(<ProjectDetailPage />, `/projects/${TEST_PROJECT_ID}`);
     
     // Wait for initial data load
     await waitFor(() => {
@@ -204,7 +204,7 @@ describe('ProjectDetailPage Edit Basic Tests', () => {
     const user = userEvent.setup();
     
     // Render with our router helper
-    const { container } = renderWithRouter(<ProjectDetailPage />);
+    const { container } = renderWithRouter(<ProjectDetailPage />, `/projects/${TEST_PROJECT_ID}`);
     
     // Wait for initial data load
     await waitFor(() => {

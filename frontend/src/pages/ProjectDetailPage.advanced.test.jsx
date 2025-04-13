@@ -25,7 +25,7 @@ import {
   flushPromises,
   TEST_PROJECT_ID,
   TEST_PROJECT_NAME
-} from './ProjectDetailPage.test.utils';
+} from '../utils/testing';
 
 // Mock API calls used by ProjectDetailPage
 vi.mock('../api/codexApi', async () => {
@@ -100,7 +100,7 @@ describe('ProjectDetailPage Advanced Tests', () => {
     rebuildProjectIndex.mockResolvedValue({ data: { success: true } });
     
     // Render with our router helper
-    const { container } = renderWithRouter(<ProjectDetailPage />);
+    const { container } = renderWithRouter(<ProjectDetailPage />, `/projects/${TEST_PROJECT_ID}`);
     
     // Wait for initial data load
     await waitFor(() => {
@@ -185,7 +185,7 @@ describe('ProjectDetailPage Advanced Tests', () => {
     rebuildProjectIndex.mockRejectedValue(new Error(errorMsg));
     
     // Render with our router helper
-    const { container } = renderWithRouter(<ProjectDetailPage />);
+    const { container } = renderWithRouter(<ProjectDetailPage />, `/projects/${TEST_PROJECT_ID}`);
     
     // Wait for initial data load
     await waitFor(() => {
@@ -232,7 +232,7 @@ describe('ProjectDetailPage Advanced Tests', () => {
     compileChapterContent.mockResolvedValue({ data: { content: 'Compiled chapter content' } });
     
     // Render with our router helper
-    const { container } = renderWithRouter(<ProjectDetailPage />);
+    const { container } = renderWithRouter(<ProjectDetailPage />, `/projects/${TEST_PROJECT_ID}`);
     
     // Wait for initial data load
     await waitFor(() => {
@@ -319,7 +319,7 @@ describe('ProjectDetailPage Advanced Tests', () => {
     compileChapterContent.mockRejectedValue(new Error(errorMsg));
     
     // Render with our router helper
-    const { container } = renderWithRouter(<ProjectDetailPage />);
+    const { container } = renderWithRouter(<ProjectDetailPage />, `/projects/${TEST_PROJECT_ID}`);
     
     // Wait for initial data load
     await waitFor(() => {

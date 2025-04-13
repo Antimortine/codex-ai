@@ -29,13 +29,20 @@ import { MemoryRouter, Routes, Route } from 'react-router-dom';
  * @param {Object} options - Additional render options
  * @returns {Object} The render result and wrapper element
  */
-export function renderWithRouter(ui, route, path, options = {}) {
-  // If no path is provided, use the route as the path pattern
-  if (!path) {
+export function renderWithRouter(ui, route = '/', path, options = {}) {
+  // Handle project routes specifically - ProjectDetailPage expects /projects/:projectId format
+  if (route && route.includes('/projects/') && !path) {
+    // For project routes, use a pattern that captures the projectId as a param
+    path = '/projects/:projectId';
+  }
+  // If no path is provided for other routes, create one from the route
+  else if (!path) {
     // Extract the path pattern from the route by removing query params
-    path = route.split('?')[0];
-    // Replace specific IDs with route params
-    path = path.replace(/\/[^/]+$/, '/:id');
+    path = route ? route.split('?')[0] : '/';
+    // Replace specific IDs with route params if path exists and has segments
+    if (path && path.includes('/')) {
+      path = path.replace(/\/[^/]+$/, '/:id');
+    }
   }
 
   const wrapper = React.createElement(

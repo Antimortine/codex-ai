@@ -26,7 +26,7 @@ import {
   TEST_PROJECT_ID,
   TEST_PROJECT_NAME,
   UPDATED_PROJECT_NAME
-} from './ProjectDetailPage.test.utils';
+} from '../utils/testing';
 
 // Mock API calls used by ProjectDetailPage
 vi.mock('../api/codexApi', async () => {
@@ -96,7 +96,7 @@ describe('ProjectDetailPage Edit Error Handling Tests', () => {
     });
     
     // Render with our router helper
-    const { container } = renderWithRouter(<ProjectDetailPage />);
+    const { container } = renderWithRouter(<ProjectDetailPage />, `/projects/${TEST_PROJECT_ID}`);
     
     // Wait for initial data load
     await waitFor(() => {
@@ -197,7 +197,7 @@ describe('ProjectDetailPage Edit Error Handling Tests', () => {
     getProject.mockRejectedValue(new Error(errorMsg));
     
     // Render with our router helper
-    const { container } = renderWithRouter(<ProjectDetailPage />);
+    const { container } = renderWithRouter(<ProjectDetailPage />, `/projects/${TEST_PROJECT_ID}`);
     
     // Wait for error to be displayed
     await act(async () => { await flushPromises(); });
