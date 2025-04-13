@@ -141,7 +141,7 @@ function ProjectNotesPage() {
 
             {error && <p style={styles.error}>{error}</p>}
 
-            <div style={styles.createForm}>
+            <form onSubmit={handleCreateNote} style={styles.createForm}>
                 <input
                     type="text"
                     value={newNoteTitle}
@@ -152,7 +152,7 @@ function ProjectNotesPage() {
                     aria-label="New note title"
                 />
                 <button
-                    onClick={handleCreateNote}
+                    type="submit"
                     disabled={isBusy || !newNoteTitle.trim()} // This logic is correct
                     style={{
                         ...styles.button,
@@ -161,7 +161,7 @@ function ProjectNotesPage() {
                 >
                     {isCreating ? 'Creating...' : 'Create Note'}
                 </button>
-            </div>
+            </form>
 
             {isLoading ? (
                 <p style={styles.loading}>Loading notes...</p>

@@ -95,7 +95,34 @@ describe('ProjectNotesPage', () => {
     });
 
     // --- Create Note Tests (Refocused) ---
-    it('allows creating a new note: verifies API call and final UI state', async () => {
+    it('allows creating a new note with Enter key: verifies form submission', async () => {
+        const user = userEvent.setup();
+        const refreshedNotes = [...MOCK_NOTES, NEW_NOTE_RESPONSE];
+        api.listNotes
+            .mockResolvedValueOnce({ data: { notes: [...MOCK_NOTES] } })
+            .mockResolvedValueOnce({ data: { notes: refreshedNotes } });
+
+        renderComponent();
+        expect(await screen.findByText(MOCK_NOTES[0].title)).toBeInTheDocument();
+
+        const input = screen.getByRole('textbox', { name: /new note title/i });
+
+        await user.type(input, NEW_NOTE_TITLE + '{Enter}');
+
+        await waitFor(() => {
+            expect(api.createNote).toHaveBeenCalledTimes(1);
+            expect(api.createNote).toHaveBeenCalledWith(TEST_PROJECT_ID, { title: NEW_NOTE_TITLE });
+        });
+        await waitFor(() => {
+             expect(api.listNotes).toHaveBeenCalledTimes(2);
+        });
+        await waitFor(() => {
+             expect(input).toHaveValue('');
+             expect(screen.getByText(NEW_NOTE_TITLE)).toBeInTheDocument();
+        });
+    });
+
+    it('allows creating a new note with button click: verifies API call and final UI state', async () => {
         const user = userEvent.setup();
         const refreshedNotes = [...MOCK_NOTES, NEW_NOTE_RESPONSE];
         api.listNotes
