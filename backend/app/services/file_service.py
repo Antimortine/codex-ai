@@ -60,9 +60,17 @@ class FileService:
         """Returns the path to a specific character file."""
         return self._get_characters_dir(project_id) / f"{character_id}.md"
 
+    # --- MODIFIED: Added Notes Path Helpers ---
     def _get_notes_dir(self, project_id: str) -> Path:
         """Returns the path to the notes directory within a project."""
         return self._get_project_path(project_id) / "notes"
+
+    def _get_note_path(self, project_id: str, note_id: str) -> Path:
+        """Returns the path to a specific note file."""
+        # Assuming note_id includes '.md' if needed, or adjust as necessary
+        # Current design uses UUID without extension, so add it here.
+        return self._get_notes_dir(project_id) / f"{note_id}.md"
+    # --- END MODIFIED ---
 
     def _get_content_block_path(self, project_id: str, block_name: str) -> Path:
         """Returns the path to a project-level content block file (plan, synopsis, world)."""
@@ -131,6 +139,8 @@ class FileService:
                  if index_manager:
                      try:
                          logger.info(f"Content updated for {path.name}, triggering indexing...")
+                         # Pass preloaded metadata if available from the calling service (e.g., NoteService.update)
+                         # For now, we don't have easy access to it here, so IndexManager will read it.
                          index_manager.index_file(path)
                      except Exception as e:
                          logger.error(f"ERROR: Failed to trigger indexing for {path.name}: {e}", exc_info=True)
@@ -291,20 +301,42 @@ class FileService:
              logger.error(f"Unexpected error getting last modification time for project {project_path}: {e}", exc_info=True)
              return None
 
+    # --- MODIFIED: Added get_file_mtime ---
+    def get_file_mtime(self, path: Path) -> Optional[float]:
+        """Gets the last modification time (Unix timestamp) of a file."""
+        if not self.path_exists(path) or not path.is_file():
+            logger.warning(f"Cannot get mtime: Path {path} not found or not a file.")
+            return None
+        try:
+            return path.stat().st_mtime
+        except OSError as e:
+            logger.error(f"Error getting mtime for file {path}: {e}")
+            return None
+    # --- END MODIFIED ---
+
 
     # --- Specific Structure Creators ---
+    # --- MODIFIED: Added Notes setup ---
     def setup_project_structure(self, project_id: str):
         """Creates the basic directory structure for a new project."""
         project_path = self._get_project_path(project_id)
         self.create_directory(project_path)
         self.create_directory(self._get_chapters_dir(project_id))
         self.create_directory(self._get_characters_dir(project_id))
-        self.create_directory(self._get_notes_dir(project_id))
+        self.create_directory(self._get_notes_dir(project_id)) # Create notes dir
         self.write_text_file(self._get_content_block_path(project_id, "plan.md"), "", trigger_index=True)
         self.write_text_file(self._get_content_block_path(project_id, "synopsis.md"), "", trigger_index=True)
         self.write_text_file(self._get_content_block_path(project_id, "world.md"), "", trigger_index=True)
-        self.write_project_metadata(project_id, {"project_name": "", "chapters": {}, "characters": {}, "chat_sessions": {}})
+        # Initialize notes key in metadata
+        self.write_project_metadata(project_id, {
+            "project_name": "",
+            "chapters": {},
+            "characters": {},
+            "chat_sessions": {},
+            "notes": {} # Add notes key
+        })
         self.write_chat_history_file(project_id, {}) # Write empty dict initially
+    # --- END MODIFIED ---
 
 
     def setup_chapter_structure(self, project_id: str, chapter_id: str):
@@ -366,32 +398,43 @@ class FileService:
     # --- END ADDED ---
 
     # --- Centralized Metadata I/O Methods ---
+    # --- MODIFIED: Added Notes key default ---
     def read_project_metadata(self, project_id: str) -> dict:
         """Reads the project_meta.json file for a given project."""
         metadata_path = self._get_project_metadata_path(project_id)
         try:
             data = self.read_json_file(metadata_path)
-            if 'chat_sessions' not in data:
-                data['chat_sessions'] = {}
+            # Ensure default keys exist
+            if 'chat_sessions' not in data: data['chat_sessions'] = {}
+            if 'notes' not in data: data['notes'] = {} # Add notes default
+            if 'chapters' not in data: data['chapters'] = {}
+            if 'characters' not in data: data['characters'] = {}
             return data
         except HTTPException as e:
             if e.status_code == 404:
                  logger.warning(f"Project metadata file not found for project {project_id}. Returning default structure.")
-                 return {"project_name": f"Project {project_id}", "chapters": {}, "characters": {}, "chat_sessions": {}}
+                 # Return full default structure including notes
+                 return {"project_name": f"Project {project_id}", "chapters": {}, "characters": {}, "chat_sessions": {}, "notes": {}}
             logger.error(f"Unexpected error reading project metadata for {project_id}: {e.detail}")
             raise e
+    # --- END MODIFIED ---
 
+    # --- MODIFIED: Added Notes key default ---
     def write_project_metadata(self, project_id: str, data: dict):
         """Writes data to the project_meta.json file."""
         metadata_path = self._get_project_metadata_path(project_id)
         try:
-            if 'chat_sessions' not in data:
-                data['chat_sessions'] = {}
+            # Ensure default keys exist before writing
+            if 'chat_sessions' not in data: data['chat_sessions'] = {}
+            if 'notes' not in data: data['notes'] = {} # Add notes default
+            if 'chapters' not in data: data['chapters'] = {}
+            if 'characters' not in data: data['characters'] = {}
             self.write_json_file(metadata_path, data)
             logger.debug(f"Successfully wrote project metadata for {project_id}")
         except HTTPException as e:
             logger.error(f"Failed to write project metadata for {project_id}: {e.detail}")
             raise e
+    # --- END MODIFIED ---
 
     def read_chapter_metadata(self, project_id: str, chapter_id: str) -> dict:
         """Reads the chapter_meta.json file for a given chapter."""

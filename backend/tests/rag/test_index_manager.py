@@ -150,7 +150,7 @@ def test_extract_project_id_base_dir(patched_index_manager_instance):
     assert extracted_id is None
 
 # --- _get_document_details Tests ---
-# (Plan, Synopsis, World, Character, Scene, Note, Unknown tests unchanged - omitted)
+# (Plan, Synopsis, World tests unchanged - omitted)
 def test_get_document_details_plan(patched_index_manager_instance):
     manager, _ = patched_index_manager_instance
     project_id = "proj_details"
@@ -178,6 +178,7 @@ def test_get_document_details_world(patched_index_manager_instance):
     mock_internal_file_service.read_project_metadata.assert_not_called()
     mock_internal_file_service.read_chapter_metadata.assert_not_called()
 
+# --- MODIFIED: Character Tests ---
 def test_get_document_details_character_success(patched_index_manager_instance):
     manager, _ = patched_index_manager_instance
     project_id = "proj_details_char"
@@ -189,7 +190,8 @@ def test_get_document_details_character_success(patched_index_manager_instance):
     }
     details = manager._get_document_details(file_path, project_id)
     assert details == {'document_type': 'Character', 'document_title': char_name}
-    mock_internal_file_service.read_project_metadata.assert_called_once_with(project_id)
+    # Assert call with keyword argument
+    mock_internal_file_service.read_project_metadata.assert_called_once_with(project_id=project_id)
     mock_internal_file_service.read_chapter_metadata.assert_not_called()
 
 def test_get_document_details_character_metadata_missing_name(patched_index_manager_instance):
@@ -202,7 +204,8 @@ def test_get_document_details_character_metadata_missing_name(patched_index_mana
     }
     details = manager._get_document_details(file_path, project_id)
     assert details == {'document_type': 'Character', 'document_title': char_id}
-    mock_internal_file_service.read_project_metadata.assert_called_once_with(project_id)
+    # Assert call with keyword argument
+    mock_internal_file_service.read_project_metadata.assert_called_once_with(project_id=project_id)
 
 def test_get_document_details_character_metadata_missing_char(patched_index_manager_instance):
     manager, _ = patched_index_manager_instance
@@ -214,7 +217,8 @@ def test_get_document_details_character_metadata_missing_char(patched_index_mana
     }
     details = manager._get_document_details(file_path, project_id)
     assert details == {'document_type': 'Character', 'document_title': char_id}
-    mock_internal_file_service.read_project_metadata.assert_called_once_with(project_id)
+    # Assert call with keyword argument
+    mock_internal_file_service.read_project_metadata.assert_called_once_with(project_id=project_id)
 
 def test_get_document_details_character_metadata_read_error(patched_index_manager_instance):
     manager, _ = patched_index_manager_instance
@@ -224,9 +228,11 @@ def test_get_document_details_character_metadata_read_error(patched_index_manage
     mock_internal_file_service.read_project_metadata.side_effect = OSError("Cannot read file")
     details = manager._get_document_details(file_path, project_id)
     assert details == {'document_type': 'Unknown', 'document_title': f"{char_id}.md"}
-    mock_internal_file_service.read_project_metadata.assert_called_once_with(project_id)
+    # Assert call with keyword argument
+    mock_internal_file_service.read_project_metadata.assert_called_once_with(project_id=project_id)
+# --- END MODIFIED ---
 
-
+# --- MODIFIED: Scene Tests ---
 def test_get_document_details_scene_success(patched_index_manager_instance):
     manager, _ = patched_index_manager_instance
     project_id = "proj_details_scene"
@@ -252,8 +258,9 @@ def test_get_document_details_scene_success(patched_index_manager_instance):
         'chapter_id': chapter_id,
         'chapter_title': chapter_title
     }
-    mock_internal_file_service.read_chapter_metadata.assert_called_once_with(project_id, chapter_id)
-    mock_internal_file_service.read_project_metadata.assert_called_once_with(project_id)
+    # Assert calls with keyword arguments
+    mock_internal_file_service.read_chapter_metadata.assert_called_once_with(project_id=project_id, chapter_id=chapter_id)
+    mock_internal_file_service.read_project_metadata.assert_called_once_with(project_id=project_id)
 
 def test_get_document_details_scene_metadata_missing_title(patched_index_manager_instance):
     manager, _ = patched_index_manager_instance
@@ -279,8 +286,9 @@ def test_get_document_details_scene_metadata_missing_title(patched_index_manager
         'chapter_id': chapter_id,
         'chapter_title': chapter_title
     }
-    mock_internal_file_service.read_chapter_metadata.assert_called_once_with(project_id, chapter_id)
-    mock_internal_file_service.read_project_metadata.assert_called_once_with(project_id)
+    # Assert calls with keyword arguments
+    mock_internal_file_service.read_chapter_metadata.assert_called_once_with(project_id=project_id, chapter_id=chapter_id)
+    mock_internal_file_service.read_project_metadata.assert_called_once_with(project_id=project_id)
 
 def test_get_document_details_scene_metadata_missing_scene(patched_index_manager_instance):
     manager, _ = patched_index_manager_instance
@@ -306,8 +314,9 @@ def test_get_document_details_scene_metadata_missing_scene(patched_index_manager
         'chapter_id': chapter_id,
         'chapter_title': chapter_title
     }
-    mock_internal_file_service.read_chapter_metadata.assert_called_once_with(project_id, chapter_id)
-    mock_internal_file_service.read_project_metadata.assert_called_once_with(project_id)
+    # Assert calls with keyword arguments
+    mock_internal_file_service.read_chapter_metadata.assert_called_once_with(project_id=project_id, chapter_id=chapter_id)
+    mock_internal_file_service.read_project_metadata.assert_called_once_with(project_id=project_id)
 
 def test_get_document_details_scene_metadata_read_error(patched_index_manager_instance):
     manager, _ = patched_index_manager_instance
@@ -330,8 +339,9 @@ def test_get_document_details_scene_metadata_read_error(patched_index_manager_in
         'chapter_id': chapter_id,
         'chapter_title': chapter_title # Still gets chapter title because project meta read succeeded
     }
-    mock_internal_file_service.read_chapter_metadata.assert_called_once_with(project_id, chapter_id)
-    mock_internal_file_service.read_project_metadata.assert_called_once_with(project_id)
+    # Assert calls with keyword arguments
+    mock_internal_file_service.read_chapter_metadata.assert_called_once_with(project_id=project_id, chapter_id=chapter_id)
+    mock_internal_file_service.read_project_metadata.assert_called_once_with(project_id=project_id)
 
 def test_get_document_details_scene_project_metadata_read_error(patched_index_manager_instance):
     manager, _ = patched_index_manager_instance
@@ -354,10 +364,12 @@ def test_get_document_details_scene_project_metadata_read_error(patched_index_ma
         'chapter_id': chapter_id,
         'chapter_title': chapter_id # Falls back to chapter_id for chapter title because project meta read failed
     }
-    mock_internal_file_service.read_chapter_metadata.assert_called_once_with(project_id, chapter_id)
-    mock_internal_file_service.read_project_metadata.assert_called_once_with(project_id)
+    # Assert calls with keyword arguments
+    mock_internal_file_service.read_chapter_metadata.assert_called_once_with(project_id=project_id, chapter_id=chapter_id)
+    mock_internal_file_service.read_project_metadata.assert_called_once_with(project_id=project_id)
+# --- END MODIFIED ---
 
-# --- ADDED: Tests for Chapter Plan/Synopsis ---
+# --- MODIFIED: Chapter Plan/Synopsis Tests ---
 def test_get_document_details_chapter_plan(patched_index_manager_instance):
     manager, _ = patched_index_manager_instance
     project_id = "proj_details_chap_plan"
@@ -378,7 +390,8 @@ def test_get_document_details_chapter_plan(patched_index_manager_instance):
         'chapter_id': chapter_id,
         'chapter_title': chapter_title
     }
-    mock_internal_file_service.read_project_metadata.assert_called_once_with(project_id)
+    # Assert call with keyword argument
+    mock_internal_file_service.read_project_metadata.assert_called_once_with(project_id=project_id)
     mock_internal_file_service.read_chapter_metadata.assert_not_called() # Not needed for chapter plan
 
 def test_get_document_details_chapter_synopsis(patched_index_manager_instance):
@@ -401,7 +414,8 @@ def test_get_document_details_chapter_synopsis(patched_index_manager_instance):
         'chapter_id': chapter_id,
         'chapter_title': chapter_title
     }
-    mock_internal_file_service.read_project_metadata.assert_called_once_with(project_id)
+    # Assert call with keyword argument
+    mock_internal_file_service.read_project_metadata.assert_called_once_with(project_id=project_id)
     mock_internal_file_service.read_chapter_metadata.assert_not_called() # Not needed for chapter synopsis
 
 def test_get_document_details_chapter_plan_no_chapter_title(patched_index_manager_instance):
@@ -423,18 +437,27 @@ def test_get_document_details_chapter_plan_no_chapter_title(patched_index_manage
         'chapter_id': chapter_id,
         'chapter_title': chapter_id # Fallback chapter title uses ID
     }
-    mock_internal_file_service.read_project_metadata.assert_called_once_with(project_id)
-# --- END ADDED ---
+    # Assert call with keyword argument
+    mock_internal_file_service.read_project_metadata.assert_called_once_with(project_id=project_id)
+# --- END MODIFIED ---
 
+# --- MODIFIED: Note Test ---
 def test_get_document_details_note(patched_index_manager_instance):
     manager, _ = patched_index_manager_instance
     project_id = "proj_details"
-    note_name = "Magic System Ideas"
-    file_path = BASE_PROJECT_DIR / project_id / "notes" / f"{note_name}.md"
+    note_id = "note-uuid-xyz" # Use UUID style ID
+    note_title = "Magic System Ideas"
+    file_path = BASE_PROJECT_DIR / project_id / "notes" / f"{note_id}.md"
+    # Mock project metadata read
+    mock_internal_file_service.read_project_metadata.return_value = {
+        "notes": {note_id: {"title": note_title}}
+    }
     details = manager._get_document_details(file_path, project_id)
-    assert details == {'document_type': 'Note', 'document_title': note_name}
-    mock_internal_file_service.read_project_metadata.assert_not_called()
+    assert details == {'document_type': 'Note', 'document_title': note_title}
+    # Assert project metadata WAS called
+    mock_internal_file_service.read_project_metadata.assert_called_once_with(project_id=project_id)
     mock_internal_file_service.read_chapter_metadata.assert_not_called()
+# --- END MODIFIED ---
 
 def test_get_document_details_unknown(patched_index_manager_instance):
     manager, _ = patched_index_manager_instance

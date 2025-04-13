@@ -21,8 +21,6 @@ import sys
 from unittest.mock import patch, MagicMock, call, ANY # Import ANY
 
 # Import the service instance we are testing
-# NOTE: This test file seems to be testing the same service as tests/services/test_file_service.py
-# Consider consolidating these tests in the future.
 from app.services import file_service # Import the module itself
 # Import BASE_PROJECT_DIR from config
 from app.core.config import BASE_PROJECT_DIR
@@ -30,6 +28,7 @@ from app.core.config import BASE_PROJECT_DIR
 import app.rag.index_manager
 
 # --- Test Path Helper Methods ---
+# (Unchanged - Omitted for brevity)
 def test_get_project_path():
     project_id = "test-project-id"
     expected_path = BASE_PROJECT_DIR / project_id
@@ -118,6 +117,7 @@ def test_get_chat_history_path():
 
 
 # --- Test Basic File Operations using temp_project_dir ---
+# (Unchanged - Omitted for brevity)
 def test_create_directory(temp_project_dir: Path, monkeypatch):
     monkeypatch.setattr(file_service, 'BASE_PROJECT_DIR', temp_project_dir)
     project_id = "temp-proj"
@@ -212,6 +212,7 @@ def test_write_read_json_file(mock_index_mgr: MagicMock, temp_project_dir: Path,
 
 
 # --- Tests for Index Interaction ---
+# (Unchanged - Omitted for brevity)
 @patch('app.rag.index_manager.index_manager', autospec=True)
 def test_write_text_file_triggers_index(mock_index_mgr: MagicMock, temp_project_dir: Path, monkeypatch):
     monkeypatch.setattr(file_service, 'BASE_PROJECT_DIR', temp_project_dir)
@@ -293,6 +294,7 @@ def test_delete_directory_triggers_index_delete(mock_index_mgr: MagicMock, temp_
     assert mock_index_mgr.delete_doc.call_count == len(expected_calls)
 
 # --- Listing and Setup Methods ---
+# (Unchanged - Omitted for brevity)
 def test_list_subdirectories(temp_project_dir: Path, monkeypatch):
     monkeypatch.setattr(file_service, 'BASE_PROJECT_DIR', temp_project_dir)
     project_id = "list-proj"
@@ -364,7 +366,7 @@ def test_setup_project_structure(mock_index_mgr: MagicMock, temp_project_dir: Pa
     synopsis_path = file_service.file_service._get_content_block_path(project_id, "synopsis.md")
     world_path = file_service.file_service._get_content_block_path(project_id, "world.md")
     meta_path = file_service.file_service._get_project_metadata_path(project_id)
-    chat_history_path = file_service.file_service._get_chat_history_path(project_id) # Added chat history path check
+    chat_history_path = file_service.file_service._get_chat_history_path(project_id)
 
     assert not proj_path.exists()
 
@@ -382,7 +384,7 @@ def test_setup_project_structure(mock_index_mgr: MagicMock, temp_project_dir: Pa
     assert world_path.exists() and world_path.read_text() == ""
     assert meta_path.exists()
     meta_content = json.loads(meta_path.read_text())
-    # --- MODIFIED: Correct assertion ---
+    # Assert notes key initialized in metadata
     expected_meta = {
         "project_name": "",
         "chapters": {},
@@ -391,10 +393,9 @@ def test_setup_project_structure(mock_index_mgr: MagicMock, temp_project_dir: Pa
         "notes": {} # Check for notes key
     }
     assert meta_content == expected_meta # Use variable for comparison
-    # --- END MODIFIED ---
-    assert chat_history_path.exists() # Check chat history file exists
+    assert chat_history_path.exists()
     chat_history_content = json.loads(chat_history_path.read_text())
-    assert chat_history_content == {} # Check chat history content is empty dict
+    assert chat_history_content == {}
 
     # Assert index_manager was called for the .md files
     expected_index_calls = [call(plan_path), call(synopsis_path), call(world_path)]
@@ -404,6 +405,7 @@ def test_setup_project_structure(mock_index_mgr: MagicMock, temp_project_dir: Pa
 
 
 # --- Chat History and Session Metadata Tests ---
+# (Unchanged - Omitted for brevity)
 def test_read_chat_history_file_success(temp_project_dir: Path, monkeypatch):
     monkeypatch.setattr(file_service, 'BASE_PROJECT_DIR', temp_project_dir)
     project_id = "chat-proj"
@@ -529,6 +531,7 @@ def test_add_update_delete_chat_session_metadata(temp_project_dir: Path, monkeyp
     assert meta["chat_sessions"] == {session_id_1: {"name": "Updated First"}}
 
 # --- Tests for get_project_last_content_modification ---
+# (Unchanged - Omitted for brevity)
 def create_mock_path(path_str, is_dir, is_file, mtime, children=None, suffix='.txt', relative_parts=None):
     """Helper to create a mock Path object."""
     mock = MagicMock(spec=Path)
@@ -706,6 +709,7 @@ def test_get_file_mtime_is_directory(temp_project_dir: Path, monkeypatch):
 
 
 # --- Tests for Chapter Plan/Synopsis Read Methods ---
+# (Unchanged - Omitted for brevity)
 def test_read_chapter_plan_file_success(temp_project_dir: Path, monkeypatch):
     """Test reading an existing chapter plan file."""
     monkeypatch.setattr(file_service, 'BASE_PROJECT_DIR', temp_project_dir)

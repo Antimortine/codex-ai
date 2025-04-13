@@ -144,11 +144,12 @@ class IndexManager:
         Determines the document type and title based on its path and project metadata.
         For scenes, it also attempts to add chapter_id and chapter_title.
         For chapter plan/synopsis, it adds chapter_id and chapter_title.
+        For notes, it gets the title from project metadata.
         Returns a dictionary containing metadata keys.
         """
         default_title = file_path.name
         details = {'document_type': 'Unknown', 'document_title': default_title}
-        fs = file_service
+        fs = file_service # Use the imported file_service instance
 
         try:
             relative_path_parts = file_path.relative_to(BASE_PROJECT_DIR / project_id).parts
@@ -158,16 +159,24 @@ class IndexManager:
             elif file_path.name == "world.md" and len(relative_path_parts) == 1: details = {'document_type': 'World', 'document_title': 'World Info'}
             # Character files
             elif len(relative_path_parts) > 1 and relative_path_parts[0] == 'characters' and file_path.suffix == '.md':
-                character_id = file_path.stem; project_meta = fs.read_project_metadata(project_id)
+                character_id = file_path.stem
+                project_meta = fs.read_project_metadata(project_id=project_id) # Use keyword
                 char_name = project_meta.get('characters', {}).get(character_id, {}).get('name')
                 details = {'document_type': 'Character', 'document_title': char_name or character_id}
+            # --- ADDED: Note files ---
+            elif len(relative_path_parts) > 1 and relative_path_parts[0] == 'notes' and file_path.suffix == '.md':
+                note_id = file_path.stem # Note ID is the filename stem (UUID)
+                project_meta = fs.read_project_metadata(project_id=project_id) # Use keyword
+                note_title = project_meta.get('notes', {}).get(note_id, {}).get('title')
+                details = {'document_type': 'Note', 'document_title': note_title or note_id} # Fallback to ID
+            # --- END ADDED ---
             # Chapter-level files (Scenes, Plan, Synopsis)
             elif len(relative_path_parts) > 1 and relative_path_parts[0] == 'chapters':
                 chapter_id = relative_path_parts[1]
                 chapter_title = chapter_id # Default chapter title to ID
                 # Get Chapter Title from project metadata
                 try:
-                    project_meta = fs.read_project_metadata(project_id)
+                    project_meta = fs.read_project_metadata(project_id=project_id) # Use keyword
                     chapter_meta_in_proj = project_meta.get('chapters', {}).get(chapter_id, {})
                     title_from_proj_meta = chapter_meta_in_proj.get('title')
                     if title_from_proj_meta:
@@ -196,7 +205,7 @@ class IndexManager:
                     scene_id = file_path.stem
                     scene_title = scene_id # Default to ID
                     try:
-                        chapter_meta = fs.read_chapter_metadata(project_id, chapter_id)
+                        chapter_meta = fs.read_chapter_metadata(project_id=project_id, chapter_id=chapter_id) # Use keywords
                         scene_meta = chapter_meta.get('scenes', {}).get(scene_id, {})
                         title_from_meta = scene_meta.get('title')
                         if title_from_meta:
@@ -213,9 +222,7 @@ class IndexManager:
                         'chapter_id': chapter_id,
                         'chapter_title': chapter_title
                     }
-            # Note files
-            elif len(relative_path_parts) > 1 and relative_path_parts[0] == 'notes' and file_path.suffix == '.md':
-                details = {'document_type': 'Note', 'document_title': file_path.stem}
+            # Note: Removed redundant 'notes' check here as it's handled above now.
         except Exception as e: logger.error(f"Error determining document details for {file_path}: {e}", exc_info=True)
         return details
 
@@ -273,11 +280,17 @@ class IndexManager:
                      "document_type": current_details.get('document_type', 'Unknown'),
                      "document_title": current_details.get('document_title', current_path.name)
                  }
+                 # Add specific metadata based on type
                  if meta["document_type"] == "Character":
                      meta["character_name"] = meta["document_title"]
                  if meta["document_type"] in ["Scene", "ChapterPlan", "ChapterSynopsis"]:
                      meta["chapter_id"] = current_details.get('chapter_id', 'UNKNOWN')
                      meta["chapter_title"] = current_details.get('chapter_title', 'UNKNOWN')
+                 # --- ADDED: Note specific metadata (optional, could add note_id if needed) ---
+                 # if meta["document_type"] == "Note":
+                 #     meta["note_title"] = meta["document_title"] # Already have title
+                 # --- END ADDED ---
+
                  logger.debug(f"Generated metadata for {file_name}: {meta}")
                  return meta
 
@@ -287,13 +300,20 @@ class IndexManager:
 
             logger.debug(f"Inserting new nodes for file: {file_path} (metadata added via file_metadata_func)")
 
-            if preloaded_metadata and preloaded_metadata.get('document_type') == 'Scene':
-                logger.info(f"Using enhanced insertion for Scene document with title: {preloaded_metadata.get('document_title')}")
+            # --- MODIFIED: Handle preloaded metadata for Notes as well ---
+            if preloaded_metadata and preloaded_metadata.get('document_type') in ['Scene', 'Note', 'Character']: # Add Note/Character
+                doc_type = preloaded_metadata.get('document_type')
+                logger.info(f"Using enhanced insertion for {doc_type} document with title: {preloaded_metadata.get('document_title')}")
                 for doc in documents:
                     logger.debug(f"Document metadata before insertion: {doc.metadata}")
+                    # Ensure the preloaded title overrides any potentially stale one from file_metadata_func
                     if 'document_title' in preloaded_metadata:
                         doc.metadata['document_title'] = preloaded_metadata['document_title']
+                    # Add other relevant preloaded fields if necessary
+                    if doc_type == 'Scene' and 'chapter_title' in preloaded_metadata:
+                         doc.metadata['chapter_title'] = preloaded_metadata['chapter_title']
                     logger.debug(f"Final document metadata for insertion: {doc.metadata}")
+            # --- END MODIFIED ---
 
             self.index.insert_nodes(documents)
             logger.info(f"Successfully indexed/updated file: {file_path} with project_id '{project_id}'")
