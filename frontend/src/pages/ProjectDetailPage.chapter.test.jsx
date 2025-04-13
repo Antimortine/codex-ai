@@ -20,17 +20,20 @@ import { render, screen, fireEvent, waitFor, act } from '@testing-library/react'
 import userEvent from '@testing-library/user-event';
 import ProjectDetailPage from './ProjectDetail';
 import * as api from '../api/codexApi'; // Path relative to this file
-import { MemoryRouter, Route, Routes } from 'react-router-dom';
+// Import shared testing utilities
+import { 
+  renderWithRouter, 
+  flushPromises, 
+  TEST_PROJECT_ID,
+  TEST_CHAPTER_ID,
+  TEST_SCENE_ID,
+  MOCK_PROJECT 
+} from '../utils/testing';
 
-// Create mock data here since the import isn't working
-const TEST_PROJECT_ID = 'test-project-123';
-const TEST_CHAPTER_ID = 'ch-1';
-const TEST_SCENE_ID = 'scene-1';
-
+// Use the imported test constants for consistent testing
 const mockProject = {
-  id: TEST_PROJECT_ID,
-  name: 'Test Project',
-  description: 'A test project for unit testing'
+  ...MOCK_PROJECT,
+  // Add any test-specific overrides here if needed
 };
 
 const mockChaptersData = [
@@ -47,19 +50,6 @@ const mockScenes = [
   { id: 'scene-1', title: 'Scene One', content: 'Scene content here', chapter_id: 'ch-1' },
   { id: 'scene-2', title: 'Scene Two', content: 'Another scene', chapter_id: 'ch-1' }
 ];
-
-// Create our own renderWithRouter function since the import isn't working
-const renderWithRouter = (ui, route = `/projects/${TEST_PROJECT_ID}`) => {
-  window.history.pushState({}, 'Test page', route);
-  
-  return render(
-    <MemoryRouter initialEntries={[route]}>
-      <Routes>
-        <Route path="/projects/:projectId" element={ui} />
-      </Routes>
-    </MemoryRouter>
-  );
-};
 
 // Mock dependencies
 vi.mock('../api/codexApi');
@@ -162,7 +152,7 @@ describe('ProjectDetailPage Chapter Tests', () => {
         
         // Allow additional time for all async operations to settle
         await act(async () => {
-            await new Promise(resolve => setTimeout(resolve, 50));
+            await flushPromises(50); // Use our imported utility
         });
     };
 

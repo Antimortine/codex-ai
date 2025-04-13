@@ -14,16 +14,6 @@
  * limitations under the License.
  */
 
-import React from 'react';
-import { vi } from 'vitest';
-
-// Mock ChapterSection component to avoid prop type errors during testing
-const MockChapterSection = ({ chapter }) => (
-  <div data-testid={`chapter-section-${chapter.id}`}>
-    <h3>{chapter.title}</h3>
-  </div>
-);
-
-export default {
-  ChapterSection: MockChapterSection
-};
+// Export all testing utilities for easy imports
+export * from './renderUtils';
+export * from './constants';

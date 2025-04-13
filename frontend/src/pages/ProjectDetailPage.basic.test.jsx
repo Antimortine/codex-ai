@@ -20,7 +20,8 @@ import { act } from 'react-dom/test-utils';
 import { vi, describe, it, expect, beforeEach, afterEach } from 'vitest';
 import ProjectDetailPage from './ProjectDetail'; // Updated import path 
 import { render } from '@testing-library/react';
-import { MemoryRouter, Routes, Route } from 'react-router-dom';
+// Import shared testing utilities
+import { renderWithRouter, flushPromises, TEST_PROJECT_ID, TEST_PROJECT_NAME } from '../utils/testing';
 
 // Mock API calls used by ProjectDetailPage
 vi.mock('../api/codexApi', async () => {
@@ -89,26 +90,6 @@ vi.mock('../components/ChapterSection', () => {
 
 // Import the mocked API functions
 import { getProject, listChapters, listCharacters, listScenes } from '../api/codexApi';
-
-// Define constants here instead of importing them
-const TEST_PROJECT_ID = 'test-project-123';
-const TEST_PROJECT_NAME = 'Test Project';
-
-// Helper function for rendering with router
-const renderWithRouter = (ui, route = `/projects/${TEST_PROJECT_ID}`) => {
-  window.history.pushState({}, 'Test page', route);
-  
-  return render(
-    <MemoryRouter initialEntries={[route]}>
-      <Routes>
-        <Route path="/projects/:projectId" element={ui} />
-      </Routes>
-    </MemoryRouter>
-  );
-};
-
-// Helper to wait for promises to resolve
-const flushPromises = (ms = 50) => new Promise(resolve => setTimeout(resolve, ms));
 
 describe('ProjectDetailPage Basic Tests', () => {
   // Set up and tear down
