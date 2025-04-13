@@ -33,165 +33,127 @@ import CompiledContentModal from './modals/CompiledContentModal';
  */
 function ProjectDetailPage() {
     const { projectId } = useParams();
-    
+
     // Use the custom hooks to manage state and operations
     const projectData = useProjectData(projectId);
     const chapterOps = useChapterOperations(projectId);
     const characterOps = useCharacterOperations(projectId);
     const sceneOps = useSceneOperations(projectId, chapterOps.chapters);
 
-    // Handle scene creation from chapter splits
-    const handleCreateScenesFromSplits = async () => {
-        const success = await sceneOps.handleCreateScenesFromSplits(
-            chapterOps.chapterIdForSplits,
-            chapterOps.proposedSplits
-        );
-        
-        if (success) {
-            chapterOps.setShowSplitModal(false);
+    // Handle scene creation from chapter splits (passed to Split Modal)
+    const handleCreateScenesFromSplitsForModal = async () => {
+        if (!chapterOps.chapterIdForSplits || !chapterOps.proposedSplits || chapterOps.proposedSplits.length === 0) {
+             console.error("Attempted to create scenes from splits with invalid data.");
+            return;
         }
+        const success = await sceneOps.handleCreateScenesFromSplits(
+            chapterOps.chapterIdForSplits, chapterOps.proposedSplits );
+        if (success) { chapterOps.handleCloseSplitModal(); }
+        else { console.error("Failed to create scenes from splits."); }
     };
 
     // Check if any operation is loading to disable buttons
-    const isAnyOperationLoading = 
-        projectData.isLoadingProject || 
-        chapterOps.isLoadingChapters || 
-        characterOps.isLoadingCharacters ||
-        projectData.isRebuildingIndex || 
-        chapterOps.isSplittingChapter || 
-        sceneOps.isGeneratingScene;
+    const isAnyOperationLoading =
+        projectData.isLoadingProject || chapterOps.isLoadingChapters ||
+        characterOps.isLoadingCharacters || Object.values(sceneOps.isLoadingScenes).some(Boolean) ||
+        projectData.isRebuildingIndex || chapterOps.isSavingChapter || chapterOps.isSplittingChapter ||
+        sceneOps.isGeneratingScene || sceneOps.isCreatingSceneFromDraft ||
+        characterOps.isCreatingCharacter || projectData.isSavingName;
 
-    // Show error message if any error occurs
-    const error = projectData.error || null;
+    // Aggregate errors from different hooks (simplified view)
+    const generalError = projectData.error || chapterOps.error || characterOps.characterError || null;
 
-    if (error) {
-        return (
-            <div style={{ padding: '20px', color: 'red' }}>
-                <h2>Error</h2>
-                <p data-testid="project-error">{error}</p>
-                <Link to="/projects">Back to Projects</Link>
-            </div>
-        );
+    if (generalError && !projectData.project) { // Only show full page error if project itself failed to load
+        return ( <div style={{ padding: '20px', color: 'red' }}> <h2>Error Loading Project</h2>
+                <p data-testid="project-error">{generalError}</p> <Link to="/">Back to Projects</Link> </div> );
+    }
+    if (!projectData.isLoadingProject && !projectData.project) {
+         return ( <div style={{ padding: '20px' }}> <h2>Project Not Found</h2>
+                 <p>The requested project could not be found.</p> <Link to="/">Back to Projects</Link> </div> );
     }
 
     return (
         <div style={{ padding: '20px', maxWidth: '900px', margin: '0 auto' }}>
-            {/* Project header with title and edit functionality */}
-            <ProjectHeader 
-                project={projectData.project}
-                isLoading={projectData.isLoadingProject}
-                isEditingName={projectData.isEditingName}
-                editedProjectName={projectData.editedProjectName}
-                isSavingName={projectData.isSavingName}
-                saveNameError={projectData.saveNameError}
-                saveNameSuccess={projectData.saveNameSuccess}
-                setEditedProjectName={projectData.setEditedProjectName}
-                onEditClick={projectData.handleEditNameClick}
-                onCancelEdit={projectData.handleCancelNameEdit}
-                onSave={projectData.handleSaveProjectName}
-            />
-
+            <ProjectHeader
+                project={projectData.project} isLoading={projectData.isLoadingProject}
+                isEditingName={projectData.isEditingName} editedProjectName={projectData.editedProjectName}
+                isSavingName={projectData.isSavingName} saveNameError={projectData.saveNameError}
+                saveNameSuccess={projectData.saveNameSuccess} setEditedProjectName={projectData.setEditedProjectName}
+                onEditClick={projectData.handleEditNameClick} onCancelEdit={projectData.handleCancelNameEdit}
+                onSave={projectData.handleSaveProjectName} isAnyOperationLoading={isAnyOperationLoading} />
             <hr />
-
-            {/* Chapters section */}
             <ChapterManagement
-                projectId={projectId}
-                chapters={chapterOps.chapters}
-                isLoading={chapterOps.isLoadingChapters}
-                newChapterTitle={chapterOps.newChapterTitle}
-                setNewChapterTitle={chapterOps.setNewChapterTitle}
+                // Core Data
+                projectId={projectId} chapters={chapterOps.chapters} scenes={sceneOps.scenes}
+                isLoadingChapters={chapterOps.isLoadingChapters} isLoadingScenes={sceneOps.isLoadingScenes}
+                // Chapter CRUD
+                newChapterTitle={chapterOps.newChapterTitle} setNewChapterTitle={chapterOps.setNewChapterTitle}
                 onCreateChapter={chapterOps.handleCreateChapter}
                 onDeleteChapter={chapterOps.handleDeleteChapter}
-                editingChapterId={chapterOps.editingChapterId}
-                editedChapterTitle={chapterOps.editedChapterTitle}
-                setEditedChapterTitle={chapterOps.setEditedChapterTitle}
-                isSavingChapter={chapterOps.isSavingChapter}
-                saveChapterError={chapterOps.saveChapterError}
-                onEditChapter={chapterOps.handleEditChapterClick}
-                onSaveChapterTitle={chapterOps.handleSaveChapterTitle}
-                onCancelChapterEdit={chapterOps.handleCancelChapterEdit}
-                onGenerateScene={sceneOps.handleGenerateSceneDraft}
-                onSplitChapter={chapterOps.handleOpenSplitModal}
-                onCompileChapter={chapterOps.handleCompileChapter}
-                isGeneratingScene={sceneOps.isGeneratingScene}
+                // Chapter Editing
+                editingChapterId={chapterOps.editingChapterId} editedChapterTitle={chapterOps.editedChapterTitle} // For the inline edit input in ChapterManagement (if kept)
+                setEditedChapterTitle={chapterOps.setEditedChapterTitle} // Handler for internal ChapterMgt edit
+                editedChapterTitleForInput={chapterOps.editedChapterTitle} // Value for ChapterSection edit input
+                onTitleInputChange={(e) => chapterOps.setEditedChapterTitle(e.target.value)} // Handler for ChapterSection edit input
+                isSavingChapter={chapterOps.isSavingChapter} saveChapterError={chapterOps.saveChapterError} // General error
+                onEditChapter={chapterOps.handleEditChapterClick} onSaveChapter={chapterOps.handleSaveChapterTitle}
+                onCancelEditChapter={chapterOps.handleCancelChapterEdit} chapterErrors={chapterOps.chapterErrors}
+                 // Scene CRUD (within Chapter)
+                onDeleteScene={sceneOps.handleDeleteScene} onCreateScene={sceneOps.handleCreateSceneManually}
+                 sceneErrors={sceneOps.sceneErrors}
+                 // AI Scene Generation (within Chapter)
+                onGenerateScene={sceneOps.handleGenerateSceneDraft} generationSummaryForInput={sceneOps.generationSummaries}
+                onSummaryChange={sceneOps.handleSummaryChange} isGeneratingSceneForThisChapter={sceneOps.isGeneratingScene}
                 generatingChapterId={sceneOps.generatingChapterId}
-                generationSummaries={sceneOps.generationSummaries}
-                isCompilingChapter={chapterOps.isCompilingChapter}
-                compilingChapterId={chapterOps.compilingChapterId}
-                scenes={sceneOps.scenes}
-                isLoadingScenes={sceneOps.isLoadingScenes}
-                onDeleteScene={sceneOps.handleDeleteScene}
+                 // AI Chapter Splitting (Triggered from Chapter)
+                splitInputContentForThisChapter={chapterOps.splitInputContent}
+                onSplitInputChange={chapterOps.handleSplitInputChange} // *** ENSURE THIS IS PASSED ***
+                isSplittingThisChapter={chapterOps.isSplittingChapter} splittingChapterId={chapterOps.splittingChapterId}
+                 onSplitChapter={chapterOps.handleOpenSplitModal}
+                 // Chapter Compilation
+                isCompilingThisChapter={chapterOps.isCompilingChapter} compilingChapterId={chapterOps.compilingChapterId}
+                onCompileChapter={chapterOps.handleCompileChapter}
+                 // Global State
                 isAnyOperationLoading={isAnyOperationLoading}
             />
-
             <hr />
-
-            {/* Characters section */}
             <CharacterManagement
-                projectId={projectId}
-                characters={characterOps.characters}
-                isLoading={characterOps.isLoadingCharacters}
-                newCharacterName={characterOps.newCharacterName}
-                setNewCharacterName={characterOps.setNewCharacterName}
-                onCreateCharacter={characterOps.handleCreateCharacter}
-                onDeleteCharacter={characterOps.handleDeleteCharacter}
-                characterError={characterOps.characterError}
-                isAnyOperationLoading={isAnyOperationLoading}
-            />
-
+                projectId={projectId} characters={characterOps.characters} isLoading={characterOps.isLoadingCharacters}
+                newCharacterName={characterOps.newCharacterName} setNewCharacterName={characterOps.setNewCharacterName}
+                onCreateCharacter={characterOps.handleCreateCharacter} onDeleteCharacter={characterOps.handleDeleteCharacter}
+                characterError={characterOps.characterError} isAnyOperationLoading={isAnyOperationLoading}
+                isCreatingCharacter={characterOps.isCreatingCharacter} />
             <hr />
-
-            {/* Project tools section */}
             <ProjectTools
-                projectId={projectId}
-                isRebuildingIndex={projectData.isRebuildingIndex}
-                rebuildError={projectData.rebuildError}
-                rebuildSuccessMessage={projectData.rebuildSuccessMessage}
-                onRebuildIndex={projectData.handleRebuildIndex}
-                isAnyOperationLoading={isAnyOperationLoading}
-            />
+                projectId={projectId} isRebuildingIndex={projectData.isRebuildingIndex}
+                rebuildError={projectData.rebuildError} rebuildSuccessMessage={projectData.rebuildSuccessMessage}
+                onRebuildIndex={projectData.handleRebuildIndex} isAnyOperationLoading={isAnyOperationLoading} />
 
-            {/* Generated scene modal */}
+            {/* Modals */}
             {sceneOps.showGeneratedSceneModal && (
                 <GeneratedSceneModal
-                    sceneTitle={sceneOps.generatedSceneTitle}
-                    sceneContent={sceneOps.generatedSceneContent}
-                    onTitleChange={sceneOps.setGeneratedSceneTitle}
-                    onContentChange={sceneOps.setGeneratedSceneContent}
-                    onSave={sceneOps.handleCreateSceneFromDraft}
-                    onClose={() => sceneOps.setShowGeneratedSceneModal(false)}
-                    isCreating={sceneOps.isCreatingSceneFromDraft}
-                    error={sceneOps.createSceneError}
-                />
+                    sceneTitle={sceneOps.generatedSceneTitle} sceneContent={sceneOps.generatedSceneContent}
+                    onTitleChange={sceneOps.setGeneratedSceneTitle} onContentChange={sceneOps.setGeneratedSceneContent}
+                    onSave={sceneOps.handleCreateSceneFromDraft} onClose={sceneOps.handleCloseGenerateModal}
+                    isCreating={sceneOps.isCreatingSceneFromDraft} error={sceneOps.createSceneError} />
             )}
-
-            {/* Split chapter modal */}
             {chapterOps.showSplitModal && (
                 <SplitChapterModal
                     chapterId={chapterOps.chapterIdForSplits}
                     inputContent={chapterOps.splitInputContent[chapterOps.chapterIdForSplits] || ''}
-                    onInputChange={(content) => chapterOps.setSplitInputContent(prev => ({
-                        ...prev,
-                        [chapterOps.chapterIdForSplits]: content
-                    }))}
-                    proposedSplits={chapterOps.proposedSplits}
-                    onSplit={chapterOps.handleSplitChapter}
-                    onCreateScenes={handleCreateScenesFromSplits}
-                    onClose={() => chapterOps.setShowSplitModal(false)}
-                    isSplitting={chapterOps.isSplittingChapter}
-                    isCreating={chapterOps.isCreatingScenesFromSplit}
-                    splitError={chapterOps.splitError}
-                    createError={chapterOps.createFromSplitError}
-                />
+                    onInputChange={(content) => chapterOps.handleSplitInputChange(chapterOps.chapterIdForSplits, content)}
+                    proposedSplits={chapterOps.proposedSplits} onSplit={chapterOps.handleSplitChapter}
+                    onCreateScenes={handleCreateScenesFromSplitsForModal} onClose={chapterOps.handleCloseSplitModal}
+                    isSplitting={chapterOps.isSplittingChapter} isCreating={sceneOps.isCreatingSceneFromDraft}
+                    splitError={chapterOps.chapterErrors?.[`split_${chapterOps.chapterIdForSplits}`]}
+                    createError={sceneOps.sceneErrors?.[`split_create_${chapterOps.chapterIdForSplits}`]} />
             )}
-
-            {/* Compiled content modal */}
             {chapterOps.showCompiledContentModal && (
                 <CompiledContentModal
-                    content={chapterOps.compiledContent}
-                    onClose={() => chapterOps.setShowCompiledContentModal(false)}
-                    error={chapterOps.compileError}
-                />
+                    filename={chapterOps.compiledFileName} content={chapterOps.compiledContent}
+                    onClose={chapterOps.handleCloseCompileModal}
+                    error={chapterOps.chapterErrors?.[`compile_${chapterOps.compilingChapterId}`]}
+                    isLoading={chapterOps.isCompilingChapter} />
             )}
         </div>
     );

@@ -47,9 +47,11 @@ class AISceneGenerationResponse(BaseModel):
 
 # --- Text Editing Models ---
 class AIRephraseRequest(BaseModel):
-    selected_text: str = Field(..., description="The text selected by the user for rephrasing.")
+    text_to_rephrase: str = Field(..., description="The text selected by the user for rephrasing.")
     context_before: Optional[str] = Field(None, description="Optional text immediately preceding the selection for better context.")
     context_after: Optional[str] = Field(None, description="Optional text immediately following the selection for better context.")
+    context_path: Optional[str] = Field(None, description="File path or location context for the text being rephrased.")
+    n_suggestions: int = Field(3, description="Number of rephrasing suggestions to generate.")
 
 class AIRephraseResponse(BaseModel):
     suggestions: List[str] = Field(..., description="A list of alternative phrasings for the selected text.")
@@ -104,3 +106,10 @@ class ChatSessionRead(IDModel, ChatSessionBase):
 class ChatSessionList(BaseModel):
     sessions: List[ChatSessionRead] = Field([], description="List of available chat sessions for the project.")
 # --- END ADDED ---
+
+# --- Index Rebuild Models ---
+class RebuildIndexResponse(BaseModel):
+    success: bool = Field(..., description="Whether the index rebuild operation was successful")
+    message: str = Field(..., description="Status message providing details about the rebuild operation")
+    documents_deleted: int = Field(..., description="Number of documents that were deleted from the index")
+    documents_indexed: int = Field(..., description="Number of documents that were added to the index")

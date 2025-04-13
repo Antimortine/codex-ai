@@ -56,7 +56,8 @@ async def test_generate_scene_draft_success_with_previous(mock_file_service: Mag
         'project_synopsis': mock_synopsis,
         'chapter_plan': mock_chapter_plan,
         'chapter_synopsis': mock_chapter_synopsis, # None
-        'filter_paths': {str(mock_plan_path), str(mock_synopsis_path), str(mock_chapter_plan_path)}
+        'filter_paths': {str(mock_plan_path), str(mock_synopsis_path), str(mock_chapter_plan_path)},
+        'chapter_title': 'Test Chapter'  # Add the missing field
     }
 
     # Configure mocks for loading previous scenes (still needed)
@@ -124,6 +125,7 @@ async def test_generate_scene_draft_success_first_scene(mock_file_service: Magic
         'project_synopsis': mock_synopsis,
         'chapter_plan': None, # Assume none for this chapter
         'chapter_synopsis': None,
+        'chapter_title': None, # Add the missing field
         'filter_paths': {str(mock_plan_path), str(mock_synopsis_path)}
     }
 
@@ -220,6 +222,7 @@ async def test_generate_scene_draft_rag_engine_error(mock_file_service: MagicMoc
         'project_synopsis': mock_synopsis,
         'chapter_plan': None,
         'chapter_synopsis': None,
+        'chapter_title': None, # Add the missing field
         'filter_paths': {str(mock_plan_path), str(mock_synopsis_path)}
     }
     # Mock previous scene loading
@@ -259,6 +262,7 @@ async def test_generate_scene_draft_rag_engine_returns_error_string(mock_file_se
         'project_synopsis': mock_synopsis,
         'chapter_plan': None,
         'chapter_synopsis': None,
+        'chapter_title': None, # Add the missing field
         'filter_paths': {str(mock_plan_path), str(mock_synopsis_path)}
     }
     mock_rag_engine.generate_scene = AsyncMock(return_value=mock_generated_dict)

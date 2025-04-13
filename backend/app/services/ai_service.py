@@ -33,6 +33,7 @@ class LoadedContext(TypedDict, total=False):
     chapter_plan: Optional[str]
     chapter_synopsis: Optional[str]
     filter_paths: Set[str]
+    # This field is optional and added in _load_context() when a chapter_id is provided
     chapter_title: Optional[str] # Include chapter title if loaded
 
 
@@ -49,13 +50,14 @@ class AIService:
         Returns a dictionary with loaded content (or None if not found/error)
         and a set of absolute paths for successfully loaded files.
         """
+        # Initialize all fields with default values to ensure backward compatibility with tests
         context: LoadedContext = {
             'project_plan': None,
             'project_synopsis': None,
             'chapter_plan': None,
             'chapter_synopsis': None,
             'filter_paths': set(),
-            'chapter_title': None,
+            'chapter_title': None,  # Always initialize with None even if chapter_id is not provided
         }
         logger.debug(f"AIService: Loading context for project '{project_id}'" + (f", chapter '{chapter_id}'" if chapter_id else ""))
 
@@ -122,8 +124,13 @@ class AIService:
         return context
 
     async def query_project(self, project_id: str, query_text: str) -> Tuple[str, List[NodeWithScore], Optional[List[Dict[str, str]]]]:
-        logger.info(f"AIService: Processing query for project {project_id}: '{query_text}'")
+        logger.info(f"AIService: Processing general AI query for project {project_id}. Query: '{query_text}'")
         if self.rag_engine is None: raise HTTPException(status_code=503, detail="AI Engine not ready.")
+
+        # Initialization
+        direct_sources_data = [] # List to hold direct entity content
+        direct_chapter_context = None # Dictionary for chapter plan/synopsis
+        directly_included_paths = set() # Set of paths to filter from RAG retrieval
 
         # --- REFACTORED: Use helper for project context ---
         project_context = self._load_context(project_id)
@@ -132,7 +139,6 @@ class AIService:
         paths_to_filter = project_context.get('filter_paths', set())
         # --- END REFACTORED ---
 
-        direct_sources_data: List[Dict] = []
         entity_list = []
         directly_included_paths: Set[str] = paths_to_filter.copy() # Start with paths from project context
         direct_chapter_context: Optional[Dict[str, Optional[str]]] = None # For chapter plan/synopsis if matched
@@ -197,8 +203,22 @@ class AIService:
                 # Skip project plan/synopsis as they are always loaded explicitly (if available)
                 if entity['type'] in ['Plan', 'Synopsis']: continue
 
-                normalized_entity_name = normalize_name(entity['name']); pattern = rf"\b{re.escape(normalized_entity_name)}\b"
+                normalized_entity_name = normalize_name(entity['name'])
+                
+                # More flexible matching for Notes and other entities
+                is_match = False
+                
+                # First try exact word boundary matching for best precision
+                pattern = rf"\b{re.escape(normalized_entity_name)}\b"
                 if re.search(pattern, normalized_query):
+                    is_match = True
+                    logger.debug(f"AIService (Query): Found exact word match for '{entity['name']}'")
+                # For Notes specifically, also try a more flexible match if the note title is significant
+                elif entity['type'] == 'Note' and len(normalized_entity_name) > 3 and normalized_entity_name in normalized_query:
+                    is_match = True
+                    logger.info(f"AIService (Query): Found flexible match for Note '{entity['name']}' - TYPE: {entity['type']}")
+                
+                if is_match:
                     logger.info(f"AIService (Query): Found direct match: Type='{entity['type']}', Name='{entity['name']}'")
                     try:
                         if entity['type'] == 'Chapter':
@@ -221,12 +241,33 @@ class AIService:
                                 logger.error(f"AIService (Query): Invalid or missing file_path for entity '{entity['name']}': {file_path_to_load}"); continue
 
                             content = ""
-                            if entity['type'] == 'World': content = self.file_service.read_content_block_file(project_id, file_path_to_load.name)
-                            elif entity['type'] in ['Character', 'Scene', 'Note']: content = self.file_service.read_text_file(file_path_to_load)
-                            else: logger.warning(f"AIService (Query): Unknown entity type '{entity['type']}' encountered for direct loading."); continue
+                            if entity['type'] == 'World': 
+                                content = self.file_service.read_content_block_file(project_id, file_path_to_load.name)
+                                logger.info(f"AIService (Query): Successfully read World content block: {file_path_to_load.name}")
+                            elif entity['type'] in ['Character', 'Scene', 'Note']: 
+                                try:
+                                    logger.info(f"AIService (Query): Attempting to read {entity['type']} file: {file_path_to_load}")
+                                    content = self.file_service.read_text_file(file_path_to_load)
+                                    logger.info(f"AIService (Query): Successfully read {entity['type']} file, content length: {len(content)}")
+                                    if entity['type'] == 'Note':
+                                        logger.info(f"AIService (Query): NOTE CONTENT FIRST 100 CHARS: {content[:100]}")
+                                except Exception as read_error:
+                                    logger.error(f"AIService (Query): Error reading {entity['type']} file {file_path_to_load}: {read_error}")
+                                    raise
+                            else: 
+                                logger.warning(f"AIService (Query): Unknown entity type '{entity['type']}' encountered for direct loading."); 
+                                continue
 
-                            direct_sources_data.append({ 'type': entity['type'], 'name': entity['name'], 'content': content, 'file_path': str(file_path_to_load) })
+                            # Add to direct sources data
+                            source_item = { 'type': entity['type'], 'name': entity['name'], 'content': content, 'file_path': str(file_path_to_load) }
+                            direct_sources_data.append(source_item)
                             directly_included_paths.add(str(file_path_to_load.resolve())) # Add resolved path
+                            
+                            # Log more details for debugging
+                            if entity['type'] == 'Note':
+                                logger.info(f"AIService (Query): Added Note to direct_sources_data: {entity['name']} with path {file_path_to_load}")
+                                logger.info(f"AIService (Query): Current direct_sources_data count: {len(direct_sources_data)}")
+                            
                             logger.info(f"AIService (Query): Successfully loaded direct content for '{entity['name']}' (Length: {len(content)})")
                     except Exception as e: logger.error(f"AIService (Query): Error loading direct content for '{entity['name']}': {e}", exc_info=True)
 
@@ -301,7 +342,7 @@ class AIService:
         except Exception as e: logger.error(f"Unexpected error during scene generation delegation: {e}", exc_info=True); raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred during AI scene generation.")
 
     async def rephrase_text(self, project_id: str, request_data: AIRephraseRequest) -> List[str]:
-        logger.info(f"AIService: Processing rephrase request for project {project_id}. Text: '{request_data.selected_text[:50]}...'")
+        logger.info(f"AIService: Processing rephrase request for project {project_id}. Text: '{request_data.text_to_rephrase[:50]}...'")
         if self.rag_engine is None: raise HTTPException(status_code=503, detail="AI Engine not ready.")
 
         # --- REFACTORED: Use helper for project context ---
@@ -314,7 +355,7 @@ class AIService:
         logger.debug(f"AIService (Rephrase): Paths to filter from RAG: {paths_to_filter}")
         try:
             suggestions = await self.rag_engine.rephrase(
-                project_id=project_id, selected_text=request_data.selected_text,
+                project_id=project_id, selected_text=request_data.text_to_rephrase,
                 context_before=request_data.context_before, context_after=request_data.context_after,
                 explicit_plan=explicit_plan, # Pass potentially None
                 explicit_synopsis=explicit_synopsis, # Pass potentially None
@@ -357,9 +398,10 @@ class AIService:
         except Exception as e: logger.error(f"Unexpected error during chapter split delegation: {e}", exc_info=True); raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="An unexpected error occurred during AI chapter splitting.")
 
     # (rebuild_project_index remains unchanged)
-    async def rebuild_project_index(self, project_id: str):
+    async def rebuild_project_index(self, project_id: str) -> Tuple[int, int]:
         """
         Deletes and rebuilds the vector index for a specific project.
+        Returns a tuple of (deleted_count, indexed_count).
         """
         logger.info(f"AIService: Received request to rebuild index for project {project_id}")
         if self.rag_engine is None:
@@ -373,14 +415,23 @@ class AIService:
             if not markdown_paths:
                 logger.warning(f"AIService: No markdown files found for project {project_id}. Index rebuild might not be necessary or project is empty.")
                 # Continue to ensure deletion happens if index exists but files were removed manually
-                # return # Or maybe return early? Let's proceed to delete step.
+                # Return 0 indexed if no files found, but still perform deletion
+                indexed_count = 0
+            else:
+                indexed_count = len(markdown_paths)
 
             # 2. Delegate to RagEngine to perform deletion and re-indexing
             logger.info(f"AIService: Delegating index rebuild for {len(markdown_paths)} files to RagEngine...")
             # Assuming RagEngine.rebuild_index is synchronous for now
             # If it becomes async, use 'await' here.
-            self.rag_engine.rebuild_index(project_id, markdown_paths)
+            result = self.rag_engine.rebuild_index(project_id, markdown_paths)
             logger.info(f"AIService: Index rebuild delegation complete for project {project_id}.")
+            
+            # For now, assume deleted count equals indexed count
+            # In a more advanced implementation, the RagEngine could return actual counts
+            deleted_count = indexed_count
+            
+            return deleted_count, indexed_count
 
         except Exception as e:
             logger.error(f"AIService: Unexpected error during index rebuild for project {project_id}: {e}", exc_info=True)
@@ -390,3 +441,10 @@ class AIService:
 # --- Instantiate Singleton ---
 try: ai_service = AIService()
 except Exception as e: logger.critical(f"Failed to create AIService instance on startup: {e}", exc_info=True); ai_service = None
+
+# --- Dependency Injection Function ---
+def get_ai_service() -> AIService:
+    """FastAPI dependency function to inject the AI service instance."""
+    if ai_service is None:
+        raise HTTPException(status_code=503, detail="AI Service is not available")
+    return ai_service

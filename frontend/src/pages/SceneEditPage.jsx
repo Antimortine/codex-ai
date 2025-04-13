@@ -17,7 +17,7 @@
 import React, { useState, useEffect, useCallback, useMemo } from 'react';
 import { useParams, Link, useNavigate } from 'react-router-dom';
 import AIEditorWrapper from '../components/AIEditorWrapper';
-import { getScene, updateScene, listScenes } from '../api/codexApi';
+import { getScene, updateScene, listScenes, createScene } from '../api/codexApi';
 
 const navLinkStyle = {
     margin: '0 10px',
@@ -64,18 +64,33 @@ function SceneEditPage() {
     let sceneFetchError = null;
     let listFetchError = null;
 
-    // Fetch current scene first
-    try {
-        const sceneResponse = await getScene(projectId, chapterId, sceneId);
-        setTitle(sceneResponse.data.title || '');
-        setOriginalTitle(sceneResponse.data.title || '');
-        setContent(sceneResponse.data.content || '');
-        setOrder(sceneResponse.data.order || 0);
-        setIsLoading(false); // <<< Set main loading false AFTER scene data is fetched
-    } catch (err) {
-        console.error("Error fetching current scene:", err);
-        sceneFetchError = `Failed to load scene ${sceneId}.`;
-        setIsLoading(false); // <<< Also set main loading false on error
+    // Handle special 'new' scene ID or fetch existing scene
+    if (sceneId === 'new') {
+        // This is a new scene, so set up default values
+        // Get order from query parameters if available
+        const urlParams = new URLSearchParams(window.location.search);
+        const orderParam = urlParams.get('order');
+        const newOrder = orderParam ? parseInt(orderParam, 10) : 1;
+        
+        setTitle('New Scene');
+        setOriginalTitle('New Scene');
+        setContent('');
+        setOrder(newOrder);
+        setIsLoading(false);
+    } else {
+        // Fetch existing scene from backend
+        try {
+            const sceneResponse = await getScene(projectId, chapterId, sceneId);
+            setTitle(sceneResponse.data.title || '');
+            setOriginalTitle(sceneResponse.data.title || '');
+            setContent(sceneResponse.data.content || '');
+            setOrder(sceneResponse.data.order || 0);
+            setIsLoading(false); // <<< Set main loading false AFTER scene data is fetched
+        } catch (err) {
+            console.error("Error fetching current scene:", err);
+            sceneFetchError = `Failed to load scene ${sceneId}.`;
+            setIsLoading(false); // <<< Also set main loading false on error
+        }
     }
 
     // Then fetch the scene list for navigation
@@ -131,9 +146,23 @@ function SceneEditPage() {
     setError(null);
     setSaveMessage('');
     try {
-      await updateScene(projectId, chapterId, sceneId, { title: title, content: content });
-      setSaveMessage('Scene saved successfully!');
-      setOriginalTitle(title);
+      // Check if this is a new scene (sceneId === 'new')
+      if (sceneId === 'new') {
+        // Create a new scene instead of updating
+        const response = await createScene(projectId, chapterId, { 
+          title: title, 
+          content: content,
+          order: order
+        });
+        // Navigate to the newly created scene
+        navigate(`/projects/${projectId}/chapters/${chapterId}/scenes/${response.data.id}`);
+        setSaveMessage('New scene created successfully!');
+      } else {
+        // Update existing scene
+        await updateScene(projectId, chapterId, sceneId, { title: title, content: content });
+        setSaveMessage('Scene saved successfully!');
+        setOriginalTitle(title);
+      }
       // Optionally re-fetch scene list if needed after save
       // await fetchData(); // Or just update local state if confident
       setTimeout(() => setSaveMessage(''), 3000);

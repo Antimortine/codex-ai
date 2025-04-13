@@ -17,6 +17,7 @@
 /// <reference types="vitest" />
 import { defineConfig } from 'vite';
 import react from '@vitejs/plugin-react';
+import path from 'path'; // Import path module for resolving alias
 
 // https://vitejs.dev/config/
 export default defineConfig({
@@ -31,5 +32,24 @@ export default defineConfig({
     coverage: {
       provider: 'v8',
     },
+    // --- ADDED: Server dependency optimization ---
+    // Explicitly tell Vitest/Vite not to try and pre-bundle file-saver for SSR/tests
+    // as we are aliasing it anyway. This can sometimes help with resolution issues.
+    // server: {
+    //   deps: {
+    //     inline: [/^(?!file-saver$).*/], // Inline everything EXCEPT file-saver (or adjust regex)
+    //     // Alternatively, explicitly exclude:
+    //     // exclude: ['file-saver'],
+    //   }
+    // },
   },
+  // --- ADDED: Resolve Alias for file-saver ---
+  resolve: {
+    alias: {
+      // Alias 'file-saver' to our dummy mock implementation during tests
+      // Ensure the path is resolved correctly relative to the config file location
+      'file-saver': path.resolve(__dirname, 'src/__mocks__/file-saver.js'),
+    },
+  },
+  // --- END ADDED ---
 });

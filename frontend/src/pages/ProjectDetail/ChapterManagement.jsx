@@ -17,413 +17,156 @@
 import React from 'react';
 import PropTypes from 'prop-types';
 import { Link } from 'react-router-dom';
-import ChapterSection from '../../components/ChapterSection';
+import ChapterSection from '../../components/ChapterSection'; // Corrected import path
 
-// Styles for the chapter management components
+// Styles (keep existing styles)
 const styles = {
-    container: {
-        marginBottom: '20px'
-    },
-    header: {
-        display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'center'
-    },
-    heading: {
-        margin: 0
-    },
-    newChapterForm: {
-        display: 'flex',
-        marginTop: '10px',
-        marginBottom: '20px'
-    },
-    input: {
-        padding: '8px',
-        fontSize: '1em',
-        width: '250px',
-        marginRight: '10px'
-    },
-    addButton: {
-        padding: '8px 15px',
-        backgroundColor: '#0f9d58',
-        color: 'white',
-        border: 'none',
-        borderRadius: '4px',
-        cursor: 'pointer'
-    },
-    disabledButton: {
-        opacity: 0.6,
-        cursor: 'not-allowed'
-    },
-    chapterList: {
-        listStyle: 'none',
-        padding: 0
-    },
-    chapterItem: {
-        marginBottom: '15px',
-        padding: '15px',
-        borderRadius: '4px',
-        backgroundColor: '#f5f5f5',
-        border: '1px solid #ddd'
-    },
-    chapterHeader: {
-        display: 'flex',
-        justifyContent: 'space-between',
-        alignItems: 'center',
-        marginBottom: '10px'
-    },
-    editingContainer: {
-        display: 'flex',
-        alignItems: 'center',
-        marginBottom: '10px'
-    },
-    actionButton: {
-        marginLeft: '10px',
-        padding: '5px 10px',
-        borderRadius: '4px',
-        border: 'none',
-        cursor: 'pointer',
-        fontSize: '0.9em'
-    },
-    editButton: {
-        backgroundColor: '#4285f4',
-        color: 'white'
-    },
-    deleteButton: {
-        backgroundColor: '#db4437',
-        color: 'white'
-    },
-    generateButton: {
-        backgroundColor: '#f4b400',
-        color: 'white'
-    },
-    compileButton: {
-        backgroundColor: '#0f9d58',
-        color: 'white'
-    },
-    sceneList: {
-        listStyle: 'none',
-        padding: '0 0 0 20px'
-    },
-    sceneItem: {
-        marginBottom: '8px'
-    },
-    errorMessage: {
-        color: 'red',
-        marginTop: '5px'
-    },
-    summaryText: {
-        fontSize: '0.9em',
-        color: '#666',
-        fontStyle: 'italic',
-        marginTop: '5px'
-    }
+    container: { marginBottom: '20px', border: '1px solid #e0e0e0', borderRadius: '5px', padding: '15px', backgroundColor: '#f9f9f9', },
+    header: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', marginBottom: '15px', paddingBottom: '10px', borderBottom: '1px solid #ccc', },
+    heading: { margin: 0, fontSize: '1.4em', },
+    newChapterForm: { display: 'flex', gap: '10px', marginTop: '10px', marginBottom: '20px', },
+    input: { padding: '8px 10px', fontSize: '1em', flexGrow: 1, marginRight: '0', border: '1px solid #ccc', borderRadius: '4px', },
+    addButton: { padding: '8px 15px', backgroundColor: '#0f9d58', color: 'white', border: 'none', borderRadius: '4px', cursor: 'pointer', fontSize: '1em', whiteSpace: 'nowrap', },
+    disabledButton: { opacity: 0.6, cursor: 'not-allowed', },
+    chapterList: { listStyle: 'none', padding: 0, },
+    chapterItemContainer: { marginBottom: '20px', },
+    errorMessage: { color: 'red', marginTop: '5px', fontSize: '0.9em', },
+    loadingText: { fontStyle: 'italic', color: '#555', },
 };
 
 /**
- * ChapterManagement component that handles chapter listing, creation, editing, and deletion
+ * ChapterManagement component - Acts as a container and passes props down.
  */
 function ChapterManagement({
-    projectId,
-    chapters,
-    isLoading,
-    newChapterTitle,
-    setNewChapterTitle,
-    onCreateChapter,
-    onDeleteChapter,
-    editingChapterId,
-    editedChapterTitle,
-    setEditedChapterTitle,
-    isSavingChapter,
-    saveChapterError,
-    onEditChapter,
-    onSaveChapterTitle,
-    onCancelChapterEdit,
-    onGenerateScene,
-    onSplitChapter,
-    onCompileChapter,
-    isGeneratingScene,
+    // Core Data
+    projectId, chapters, scenes, isLoadingChapters, isLoadingScenes,
+    // Chapter CRUD
+    newChapterTitle, setNewChapterTitle, onCreateChapter,
+    onDeleteChapter, // Received
+    // Chapter Editing
+    editingChapterId, editedChapterTitleForInput, onTitleInputChange, isSavingChapter,
+    saveChapterError, onEditChapter, onSaveChapter, onCancelEditChapter, chapterErrors,
+    // Scene CRUD
+    onDeleteScene, onCreateScene, sceneErrors,
+    // AI Scene Generation
+    onGenerateScene, generationSummaryForInput, onSummaryChange, isGeneratingSceneForThisChapter,
     generatingChapterId,
-    generationSummaries,
-    isCompilingChapter,
-    compilingChapterId,
-    scenes,
-    isLoadingScenes,
-    onDeleteScene,
-    isAnyOperationLoading
+    // AI Chapter Splitting
+    splitInputContentForThisChapter,
+    onSplitInputChange, // Received
+    isSplittingThisChapter, splittingChapterId, onSplitChapter,
+    // Chapter Compilation
+    isCompilingThisChapter, compilingChapterId, onCompileChapter,
+    // Global State
+    isAnyOperationLoading,
 }) {
-    // Handle new chapter form submission
-    const handleSubmit = (e) => {
+
+    const handleSubmitNewChapter = (e) => {
         e.preventDefault();
+        if (!newChapterTitle.trim() || isAnyOperationLoading) return;
         onCreateChapter();
     };
 
     return (
-        <section style={styles.container}>
-            <div style={styles.header}>
-                <h2 style={styles.heading}>Chapters</h2>
-            </div>
-            
-            {/* New chapter form */}
-            <form onSubmit={handleSubmit} style={styles.newChapterForm}>
-                <input
-                    type="text"
-                    value={newChapterTitle}
-                    onChange={(e) => setNewChapterTitle(e.target.value)}
-                    placeholder="New chapter title"
-                    style={styles.input}
-                    data-testid="new-chapter-input"
-                />
-                <button
-                    type="submit"
-                    disabled={!newChapterTitle.trim() || isAnyOperationLoading}
-                    style={{
-                        ...styles.addButton,
-                        ...((!newChapterTitle.trim() || isAnyOperationLoading) ? styles.disabledButton : {})
-                    }}
-                    data-testid="add-chapter-button"
-                >
-                    Add Chapter
-                </button>
+        <section data-testid="chapter-management-section" style={styles.container}>
+            <div style={styles.header}> <h2 style={styles.heading}>Chapters</h2> </div>
+            <form onSubmit={handleSubmitNewChapter} style={styles.newChapterForm}>
+                <input type="text" value={newChapterTitle} onChange={(e) => setNewChapterTitle(e.target.value)}
+                    placeholder="New chapter title..." style={styles.input} disabled={isAnyOperationLoading}
+                    aria-label="New chapter title" data-testid="new-chapter-input" />
+                <button type="submit" disabled={!newChapterTitle.trim() || isAnyOperationLoading} style={{
+                        ...styles.addButton, ...((!newChapterTitle.trim() || isAnyOperationLoading) ? styles.disabledButton : {}), }}
+                    data-testid="add-chapter-button"> + Add Chapter </button>
             </form>
-            
-            {/* Chapter list */}
-            {isLoading ? (
-                <p>Loading chapters...</p>
-            ) : chapters.length === 0 ? (
-                <p>No chapters yet. Add your first chapter to get started.</p>
+             {chapterErrors?.general && <p style={styles.errorMessage}>{chapterErrors.general}</p>}
+
+            {isLoadingChapters ? ( <p style={styles.loadingText}>Loading chapters...</p>
+            ) : chapters.length === 0 ? ( <p>No chapters yet. Add your first chapter above.</p>
             ) : (
                 <ul style={styles.chapterList}>
-                    {chapters.map(chapter => (
-                        <li key={chapter.id} style={styles.chapterItem}>
-                            {editingChapterId === chapter.id ? (
-                                <div style={styles.editingContainer}>
-                                    <input
-                                        type="text"
-                                        value={editedChapterTitle}
-                                        onChange={(e) => setEditedChapterTitle(e.target.value)}
-                                        style={styles.input}
-                                        autoFocus
-                                        data-testid={`edit-chapter-input-${chapter.id}`}
-                                    />
-                                    <button
-                                        onClick={onSaveChapterTitle}
-                                        disabled={!editedChapterTitle.trim() || isSavingChapter}
-                                        style={{
-                                            ...styles.actionButton,
-                                            ...styles.editButton,
-                                            ...((!editedChapterTitle.trim() || isSavingChapter) ? styles.disabledButton : {})
-                                        }}
-                                        data-testid={`save-chapter-button-${chapter.id}`}
-                                    >
-                                        {isSavingChapter ? 'Saving...' : 'Save'}
-                                    </button>
-                                    <button
-                                        onClick={onCancelChapterEdit}
-                                        disabled={isSavingChapter}
-                                        style={{
-                                            ...styles.actionButton,
-                                            ...styles.deleteButton,
-                                            ...(isSavingChapter ? styles.disabledButton : {})
-                                        }}
-                                        data-testid={`cancel-chapter-edit-button-${chapter.id}`}
-                                    >
-                                        Cancel
-                                    </button>
-                                </div>
-                            ) : (
-                                <div style={styles.chapterHeader}>
-                                    <ChapterSection 
-                                        chapter={chapter} 
-                                        projectId={projectId}
-                                        scenesForChapter={scenes[chapter.id] || []}
-                                        isLoadingChapterScenes={isLoadingScenes[chapter.id] || false}
-                                        isEditingThisChapter={editingChapterId === chapter.id}
-                                        editedChapterTitle={editingChapterId === chapter.id ? editedChapterTitle : ''}
-                                        isSavingThisChapter={isSavingChapter}
-                                        saveChapterError={saveChapterError}
-                                        isGeneratingSceneForThisChapter={isGeneratingScene && generatingChapterId === chapter.id}
-                                        generationSummaryForInput={generationSummaries[chapter.id] || ''}
-                                        isCompilingThisChapter={isCompilingChapter && compilingChapterId === chapter.id}
-                                        isAnyOperationLoading={isAnyOperationLoading}
-                                        onEditChapter={() => onEditChapter(chapter)}
-                                        onSaveChapter={() => onSaveChapterTitle()}
-                                        onCancelEditChapter={onCancelChapterEdit}
-                                        onDeleteChapter={() => onDeleteChapter(chapter.id)}
-                                        onDeleteScene={(sceneId) => onDeleteScene(chapter.id, sceneId)}
-                                        onGenerateScene={() => onGenerateScene(chapter.id)}
-                                        onSplitChapter={() => onSplitChapter(chapter.id)}
-                                        onCompileChapter={() => onCompileChapter(chapter.id)}
-                                    />
-                                    <div>
-                                        <button
-                                            onClick={() => onEditChapter(chapter)}
-                                            disabled={isAnyOperationLoading}
-                                            style={{
-                                                ...styles.actionButton,
-                                                ...styles.editButton,
-                                                ...(isAnyOperationLoading ? styles.disabledButton : {})
-                                            }}
-                                            data-testid={`edit-chapter-button-${chapter.id}`}
-                                        >
-                                            Edit Title
-                                        </button>
-                                        <button
-                                            onClick={() => onDeleteChapter(chapter.id)}
-                                            disabled={isAnyOperationLoading}
-                                            style={{
-                                                ...styles.actionButton,
-                                                ...styles.deleteButton,
-                                                ...(isAnyOperationLoading ? styles.disabledButton : {})
-                                            }}
-                                            data-testid={`delete-chapter-button-${chapter.id}`}
-                                        >
-                                            Delete
-                                        </button>
-                                        <button
-                                            onClick={() => onGenerateScene(chapter.id)}
-                                            disabled={isAnyOperationLoading}
-                                            style={{
-                                                ...styles.actionButton,
-                                                ...styles.generateButton,
-                                                ...(isAnyOperationLoading ? styles.disabledButton : {})
-                                            }}
-                                            data-testid={`generate-scene-button-${chapter.id}`}
-                                        >
-                                            {isGeneratingScene && generatingChapterId === chapter.id
-                                                ? 'Generating...'
-                                                : 'Generate Scene'}
-                                        </button>
-                                        <button
-                                            onClick={() => onSplitChapter(chapter.id)}
-                                            disabled={isAnyOperationLoading}
-                                            style={{
-                                                ...styles.actionButton,
-                                                ...styles.generateButton,
-                                                ...(isAnyOperationLoading ? styles.disabledButton : {})
-                                            }}
-                                            data-testid={`split-chapter-button-${chapter.id}`}
-                                        >
-                                            Split Content
-                                        </button>
-                                        <button
-                                            onClick={() => onCompileChapter(chapter.id)}
-                                            disabled={isAnyOperationLoading}
-                                            style={{
-                                                ...styles.actionButton,
-                                                ...styles.compileButton,
-                                                ...(isAnyOperationLoading ? styles.disabledButton : {})
-                                            }}
-                                            data-testid={`compile-chapter-button-${chapter.id}`}
-                                        >
-                                            {isCompilingChapter && compilingChapterId === chapter.id
-                                                ? 'Compiling...'
-                                                : 'Compile Chapter'}
-                                        </button>
-                                    </div>
-                                </div>
-                            )}
-                            
-                            {/* Display any error messages */}
-                            {editingChapterId === chapter.id && saveChapterError && (
-                                <div style={styles.errorMessage} data-testid={`chapter-error-${chapter.id}`}>
-                                    {saveChapterError}
-                                </div>
-                            )}
-                            
-                            {/* Generation summary */}
-                            {generationSummaries[chapter.id] && (
-                                <div style={styles.summaryText} data-testid={`generation-summary-${chapter.id}`}>
-                                    {generationSummaries[chapter.id]}
-                                </div>
-                            )}
-                            
-                            {/* Scene list */}
-                            <div style={{ marginTop: '10px' }}>
-                                <Link 
-                                    to={`/projects/${projectId}/chapters/${chapter.id}/plan`}
-                                    style={{ marginRight: '15px' }}
-                                >
-                                    Chapter Plan
-                                </Link>
-                                <Link 
-                                    to={`/projects/${projectId}/chapters/${chapter.id}/synopsis`}
-                                >
-                                    Chapter Synopsis
-                                </Link>
-                            </div>
-                            
-                            <div style={{ marginTop: '10px' }}>
-                                <h4 style={{ margin: '10px 0 5px 0' }}>Scenes</h4>
-                                {isLoadingScenes[chapter.id] ? (
-                                    <p>Loading scenes...</p>
-                                ) : !scenes[chapter.id] || scenes[chapter.id].length === 0 ? (
-                                    <p>No scenes yet.</p>
-                                ) : (
-                                    <ul style={styles.sceneList}>
-                                        {scenes[chapter.id].map(scene => (
-                                            <li key={scene.id} style={styles.sceneItem}>
-                                                <Link to={`/projects/${projectId}/chapters/${chapter.id}/scenes/${scene.id}`}>
-                                                    {scene.title}
-                                                </Link>
-                                                <button
-                                                    onClick={() => onDeleteScene(chapter.id, scene.id)}
-                                                    disabled={isAnyOperationLoading}
-                                                    style={{
-                                                        marginLeft: '10px',
-                                                        fontSize: '0.8em',
-                                                        color: 'white',
-                                                        backgroundColor: '#db4437',
-                                                        border: 'none',
-                                                        borderRadius: '3px',
-                                                        padding: '2px 5px',
-                                                        cursor: 'pointer',
-                                                        ...(isAnyOperationLoading ? styles.disabledButton : {})
-                                                    }}
-                                                >
-                                                    Delete
-                                                </button>
-                                            </li>
-                                        ))}
-                                    </ul>
-                                )}
-                            </div>
-                        </li>
-                    ))}
+                    {chapters.map((chapter) => {
+                        const isEditingThis = editingChapterId === chapter.id;
+                        const isSavingThis = isEditingThis && isSavingChapter;
+                        const saveErrorForThis = chapterErrors?.[chapter.id] || (isSavingThis ? saveChapterError : null);
+                        const scenesForThis = scenes[chapter.id] || [];
+                        const isLoadingScenesForThis = isLoadingScenes[chapter.id] || false;
+                        const isGeneratingForThis = isGeneratingSceneForThisChapter && generatingChapterId === chapter.id;
+                        const generationErrorForThis = sceneErrors?.[`gen_${chapter.id}`];
+                        const generationSummaryValue = generationSummaryForInput[chapter.id] || '';
+                        const isSplittingThis = isSplittingThisChapter && splittingChapterId === chapter.id;
+                        const splitErrorForThis = chapterErrors?.[`split_${chapter.id}`];
+                        const splitInputValue = splitInputContentForThisChapter[chapter.id] || '';
+                        const isCompilingThis = isCompilingThisChapter && compilingChapterId === chapter.id;
+                        const compileErrorForThis = chapterErrors?.[`compile_${chapter.id}`];
+
+                        return (
+                            <li key={chapter.id} style={styles.chapterItemContainer}>
+                                <ChapterSection
+                                    // Pass all props down
+                                    chapter={chapter} projectId={projectId} scenesForChapter={scenesForThis}
+                                    isLoadingChapterScenes={isLoadingScenesForThis}
+                                    isEditingThisChapter={isEditingThis}
+                                    editedChapterTitleForInput={isEditingThis ? editedChapterTitleForInput : chapter.title}
+                                    onTitleInputChange={onTitleInputChange} isSavingThisChapter={isSavingThis}
+                                    saveChapterError={saveErrorForThis} onEditChapter={onEditChapter}
+                                    onSaveChapter={onSaveChapter} onCancelEditChapter={onCancelEditChapter}
+                                    onDeleteChapter={onDeleteChapter} // Pass down
+                                    onCreateScene={onCreateScene} onDeleteScene={onDeleteScene}
+                                    isGeneratingSceneForThisChapter={isGeneratingForThis}
+                                    generationErrorForThisChapter={generationErrorForThis}
+                                    generationSummaryForInput={generationSummaryValue} onGenerateScene={onGenerateScene}
+                                    onSummaryChange={onSummaryChange}
+                                    splitInputContentForThisChapter={splitInputValue}
+                                    isSplittingThisChapter={isSplittingThis} splitErrorForThisChapter={splitErrorForThis}
+                                    onSplitInputChange={onSplitInputChange} // Pass down
+                                    onSplitChapter={onSplitChapter}
+                                    isCompilingThisChapter={isCompilingThis} compileErrorForThisChapter={compileErrorForThis}
+                                    onCompileChapter={onCompileChapter}
+                                    isAnyOperationLoading={isAnyOperationLoading}
+                                />
+                                {/* Display scene deletion errors */}
+                                {Object.keys(sceneErrors || {}).filter(key => key.startsWith(`del_`) && scenesForThis.some(s => `del_${s.id}` === key)).map(key => (
+                                     <p key={key} style={{...styles.errorMessage, marginLeft: '15px'}}>Scene Error: {sceneErrors[key]}</p>
+                                ))}
+                            </li>
+                        );
+                    })}
                 </ul>
             )}
         </section>
     );
 }
 
+// Update PropTypes - Add onSplitInputChange
 ChapterManagement.propTypes = {
-    projectId: PropTypes.string.isRequired,
-    chapters: PropTypes.array.isRequired,
-    isLoading: PropTypes.bool.isRequired,
-    newChapterTitle: PropTypes.string.isRequired,
-    setNewChapterTitle: PropTypes.func.isRequired,
-    onCreateChapter: PropTypes.func.isRequired,
-    onDeleteChapter: PropTypes.func.isRequired,
-    editingChapterId: PropTypes.string,
-    editedChapterTitle: PropTypes.string.isRequired,
-    setEditedChapterTitle: PropTypes.func.isRequired,
-    isSavingChapter: PropTypes.bool.isRequired,
-    saveChapterError: PropTypes.string,
-    onEditChapter: PropTypes.func.isRequired,
-    onSaveChapterTitle: PropTypes.func.isRequired,
-    onCancelChapterEdit: PropTypes.func.isRequired,
-    onGenerateScene: PropTypes.func.isRequired,
-    onSplitChapter: PropTypes.func.isRequired,
-    onCompileChapter: PropTypes.func.isRequired,
-    isGeneratingScene: PropTypes.bool.isRequired,
+    // Core Data
+    projectId: PropTypes.string.isRequired, chapters: PropTypes.array.isRequired, scenes: PropTypes.object.isRequired,
+    isLoadingChapters: PropTypes.bool.isRequired, isLoadingScenes: PropTypes.object.isRequired,
+    // Chapter CRUD
+    newChapterTitle: PropTypes.string.isRequired, setNewChapterTitle: PropTypes.func.isRequired,
+    onCreateChapter: PropTypes.func.isRequired, onDeleteChapter: PropTypes.func.isRequired,
+    // Chapter Editing
+    editingChapterId: PropTypes.string, editedChapterTitleForInput: PropTypes.string.isRequired,
+    onTitleInputChange: PropTypes.func.isRequired, isSavingChapter: PropTypes.bool.isRequired,
+    saveChapterError: PropTypes.string, onEditChapter: PropTypes.func.isRequired,
+    onSaveChapter: PropTypes.func.isRequired, onCancelEditChapter: PropTypes.func.isRequired,
+    chapterErrors: PropTypes.object,
+    // Scene CRUD
+    onDeleteScene: PropTypes.func.isRequired, onCreateScene: PropTypes.func.isRequired, sceneErrors: PropTypes.object,
+    // AI Scene Generation
+    onGenerateScene: PropTypes.func.isRequired, generationSummaryForInput: PropTypes.object.isRequired,
+    onSummaryChange: PropTypes.func.isRequired, isGeneratingSceneForThisChapter: PropTypes.bool.isRequired,
     generatingChapterId: PropTypes.string,
-    generationSummaries: PropTypes.object.isRequired,
-    isCompilingChapter: PropTypes.bool.isRequired,
-    compilingChapterId: PropTypes.string,
-    scenes: PropTypes.object.isRequired,
-    isLoadingScenes: PropTypes.object.isRequired,
-    onDeleteScene: PropTypes.func.isRequired,
-    isAnyOperationLoading: PropTypes.bool.isRequired
+    // AI Chapter Splitting
+    splitInputContentForThisChapter: PropTypes.object.isRequired,
+    onSplitInputChange: PropTypes.func.isRequired, // *** ADDED PROP TYPE ***
+    isSplittingThisChapter: PropTypes.bool.isRequired, splittingChapterId: PropTypes.string,
+    onSplitChapter: PropTypes.func.isRequired,
+    // Chapter Compilation
+    isCompilingThisChapter: PropTypes.bool.isRequired, compilingChapterId: PropTypes.string,
+    onCompileChapter: PropTypes.func.isRequired,
+    // Global State
+    isAnyOperationLoading: PropTypes.bool.isRequired,
 };
 
 export default ChapterManagement;

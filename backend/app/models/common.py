@@ -28,4 +28,9 @@ class Message(BaseModel):
     """ A simple message response model """
     message: str
 
+# Create MessageResponse as an alias for Message class for backward compatibility
+class MessageResponse(Message):
+    """ Alias for Message for backward compatibility """
+    pass
+
 # Add other common fields or base models if needed later

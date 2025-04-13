@@ -52,7 +52,8 @@ async def test_split_chapter_success(mock_file_service: MagicMock, mock_rag_engi
         'project_synopsis': mock_synopsis,
         'chapter_plan': mock_chapter_plan,
         'chapter_synopsis': mock_chapter_synopsis,
-        'filter_paths': {str(mock_plan_path), str(mock_synopsis_path), str(mock_chapter_plan_path), str(mock_chapter_synopsis_path)}
+        'filter_paths': {str(mock_plan_path), str(mock_synopsis_path), str(mock_chapter_plan_path), str(mock_chapter_synopsis_path)},
+        'chapter_title': 'Test Chapter Title'  # Add the missing chapter_title field
     }
 
     # Configure the rag_engine's split_chapter method

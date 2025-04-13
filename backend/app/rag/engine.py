@@ -47,13 +47,24 @@ class RagEngine:
                   paths_to_filter: Optional[Set[str]] = None
                   ) -> Tuple[str, List[NodeWithScore], Optional[List[Dict[str, str]]]]:
         logger.debug(f"RagEngine Facade: Delegating query for project '{project_id}' to QueryProcessor.")
+        # Add detailed logging for direct sources before passing to query processor
+        if direct_sources_data:
+            logger.info(f"RagEngine: Passing {len(direct_sources_data)} direct source items to QueryProcessor")
+            for i, item in enumerate(direct_sources_data):
+                logger.info(f"RagEngine: Direct source {i+1}: Type={item.get('type')}, Name={item.get('name')}, Content length={len(item.get('content', ''))}")
+        else:
+            logger.info("RagEngine: No direct_sources_data to pass to QueryProcessor")
+            
+        # Convert None to empty list to avoid potential issues
+        safe_direct_sources = direct_sources_data if direct_sources_data is not None else []
+        
         return await self.query_processor.query(
             project_id=project_id,
             query_text=query_text,
             explicit_plan=explicit_plan,
             explicit_synopsis=explicit_synopsis,
-            direct_sources_data=direct_sources_data,
-            direct_chapter_context=direct_chapter_context, # Pass through
+            direct_sources_data=safe_direct_sources,  # Ensure we pass a valid list, not None
+            direct_chapter_context=direct_chapter_context,
             paths_to_filter=paths_to_filter
         )
     # --- END MODIFIED ---

@@ -37,7 +37,7 @@ from llama_index.core.indices.vector_store import VectorStoreIndex
 async def test_rephrase_text_success(mock_file_service: MagicMock, mock_rag_engine: MagicMock): # Args match patch order
     """Test successful rephrase call."""
     project_id = "rephrase-proj-1"
-    request_data = AIRephraseRequest(selected_text="The quick brown fox", context_before="Before text.", context_after="After text.")
+    request_data = AIRephraseRequest(text_to_rephrase="The quick brown fox", context_before="Before text.", context_after="After text.", context_path="path/to/file.txt", n_suggestions=3)
     mock_suggestions = ["The speedy brown fox", "The fast brown fox", "A quick fox of brown color"]
     mock_plan = "Plan context."; mock_synopsis = "Synopsis context."
     mock_plan_path = Path(f"user_projects/{project_id}/plan.md").resolve()
@@ -47,6 +47,9 @@ async def test_rephrase_text_success(mock_file_service: MagicMock, mock_rag_engi
     mock_loaded_context: LoadedContext = {
         'project_plan': mock_plan,
         'project_synopsis': mock_synopsis,
+        'chapter_plan': None,
+        'chapter_synopsis': None,
+        'chapter_title': None,
         'filter_paths': {str(mock_plan_path), str(mock_synopsis_path)}
     }
 
@@ -63,7 +66,7 @@ async def test_rephrase_text_success(mock_file_service: MagicMock, mock_rag_engi
         assert result == mock_suggestions
         mock_load_ctx.assert_called_once_with(project_id) # No chapter_id for rephrase
         mock_rag_engine.rephrase.assert_awaited_once_with(
-            project_id=project_id, selected_text=request_data.selected_text,
+            project_id=project_id, selected_text=request_data.text_to_rephrase,
             context_before=request_data.context_before, context_after=request_data.context_after,
             explicit_plan=mock_plan,
             explicit_synopsis=mock_synopsis,
@@ -76,7 +79,7 @@ async def test_rephrase_text_success(mock_file_service: MagicMock, mock_rag_engi
 async def test_rephrase_text_engine_error(mock_file_service: MagicMock, mock_rag_engine: MagicMock):
     """Test rephrase when the rag_engine raises an error."""
     project_id = "rephrase-proj-2"
-    request_data = AIRephraseRequest(selected_text="Text to fail on")
+    request_data = AIRephraseRequest(text_to_rephrase="Text to fail on", context_path="path/to/file.txt", n_suggestions=3)
     mock_plan = "Plan context."; mock_synopsis = None # Simulate synopsis missing
     mock_plan_path = Path(f"user_projects/{project_id}/plan.md").resolve()
 
@@ -101,7 +104,7 @@ async def test_rephrase_text_engine_error(mock_file_service: MagicMock, mock_rag
         assert "Rephrase LLM failed" in exc_info.value.detail
         mock_load_ctx.assert_called_once_with(project_id)
         mock_rag_engine.rephrase.assert_awaited_once_with(
-            project_id=project_id, selected_text=request_data.selected_text,
+            project_id=project_id, selected_text=request_data.text_to_rephrase,
             context_before=request_data.context_before, context_after=request_data.context_after,
             explicit_plan=mock_plan,
             explicit_synopsis=None,
@@ -114,7 +117,7 @@ async def test_rephrase_text_engine_error(mock_file_service: MagicMock, mock_rag
 async def test_rephrase_text_engine_returns_error_string(mock_file_service: MagicMock, mock_rag_engine: MagicMock):
     """Test rephrase when the rag_engine returns an error string."""
     project_id = "rephrase-proj-3"
-    request_data = AIRephraseRequest(selected_text="Another text")
+    request_data = AIRephraseRequest(text_to_rephrase="Another text", context_path="path/to/file.txt", n_suggestions=3)
     error_string = "Error: Rephrasing blocked by safety filter."
     mock_plan = "Plan context."; mock_synopsis = "Synopsis context."
     mock_plan_path = Path(f"user_projects/{project_id}/plan.md").resolve()
@@ -124,6 +127,9 @@ async def test_rephrase_text_engine_returns_error_string(mock_file_service: Magi
     mock_loaded_context: LoadedContext = {
         'project_plan': mock_plan,
         'project_synopsis': mock_synopsis,
+        'chapter_plan': None,
+        'chapter_synopsis': None,
+        'chapter_title': None,
         'filter_paths': {str(mock_plan_path), str(mock_synopsis_path)}
     }
 
@@ -141,7 +147,7 @@ async def test_rephrase_text_engine_returns_error_string(mock_file_service: Magi
         assert error_string in exc_info.value.detail
         mock_load_ctx.assert_called_once_with(project_id)
         mock_rag_engine.rephrase.assert_awaited_once_with(
-            project_id=project_id, selected_text=request_data.selected_text,
+            project_id=project_id, selected_text=request_data.text_to_rephrase,
             context_before=request_data.context_before, context_after=request_data.context_after,
             explicit_plan=mock_plan,
             explicit_synopsis=mock_synopsis,

@@ -68,12 +68,33 @@ class QueryProcessor:
     async def query(self,
                   project_id: str,
                   query_text: str,
-                  explicit_plan: Optional[str], # Now optional
-                  explicit_synopsis: Optional[str], # Now optional
+                  explicit_plan: Optional[str],
+                  explicit_synopsis: Optional[str],
                   direct_sources_data: Optional[List[Dict]] = None,
                   direct_chapter_context: Optional[Dict[str, Optional[str]]] = None,
                   paths_to_filter: Optional[Set[str]] = None
                   ) -> Tuple[str, List[NodeWithScore], Optional[List[Dict[str, str]]]]:
+        # ENHANCED: More robust direct sources data handling
+        if direct_sources_data is None:
+            direct_sources_data = []
+            logger.info("QueryProcessor.query: direct_sources_data was None, initialized to empty list")
+        
+        # Add diagnostics for direct sources data
+        if direct_sources_data:
+            logger.info(f"QueryProcessor.query: Received {len(direct_sources_data)} direct sources items")
+            for i, item in enumerate(direct_sources_data):
+                item_type = item.get('type', 'Unknown')
+                item_name = item.get('name', f'Item {i+1}')
+                content_length = len(item.get('content', ''))
+                logger.info(f"QueryProcessor.query: Direct source {i+1}: Type={item_type}, Name={item_name}, Content length={content_length}")
+                
+                # Verify content exists and is reasonable
+                if content_length == 0:
+                    logger.warning(f"QueryProcessor.query: Direct source {item_type} '{item_name}' has empty content!")
+                elif content_length < 10:
+                    logger.warning(f"QueryProcessor.query: Direct source {item_type} '{item_name}' has very short content: '{item.get('content')}'")                
+        else:
+            logger.info("QueryProcessor.query: Empty direct_sources_data list received")
         logger.info(f"QueryProcessor: Received query for project '{project_id}': '{query_text}'")
         retrieved_nodes: List[NodeWithScore] = []
         nodes_for_prompt: List[NodeWithScore] = []
@@ -132,10 +153,29 @@ class QueryProcessor:
                         continue
                     try:
                         node_path_obj = Path(node_path_str).resolve()
-                        is_filtered = node_path_obj in final_paths_to_filter_obj
-                        logger.debug(f"  Comparing Node Path: {node_path_obj} | In Filter Set: {is_filtered}")
+                        # Check if this node should be filtered out (because it's already in direct sources)
+                        is_filtered = False
+                        
+                        # First, compare as Path objects
+                        if node_path_obj in final_paths_to_filter_obj:
+                            is_filtered = True
+                            logger.debug(f"  Filtering node via Path object match: {node_path_obj}")
+                        
+                        # For Notes and other document types that may have path inconsistencies,
+                        # also check string comparison as fallback
+                        if not is_filtered:
+                            node_path_str_norm = str(node_path_obj).lower().replace('\\', '/')
+                            for filter_path in final_paths_to_filter_obj:
+                                filter_path_str = str(filter_path).lower().replace('\\', '/')
+                                if node_path_str_norm == filter_path_str:
+                                    is_filtered = True
+                                    logger.debug(f"  Filtering node via string path match: {node_path_str_norm}")
+                                    break
+                        
+                        # If the node is not filtered, add it to the prompt
                         if not is_filtered:
                             nodes_for_prompt.append(node_with_score)
+                            
                     except Exception as e:
                         logger.error(f"Error resolving or comparing path '{node_path_str}' for node {node.node_id}. Including node. Error: {e}")
                         nodes_for_prompt.append(node_with_score)
@@ -179,13 +219,52 @@ class QueryProcessor:
                     if chapter_synopsis:
                         user_message_content += f"--- Start Chapter Synopsis ---\n```markdown\n{chapter_synopsis}\n```\n--- End Chapter Synopsis ---\n\n"
 
-            # Add other direct sources (no truncation here)
-            if direct_sources_data:
-                 user_message_content += "**Directly Requested Content:**\n"
-                 for i, source_data in enumerate(direct_sources_data):
-                      source_type = source_data.get('type', 'Unknown'); source_name = source_data.get('name', f'Source {i+1}'); source_content = source_data.get('content', '');
-                      # No truncation for directly requested content
-                      user_message_content += (f"--- Start Directly Requested {source_type}: \"{source_name}\" ---\n" f"```markdown\n{source_content}\n```\n" f"--- End Directly Requested {source_type}: \"{source_name}\" ---\n\n")
+            # FIXED: Add other direct sources (no truncation here)
+            # Handle direct sources content more robustly
+            if direct_sources_data and len(direct_sources_data) > 0:
+                # Log what we're about to process
+                logger.info(f"QueryProcessor: Processing {len(direct_sources_data)} direct sources items")
+                content_found = False
+                
+                # First verify we have actual content in at least one item
+                for i, source_item in enumerate(direct_sources_data):
+                    source_type = source_item.get('type', 'Unknown')
+                    source_name = source_item.get('name', f'Item {i+1}')
+                    source_content = source_item.get('content', '')
+                    content_length = len(source_content)
+                    
+                    logger.info(f"QueryProcessor: Checking direct source {i+1}: Type={source_type}, Name='{source_name}', Content length={content_length}")
+                    
+                    if content_length > 0:
+                        content_found = True
+                        if source_type == 'Note':
+                            logger.info(f"QueryProcessor: Found valid Note content for '{source_name}' with length {content_length}")
+                
+                # Only add the section header if we found content
+                if content_found:
+                    user_message_content += "**Directly Requested Content:**\n"
+                    
+                    # Process each direct source
+                    for i, source_data in enumerate(direct_sources_data):
+                        source_type = source_data.get('type', 'Unknown')
+                        source_name = source_data.get('name', f'Source {i+1}')
+                        source_content = source_data.get('content', '')
+                        
+                        # Skip empty content
+                        if not source_content:
+                            logger.warning(f"QueryProcessor: Skipping empty direct source: {source_type} '{source_name}'")
+                            continue
+                            
+                        logger.info(f"QueryProcessor: Adding direct source to prompt: {source_type} '{source_name}' with content length {len(source_content)}")
+                        
+                        # No truncation for directly requested content
+                        user_message_content += (f"--- Start Directly Requested {source_type}: \"{source_name}\" ---\n" 
+                                               f"```markdown\n{source_content}\n```\n" 
+                                               f"--- End Directly Requested {source_type}: \"{source_name}\" ---\n\n")
+                else:
+                    logger.warning("QueryProcessor: No valid content found in any direct sources items!")
+            else:
+                logger.info("QueryProcessor: No direct sources to add to prompt")
 
             # Add retrieved RAG context (with truncation)
             rag_context_list = []

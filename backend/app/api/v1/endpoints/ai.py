@@ -14,176 +14,162 @@
 
 from fastapi import APIRouter, HTTPException, status, Body, Path, Depends
 import logging
-from typing import List
-
-from app.services.ai_service import ai_service
-# Import all needed AI models
+from fastapi import APIRouter, Depends, HTTPException, status, Body
+from app.services.ai_service import AIService, get_ai_service
 from app.models.ai import (
-    AIQueryRequest,
-    AIQueryResponse,
-    SourceNodeModel,
-    AISceneGenerationRequest,
-    AISceneGenerationResponse, # Use the updated response model
-    AIRephraseRequest,
-    AIRephraseResponse,
-    AIChapterSplitRequest,
-    AIChapterSplitResponse
+    AIQueryRequest, AIQueryResponse, AISceneGenerationRequest, AISceneGenerationResponse,
+    AIRephraseRequest, AIRephraseResponse, AIChapterSplitRequest, AIChapterSplitResponse,
+    RebuildIndexResponse
 )
-# --- ADDED: Import Message model ---
-from app.models.common import Message
-# --- END ADDED ---
-# Import dependencies for checking project/chapter existence
-from app.api.v1.endpoints.content_blocks import get_project_dependency
-from app.api.v1.endpoints.scenes import get_chapter_dependency
+from app.models.common import MessageResponse
 
-from llama_index.core.base.response.schema import NodeWithScore
-
-
-logger = logging.getLogger(__name__)
 router = APIRouter()
+logger = logging.getLogger(__name__)
 
-@router.post(
-    "/query/{project_id}",
-    response_model=AIQueryResponse,
-    summary="Query Project Context (RAG)",
-    description="Sends a query to the AI, using the indexed content of the specified project as context (Retrieval-Augmented Generation)."
-)
-async def query_project_context(
-    query_request: AIQueryRequest = Body(...),
-    project_id: str = Depends(get_project_dependency)
+@router.post("/query/{project_id}", response_model=AIQueryResponse)
+async def query_project(
+    project_id: str,
+    request: AIQueryRequest,
+    ai_service: AIService = Depends(get_ai_service)
 ):
     """
-    Performs a RAG query against the specified project's indexed content.
-
-    - **project_id**: The UUID of the project to query within.
-    - **query_request**: Contains the user's query text.
+    Query the project context using RAG.
+    Provides an answer based on the project's indexed content and explicit context.
     """
-    logger.info(f"Received AI query request for project {project_id}: '{query_request.query}'")
     try:
-        # --- MODIFIED: Receive list of direct source info ---
-        answer_text, raw_source_nodes, direct_sources_info_list = await ai_service.query_project(project_id, query_request.query)
-        # --- END MODIFIED ---
-
-        formatted_nodes: List[SourceNodeModel] = []
-        if raw_source_nodes:
-            logger.debug(f"Formatting {len(raw_source_nodes)} source nodes for API response.")
-            for node_with_score in raw_source_nodes:
-                node = node_with_score.node
-                score = node_with_score.score
-                formatted_nodes.append(
-                    SourceNodeModel(
-                        id=node.node_id,
-                        text=node.get_content(),
-                        score=score,
-                        metadata=node.metadata or {}
-                    )
-                )
-        logger.info(f"Successfully processed query for project {project_id}. Returning response with {len(formatted_nodes)} source nodes.")
-        # --- MODIFIED: Pass direct_sources_info_list to response model ---
-        return AIQueryResponse(
-            answer=answer_text,
-            source_nodes=formatted_nodes,
-            direct_sources=direct_sources_info_list # Pass the list
-        )
-        # --- END MODIFIED ---
-    except HTTPException as http_exc:
-        logger.warning(f"HTTPException during AI query for project {project_id}: {http_exc.status_code} - {http_exc.detail}")
-        raise http_exc
+        logger.info(f"Received query for project {project_id}: '{request.query}'")
+        answer, sources, direct_sources = await ai_service.query_project(project_id, request.query)
+        logger.info(f"Successfully generated query response for project {project_id}")
+        
+        # Convert NodeWithScore objects to the format expected by SourceNodeModel
+        formatted_sources = []
+        for node in sources:
+            formatted_sources.append({
+                "id": node.node.id_,
+                "text": node.node.text,
+                "score": node.score,
+                "metadata": node.node.metadata
+            })
+            
+        return AIQueryResponse(answer=answer, source_nodes=formatted_sources, direct_sources=direct_sources)
+    except FileNotFoundError as e:
+        logger.warning(f"Project not found during query: {project_id}. Error: {e}")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Project '{project_id}' not found.")
     except Exception as e:
-        logger.error(f"Unexpected error processing AI query for project {project_id}: {e}", exc_info=True)
-        raise HTTPException(
-            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
-            detail=f"Failed to process AI query for project {project_id} due to an internal error."
+        logger.exception(f"Error querying project {project_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to query project: {str(e)}")
+
+@router.post("/generate/scene/{project_id}/{chapter_id}", response_model=AISceneGenerationResponse)
+async def generate_scene(
+    project_id: str,
+    chapter_id: str,
+    request_data: AISceneGenerationRequest = Body(...), # Expects request body matching the model
+    ai_service: AIService = Depends(get_ai_service)
+):
+    """
+    Generate a new scene draft for a chapter using AI, considering context.
+    """
+    try:
+        logger.info(f"Received scene generation request for project {project_id}, chapter {chapter_id}. Summary: '{request_data.prompt_summary}', Prev Scenes: {request_data.previous_scene_order}")
+        # Pass the validated request data object to the service
+        result = await ai_service.generate_scene_draft(project_id, chapter_id, request_data)
+        logger.info(f"Successfully generated scene draft for project {project_id}, chapter {chapter_id}")
+        return AISceneGenerationResponse(**result)
+    except FileNotFoundError as e:
+        logger.warning(f"Project or chapter not found during scene generation: {project_id}/{chapter_id}. Error: {e}")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Project '{project_id}' or Chapter '{chapter_id}' not found.")
+    except ValueError as e:
+         logger.warning(f"Value error during scene generation for {project_id}/{chapter_id}: {e}")
+         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception as e:
+        logger.exception(f"Error generating scene for project {project_id}, chapter {chapter_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to generate scene: {str(e)}")
+
+
+@router.post("/edit/rephrase/{project_id}", response_model=AIRephraseResponse)
+async def rephrase_selection(
+    project_id: str,
+    request: AIRephraseRequest,
+    ai_service: AIService = Depends(get_ai_service)
+):
+    """
+    Provide rephrasing suggestions for the selected text within its context.
+    """
+    try:
+        logger.info(f"Received rephrase request for project {project_id}. Context Path: {request.context_path}")
+        suggestions = await ai_service.rephrase_text(
+            project_id=project_id,
+            text_to_rephrase=request.text_to_rephrase,
+            context_before=request.context_before,
+            context_after=request.context_after,
+            context_path=request.context_path,
+            n_suggestions=request.n_suggestions
         )
-
-
-# --- Other endpoints (generate_scene_draft, rephrase_text_endpoint, split_chapter_into_scenes) remain unchanged ---
-@router.post(
-    "/generate/scene/{project_id}/{chapter_id}",
-    response_model=AISceneGenerationResponse, # Use updated response model
-    status_code=status.HTTP_200_OK,
-    summary="Generate Scene Draft (RAG)",
-    description="Generates a scene draft (title and content) within the specified chapter, using project context and an optional prompt."
-)
-async def generate_scene_draft(
-    request_data: AISceneGenerationRequest = Body(...),
-    ids: tuple[str, str] = Depends(get_chapter_dependency)
-):
-    project_id, chapter_id = ids
-    logger.info(f"Received AI scene generation request for project {project_id}, chapter {chapter_id}. Summary: '{request_data.prompt_summary}'")
-    try:
-        generated_draft_dict = await ai_service.generate_scene_draft(project_id=project_id, chapter_id=chapter_id, request_data=request_data)
-        logger.info(f"Successfully generated scene draft for project {project_id}, chapter {chapter_id}.")
-        return AISceneGenerationResponse(title=generated_draft_dict.get("title", "Untitled Scene"), content=generated_draft_dict.get("content", ""))
-    except HTTPException as http_exc: logger.warning(f"HTTPException during scene generation for project {project_id}, chapter {chapter_id}: {http_exc.status_code} - {http_exc.detail}"); raise http_exc
-    except Exception as e: logger.error(f"Unexpected error processing AI scene generation for project {project_id}, chapter {chapter_id}: {e}", exc_info=True); raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to process AI scene generation for project {project_id}, chapter {chapter_id} due to an internal error: {e}")
-
-@router.post(
-    "/edit/rephrase/{project_id}",
-    response_model=AIRephraseResponse,
-    status_code=status.HTTP_200_OK,
-    summary="Rephrase Selected Text (RAG)",
-    description="Provides alternative phrasings for the selected text, using project context."
-)
-async def rephrase_text_endpoint(
-    request_data: AIRephraseRequest = Body(...),
-    project_id: str = Depends(get_project_dependency)
-):
-    logger.info(f"Received AI rephrase request for project {project_id}. Text: '{request_data.selected_text[:50]}...'")
-    try:
-        suggestions = await ai_service.rephrase_text(project_id=project_id, request_data=request_data)
-        if suggestions and isinstance(suggestions[0], str) and suggestions[0].startswith("Error:"): logger.error(f"Rephrasing failed for project {project_id}: {suggestions[0]}"); raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to rephrase text: {suggestions[0]}")
-        logger.info(f"Successfully generated {len(suggestions)} rephrase suggestions for project {project_id}.")
+        logger.info(f"Successfully generated rephrasing suggestions for project {project_id}")
         return AIRephraseResponse(suggestions=suggestions)
-    except HTTPException as http_exc: logger.warning(f"HTTPException during rephrase for project {project_id}: {http_exc.status_code} - {http_exc.detail}"); raise http_exc
-    except Exception as e: logger.error(f"Unexpected error processing AI rephrase request for project {project_id}: {e}", exc_info=True); raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to process AI rephrase request for project {project_id} due to an internal error.")
-
-@router.post(
-    "/split/chapter/{project_id}/{chapter_id}",
-    response_model=AIChapterSplitResponse,
-    status_code=status.HTTP_200_OK,
-    summary="Split Chapter into Scenes (AI)",
-    description="Uses AI to analyze chapter content provided in the request body and propose a split into distinct scenes with suggested titles."
-)
-async def split_chapter_into_scenes(
-    request_data: AIChapterSplitRequest = Body(...),
-    ids: tuple[str, str] = Depends(get_chapter_dependency)
-):
-    project_id, chapter_id = ids
-    logger.info(f"Received AI chapter split request for project {project_id}, chapter {chapter_id}. Content length: {len(request_data.chapter_content)}")
-    try:
-        proposed_scenes = await ai_service.split_chapter_into_scenes(project_id=project_id, chapter_id=chapter_id, request_data=request_data)
-        logger.info(f"Successfully proposed {len(proposed_scenes)} scenes for chapter {chapter_id}.")
-        return AIChapterSplitResponse(proposed_scenes=proposed_scenes)
-    except HTTPException as http_exc: logger.warning(f"HTTPException during chapter split for project {project_id}, chapter {chapter_id}: {http_exc.status_code} - {http_exc.detail}"); raise http_exc
-    except Exception as e: logger.error(f"Unexpected error processing AI chapter split for project {project_id}, chapter {chapter_id}: {e}", exc_info=True); raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to process AI chapter split for project {project_id}, chapter {chapter_id} due to an internal error.")
-
-# --- ADDED: Rebuild Index Endpoint ---
-@router.post(
-    "/rebuild_index/{project_id}",
-    response_model=Message,
-    status_code=status.HTTP_200_OK,
-    summary="Rebuild Project Index",
-    description="Deletes all existing index entries for the specified project and re-indexes all its current markdown files. Use this if you suspect the index is out of sync."
-)
-async def rebuild_project_index_endpoint(
-    project_id: str = Depends(get_project_dependency) # Ensures project exists
-):
-    """
-    Triggers a full rebuild of the vector index for a specific project.
-
-    - **project_id**: The UUID of the project to rebuild the index for.
-    """
-    logger.info(f"Received request to rebuild index for project ID: {project_id}")
-    try:
-        # Call the AIService method (assuming it's async, adjust if not)
-        await ai_service.rebuild_project_index(project_id=project_id)
-        logger.info(f"Successfully initiated index rebuild for project {project_id}")
-        return Message(message=f"Index rebuild initiated for project {project_id}.")
-    except HTTPException as http_exc:
-        logger.warning(f"HTTPException during index rebuild for project {project_id}: {http_exc.status_code} - {http_exc.detail}")
-        raise http_exc
+    except FileNotFoundError as e:
+        logger.warning(f"Project or context file not found during rephrase: {project_id}/{request.context_path}. Error: {e}")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Project '{project_id}' or context file not found.")
     except Exception as e:
-        logger.error(f"Unexpected error processing index rebuild for project {project_id}: {e}", exc_info=True)
-        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to process index rebuild for project {project_id} due to an internal error.")
-# --- END ADDED ---
+        logger.exception(f"Error rephrasing text for project {project_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to rephrase text: {str(e)}")
+
+
+@router.post("/split/chapter/{project_id}/{chapter_id}", response_model=AIChapterSplitResponse)
+async def split_chapter(
+    project_id: str,
+    chapter_id: str,
+    request_data: AIChapterSplitRequest = Body(...),
+    ai_service: AIService = Depends(get_ai_service)
+):
+    """
+    Split provided chapter content into proposed scenes using AI.
+    """
+    try:
+        logger.info(f"Received chapter split request for project {project_id}, chapter {chapter_id}")
+        if not request_data.chapter_content:
+             raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail="chapter_content cannot be empty.")
+
+        proposed_scenes = await ai_service.split_chapter_into_scenes(
+            project_id=project_id,
+            chapter_id=chapter_id,
+            request_data=request_data
+        )
+        logger.info(f"Successfully proposed scene splits for project {project_id}, chapter {chapter_id}")
+        return AIChapterSplitResponse(proposed_scenes=proposed_scenes)
+    except FileNotFoundError as e:
+        logger.warning(f"Project or chapter not found during chapter split: {project_id}/{chapter_id}. Error: {e}")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Project '{project_id}' or Chapter '{chapter_id}' not found.")
+    except ValueError as e:
+         logger.warning(f"Value error during chapter split for {project_id}/{chapter_id}: {e}")
+         raise HTTPException(status_code=status.HTTP_400_BAD_REQUEST, detail=str(e))
+    except Exception as e:
+        logger.exception(f"Error splitting chapter for project {project_id}, chapter {chapter_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to split chapter: {str(e)}")
+
+
+@router.post("/rebuild_index/{project_id}", response_model=RebuildIndexResponse)
+async def rebuild_index(
+    project_id: str,
+    ai_service: AIService = Depends(get_ai_service)
+):
+    """
+    Force a rebuild of the vector index for a specific project.
+    Deletes existing project index data and re-indexes all content.
+    """
+    try:
+        logger.info(f"Received request to rebuild index for project {project_id}")
+        deleted_count, indexed_count = await ai_service.rebuild_project_index(project_id)
+        logger.info(f"Successfully rebuilt index for project {project_id}. Deleted: {deleted_count}, Indexed: {indexed_count}")
+        return RebuildIndexResponse(
+            success=True,
+            message=f"Successfully rebuilt index for project {project_id}.",
+            documents_deleted=deleted_count,
+            documents_indexed=indexed_count
+        )
+    except FileNotFoundError as e:
+        logger.warning(f"Project not found during index rebuild: {project_id}. Error: {e}")
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"Project '{project_id}' not found.")
+    except Exception as e:
+        logger.exception(f"Error rebuilding index for project {project_id}: {e}", exc_info=True)
+        raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Failed to rebuild index: {str(e)}")
