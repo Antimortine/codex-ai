@@ -81,7 +81,7 @@ graph LR
     
 2.  The **Frontend** sends REST API calls to the **FastAPI Backend**.
     
-3.  The **Backend API** routes requests to the appropriate **Service** (e.g., ProjectService, AIService, ChatHistoryService).
+3.  The **Backend API** routes requests to the appropriate **Service** (e.g., ProjectService, ChapterService, AIService, ChatHistoryService).
     
 4.  **Services** orchestrate business logic:
     
@@ -92,6 +92,8 @@ graph LR
     -   For AI tasks (Query, Generate, Rephrase, Split), AIService loads necessary explicit context (like Plan, Synopsis, previous scenes) using FileService and then delegates the core AI logic to specific processors (QueryProcessor, SceneGenerator, Rephraser, ChapterSplitter) within the **RAG Subsystem**, passing both explicit and retrieved context as needed.
         
     -   Chat history operations are handled per session via dedicated API endpoints and FileService methods.
+        
+    -   For Chapter Compilation, ChapterService fetches scene data via SceneService and compiles the content.
         
 5.  **RAG Subsystem:**
     
@@ -108,9 +110,9 @@ graph LR
 
 -   **Technology:** React, Vite, JavaScript/JSX, CSS, Axios, react-router-dom, @uiw/react-md-editor.
     
--   **UI Components:** Standard React components, AIEditorWrapper for Markdown editing with AI features, ProjectQueryPage manages chat session UI.
+-   **UI Components:** Standard React components, AIEditorWrapper for Markdown editing with AI features, ProjectQueryPage manages chat session UI, ChapterSection displays chapter/scene info and actions.
     
--   **Responsibilities:** UI rendering, user input, client-state management (including active chat session), API communication.
+-   **Responsibilities:** UI rendering, user input, client-state management (including active chat session), API communication, triggering file downloads (for compilation).
     
 
 ### 3.2. Backend (FastAPI)
@@ -119,7 +121,7 @@ graph LR
     
 -   **Responsibilities:** REST API, routing, data validation, service orchestration, error handling.
     
--   **Structure:** Layered (API -> Services -> RAG/Utilities). Includes AIService for AI logic orchestration, CRUD services, and dedicated chat history/session endpoints.
+-   **Structure:** Layered (API -> Services -> RAG/Utilities). Includes AIService for AI logic orchestration, CRUD services, dedicated chat history/session endpoints, and chapter compilation logic within ChapterService.
     
 
 ### 3.3. RAG Subsystem (app/rag/)
@@ -147,7 +149,7 @@ graph LR
     
 -   **Responsibilities:** Encapsulate business logic.
     
-    -   CRUD services (Project, Chapter, Character, Scene) use FileService for persistence and metadata.
+    -   CRUD services (Project, Chapter, Character, Scene) use FileService for persistence and metadata. ChapterService also handles compilation.
         
     -   AIService loads explicit context via FileService and orchestrates calls to the RAG processors.
         
@@ -188,7 +190,30 @@ graph LR
 
 ### 4.1. Content Indexing (RAG - Ingestion)
 
-(No significant changes, IndexManager handles metadata)
+1.  User saves content (e.g., Scene, Character Description, Plan, Synopsis) via Frontend -> Backend API -> CRUD Service.
+    
+2.  The relevant CRUD Service calls FileService.write_text_file (or similar) with trigger_index=True.
+    
+3.  FileService writes the Markdown file to the **File System**.
+    
+4.  FileService checks if trigger_index is true and the file is .md.
+    
+5.  If conditions met, FileService calls IndexManager.index_file with the file path.
+    
+6.  IndexManager:
+    
+    -   Reads the file content.
+        
+    -   Uses SimpleDirectoryReader with a custom file_metadata_func.
+        
+    -   file_metadata_func extracts project_id and determines document_type, document_title, chapter_id, chapter_title based on the file path and project/chapter metadata (read via FileService).
+        
+    -   LlamaIndex splits the document into text chunks (nodes).
+        
+    -   IndexManager (via LlamaIndex Settings) uses the **Embedding Model (HuggingFace)** to generate vector embeddings for each chunk.
+        
+    -   IndexManager inserts the chunks (nodes) along with their embeddings and metadata (including project_id, file_path, document_type, etc.) into the **Vector DB (ChromaDB)** collection. Existing nodes for the same file_path are deleted first to ensure updates.
+        
 
 ### 4.2. AI Query (RAG - Retrieval & Synthesis)
 
@@ -196,40 +221,114 @@ graph LR
     
 2.  AIService.query_project:
     
-    -   Calls FileService to load explicit Plan and Synopsis content.
+    -   Calls FileService to load explicit Project Plan and Synopsis content.
         
-    -   Identifies potential direct source entities (Characters, Scenes, Notes) mentioned in the query via FileService/metadata.
+    -   Compiles a list of project entities (Chapters, Scenes, Characters, Notes) by reading metadata via FileService.
         
-    -   Loads content for directly mentioned entities via FileService.
+    -   Checks if the user's query text matches any entity names (case-insensitive).
         
-    -   Determines paths to filter from RAG retrieval (Plan, Synopsis, directly loaded content).
+    -   If a Chapter entity matches, calls FileService again to load that chapter's Plan and Synopsis (if they exist). This becomes direct_chapter_context.
         
-    -   Calls QueryProcessor.query(...), passing explicit context, direct source content, and filter paths.
+    -   If other entities (Scene, Character, Note, World) match, calls FileService to load their content. This becomes direct_sources_data.
+        
+    -   Determines paths to filter from RAG retrieval (Plan, Synopsis, directly loaded content files, chapter plan/synopsis files).
+        
+    -   Calls QueryProcessor.query(...), passing the query, explicit project/chapter context, direct source content, and filter paths.
         
 3.  QueryProcessor:
     
-    -   Retrieves relevant nodes from **Vector DB** (filtering by project_id and excluding filtered paths).
+    -   Creates a LlamaIndex VectorIndexRetriever with MetadataFilters set to the correct project_id.
         
-    -   Constructs a prompt including query, explicit context, direct source content, and retrieved nodes.
+    -   Calls retriever.aretrieve(query_text).
         
-    -   Calls the **LLM API**.
+    -   ChromaDB performs a similarity search, returning relevant nodes matching the project_id.
         
-    -   Returns (answer, retrieved_nodes, direct_source_info) tuple to AIService.
+    -   QueryProcessor filters the retrieved nodes, removing any whose file_path matches the paths_to_filter set provided by AIService. It also deduplicates nodes based on content and path, keeping the highest score.
+        
+    -   Constructs a detailed prompt including the original query, explicit project plan/synopsis, direct chapter context (if any), directly loaded source content (if any), and the filtered/deduplicated retrieved nodes (with source information like type and title). Context elements are truncated using MAX_CONTEXT_LENGTH where applicable.
+        
+    -   Calls the **LLM API (Google Gemini)** via llm.acomplete(prompt).
+        
+    -   Parses the LLM response to extract the answer.
+        
+    -   Returns (answer, filtered_retrieved_nodes, direct_sources_info_list) tuple to AIService.
         
 4.  AIService returns the tuple to the API endpoint.
     
-5.  API endpoint formats the response.
+5.  API endpoint formats the response (AIQueryResponse model), including the answer, formatted source nodes, and the list of directly used sources.
     
-6.  Frontend displays the response (separating direct vs. retrieved sources if needed).
+6.  Frontend displays the response, potentially differentiating between direct and retrieved sources.
     
 
 ### 4.3. AI Scene Generation (RAG)
 
-(No significant changes, uses explicit context + RAG)
+1.  User provides optional prompt and clicks "Add Scene using AI" via Frontend -> Backend API (/ai/generate/scene/{proj_id}/{chap_id}) -> AIService.
+    
+2.  AIService.generate_scene_draft:
+    
+    -   Loads explicit context: Project Plan/Synopsis, Chapter Plan/Synopsis via FileService.
+        
+    -   Loads content of previous N scenes (based on request_data.previous_scene_order and RAG_GENERATION_PREVIOUS_SCENE_COUNT) via FileService.
+        
+    -   Determines paths to filter (Plan, Synopsis, Chapter Plan/Synopsis, previous scene files).
+        
+    -   Calls SceneGenerator.generate_scene(...), passing explicit context, previous scenes, prompt summary, and filter paths.
+        
+3.  SceneGenerator:
+    
+    -   Constructs a retrieval query based on the prompt, chapter context, and last previous scene snippet.
+        
+    -   Retrieves relevant nodes from **Vector DB** (filtering by project_id and excluding filtered paths). Deduplicates/filters nodes.
+        
+    -   Constructs a detailed prompt including the generation task, prompt summary, explicit project/chapter context, previous scene content, and filtered/deduplicated retrieved nodes. Context elements are truncated using MAX_CONTEXT_LENGTH where applicable.
+        
+    -   Calls the **LLM API (Google Gemini)** via llm.acomplete(prompt).
+        
+    -   Parses the LLM response, extracting the scene title (from ## Title heading) and content. Provides defaults if parsing fails.
+        
+    -   Returns {"title": ..., "content": ...} dictionary to AIService.
+        
+4.  AIService returns the dictionary to the API endpoint.
+    
+5.  API endpoint returns the AISceneGenerationResponse.
+    
+6.  Frontend displays the generated draft in a modal for user review/acceptance.
+    
 
 ### 4.4. AI Chapter Splitting
 
-(No significant changes, uses explicit context + RAG)
+1.  User pastes chapter content and clicks "Split Chapter (AI)" via Frontend -> Backend API (/ai/split/chapter/{proj_id}/{chap_id}) -> AIService.
+    
+2.  AIService.split_chapter_into_scenes:
+    
+    -   Loads explicit context: Project Plan/Synopsis, Chapter Plan/Synopsis via FileService.
+        
+    -   Determines paths to filter (Plan, Synopsis, Chapter Plan/Synopsis files).
+        
+    -   Calls ChapterSplitter.split(...), passing the full chapter content, explicit context, and filter paths.
+        
+3.  ChapterSplitter:
+    
+    -   Constructs a retrieval query based on the chapter content.
+        
+    -   Retrieves relevant nodes from **Vector DB** (filtering by project_id and excluding filtered paths). Deduplicates/filters nodes.
+        
+    -   Constructs a detailed prompt instructing the LLM to split the provided chapter content into scenes based on logical breaks, using the explicit context and retrieved nodes for guidance. The prompt specifies a strict output format (<<<SCENE_START>>>, TITLE:, CONTENT:, <<<SCENE_END>>>). Context elements are truncated using MAX_CONTEXT_LENGTH where applicable.
+        
+    -   Calls the **LLM API (Google Gemini)** via llm.acomplete(prompt).
+        
+    -   Parses the LLM response using regex based on the strict delimiters.
+        
+    -   Validates parsed scenes and performs basic content length checks.
+        
+    -   Returns a list of ProposedScene objects to AIService.
+        
+4.  AIService returns the list to the API endpoint.
+    
+5.  API endpoint returns the AIChapterSplitResponse.
+    
+6.  Frontend displays the proposed splits in a modal for user review/acceptance.
+    
 
 ### 4.5. Chat Session Management
 
@@ -244,6 +343,29 @@ graph LR
 5.  FileService reads/writes the JSON files on the **File System**.
     
 6.  Responses are sent back to the Frontend, which updates its state (sessions, activeSessionId, chat history).
+    
+
+### 4.6. Chapter Compilation
+
+1.  User clicks "Compile Chapter" button via Frontend -> Backend API (GET /projects/{proj_id}/chapters/{chap_id}/compile) -> Chapter Endpoint.
+    
+2.  Chapter Endpoint calls ChapterService.compile_chapter_content, passing query parameters (include_titles, separator).
+    
+3.  ChapterService:
+    
+    -   Validates chapter existence using self.get_by_id.
+        
+    -   Calls SceneService.get_all_for_chapter to get sorted scenes with content.
+        
+    -   Iterates through scenes, formatting them into a single string based on include_titles and joining with separator.
+        
+    -   Generates a suggested filename based on the chapter title using _slugify.
+        
+    -   Returns {"filename": ..., "content": ...} dictionary.
+        
+4.  API Endpoint returns the JSON response to the Frontend.
+    
+5.  Frontend receives the JSON, creates a Blob from the content, generates an object URL, creates a temporary <a> link with the download attribute set to filename, clicks the link, and cleans up the URL/link.
     
 
 ## 5. Design Decisions & Principles
@@ -268,6 +390,8 @@ graph LR
     
 -   **Reproducible Dependencies:** pip-tools.
     
+-   **Testability:** Unit/integration tests for backend; component/integration tests for frontend (following robust async patterns).
+    
 
 ## 6. Data Storage Summary
 
@@ -277,9 +401,9 @@ graph LR
     
 -   **Vector Embeddings & Index:** Managed by ChromaDB, persisted in chroma_db/. **Excluded from Git.**
     
--   **Application Configuration:**  .env file (excluded from Git).
+-   **Application Configuration:** .env file (excluded from Git).
     
--   **Dependency Lock Files:**  backend/requirements.txt, frontend/package-lock.json (committed to Git).
+-   **Dependency Lock Files:** backend/requirements.txt, frontend/package-lock.json (committed to Git).
     
 
 ## 7. Deployment (Future Consideration)
