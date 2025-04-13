@@ -115,14 +115,53 @@ class FileService:
             raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Could not create directory structure for {path.name}")
 
     def read_text_file(self, path: Path) -> str:
-        """Reads content from a text file."""
+        """Reads content from a text file with robust encoding handling."""
         if not self.path_exists(path):
              raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail=f"{path.name} not found")
+             
+        # First try direct binary reading to check for BOMs (Byte Order Marks)
         try:
-            return path.read_text(encoding='utf-8')
-        except IOError as e:
-            logger.error(f"Error reading file {path}: {e}")
-            raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"Could not read {path.name}")
+            with open(path, 'rb') as f:
+                raw_data = f.read(4)  # Read first 4 bytes to check for BOM
+                
+                # Check for UTF-16 BOMs
+                if raw_data.startswith(b'\xff\xfe'):  # UTF-16 LE BOM
+                    with open(path, 'r', encoding='utf-16-le') as f:
+                        content = f.read()
+                        logger.info(f"Successfully read {path.name} using UTF-16-LE encoding (detected BOM)")
+                        return content
+                        
+                elif raw_data.startswith(b'\xfe\xff'):  # UTF-16 BE BOM
+                    with open(path, 'r', encoding='utf-16-be') as f:
+                        content = f.read()
+                        logger.info(f"Successfully read {path.name} using UTF-16-BE encoding (detected BOM)")
+                        return content
+        except Exception as e:
+            logger.warning(f"Error checking for BOM in {path}: {e}")
+        
+        # Try different encodings in order of likelihood
+        encodings_to_try = ['utf-8', 'utf-16', 'utf-16-le', 'utf-16-be', 'latin-1', 'cp1252']
+        last_error = None
+        
+        for encoding in encodings_to_try:
+            try:
+                with open(path, 'r', encoding=encoding) as file:
+                    content = file.read()
+                    logger.debug(f"Successfully read {path.name} using {encoding} encoding")
+                    return content
+            except UnicodeDecodeError as e:
+                last_error = e
+                logger.warning(f"Could not read {path.name} with {encoding} encoding: {e}")
+                continue
+            except IOError as e:
+                last_error = e
+                logger.error(f"IO error reading file {path}: {e}")
+                break
+                
+        # If we're here, we couldn't read with any encoding
+        logger.error(f"Failed to read {path} with any encoding: {last_error}")
+        # Return empty string with a warning in it rather than failing completely
+        return f"[Error reading file - encoding issues: {last_error}]"
 
     def write_text_file(self, path: Path, content: str, trigger_index: bool = False):
         """

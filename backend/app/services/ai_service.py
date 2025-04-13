@@ -190,14 +190,78 @@ class AIService:
             if self.file_service.path_exists(notes_dir) and notes_dir.is_dir():
                 for note_path in notes_dir.glob('*.md'):
                     if note_path.is_file():
-                        try: entity_list.append({ 'type': 'Note', 'name': note_path.stem, 'id': str(note_path), 'file_path': note_path })
+                        try: 
+                            # Read the note content to extract title, with improved error handling
+                            note_title = note_path.stem  # Default to filename if we can't extract title
+                            
+                            try:
+                                # Use the more robust file reading method we updated
+                                note_content = self.file_service.read_text_file(note_path)
+                                
+                                # Try to extract title from the content
+                                if note_content and not note_content.startswith('[Error'):
+                                    lines = note_content.splitlines()
+                                    if lines:
+                                        first_line = lines[0].strip()
+                                        if first_line:
+                                            # Remove any markdown heading markers and whitespace
+                                            note_title = first_line.lstrip('#').strip()
+                                            
+                                            # Remove any BOM characters that might be at the start of the title
+                                            # UTF-16 LE BOM appears as ÿþ in latin-1 encoding
+                                            if note_title.startswith('ÿþ'):
+                                                note_title = note_title[2:]
+                                                logger.info(f"AIService (Query): Removed BOM characters from title, new title: '{note_title}'")
+                                            # Handle other potential BOM markers
+                                            elif note_title.startswith('\ufeff'): # UTF-8 BOM
+                                                note_title = note_title[1:]
+                                                logger.info(f"AIService (Query): Removed UTF-8 BOM from title, new title: '{note_title}'")
+                                            
+                                            logger.info(f"AIService (Query): Extracted note title '{note_title}' from file {note_path.name}")
+                                            
+                                            # If title seems generic, store entire first line for better matching
+                                            if note_title.lower() in ["note", "note 1", "notes"]:
+                                                logger.info(f"AIService (Query): Note has generic title: '{note_title}'")
+                            except Exception as title_error:
+                                logger.warning(f"AIService (Query): Could not extract title from note {note_path}, using filename: {title_error}")
+                                
+                            # See if the note has a title in project metadata (which is the "official" title)
+                            metadata_title = None
+                            try:
+                                # Check project metadata for title
+                                project_metadata = self.file_service.read_project_metadata(project_id=project_id)
+                                note_id = note_path.stem  # The note ID is the filename without extension
+                                if 'notes' in project_metadata and note_id in project_metadata['notes']:
+                                    metadata_title = project_metadata['notes'][note_id].get('title')
+                                    logger.info(f"AIService (Query): Found metadata title '{metadata_title}' for note {note_path.name}")
+                            except Exception as meta_err:
+                                logger.warning(f"AIService (Query): Could not retrieve metadata title for note {note_path}: {meta_err}")
+                            
+                            # Add note to entity list with extracted or default title
+                            entity_list.append({ 
+                                'type': 'Note', 
+                                'name': note_title, 
+                                'id': str(note_path), 
+                                'file_path': note_path,
+                                'metadata_title': metadata_title  # Store metadata title if available
+                            })
+                            
+                            logger.info(f"AIService (Query): Added note entity: '{note_title}' from {note_path.name}")
                         except Exception as e: logger.warning(f"Could not process note path {note_path}: {e}")
         except Exception as e: logger.error(f"AIService (Query): Unexpected error compiling entity list for {project_id}: {e}", exc_info=True)
 
         logger.debug(f"AIService (Query): Compiled entity list with {len(entity_list)} items.")
         if entity_list:
-            normalized_query = query_text.lower().strip()
-            def normalize_name(name): return name.lower().strip()
+            # Improve Unicode normalization for multilingual support
+            import unicodedata
+            
+            def normalize_name(name):
+                if not name: return ""
+                # Convert to Unicode NFC form (fully composed) and lowercase
+                normalized = unicodedata.normalize('NFC', name.lower().strip())
+                return normalized
+                
+            normalized_query = normalize_name(query_text)
             logger.debug(f"AIService (Query): Searching for entity names in normalized query: '{normalized_query}'")
             for entity in entity_list:
                 # Skip project plan/synopsis as they are always loaded explicitly (if available)
@@ -213,10 +277,90 @@ class AIService:
                 if re.search(pattern, normalized_query):
                     is_match = True
                     logger.debug(f"AIService (Query): Found exact word match for '{entity['name']}'")
-                # For Notes specifically, also try a more flexible match if the note title is significant
-                elif entity['type'] == 'Note' and len(normalized_entity_name) > 3 and normalized_entity_name in normalized_query:
-                    is_match = True
-                    logger.info(f"AIService (Query): Found flexible match for Note '{entity['name']}' - TYPE: {entity['type']}")
+                # For Notes specifically
+                elif entity['type'] == 'Note':
+                    original_name = entity['name']
+                    # Clean name from potential BOM markers for comparison
+                    clean_name = original_name
+                    if clean_name.startswith('\u00ff\u00fe'): # UTF-16 LE BOM in latin-1
+                        clean_name = clean_name[2:]
+                        logger.info(f"AIService (Query): Removed BOM characters from note name for matching: '{clean_name}'")
+                    
+                    # Import unicodedata if not already done (for safety)
+                    import unicodedata
+                    
+                    # Get normalized versions of both the original and clean names
+                    normalized_entity_name = normalize_name(original_name)
+                    normalized_clean_name = normalize_name(clean_name)
+                    
+                    # Log exact binary representation for debugging
+                    logger.info(f"AIService (Query): Normalized query: {normalized_query!r}, Normalized note name: {normalized_clean_name!r}")
+                    
+                    logger.info(f"AIService (Query): Checking note '{original_name}' with normalized names: '{normalized_entity_name}' and '{normalized_clean_name}'")
+                    
+                    # Try matching against clean name first (without BOM)
+                    if clean_name.lower() == query_text.lower():
+                        is_match = True
+                        logger.info(f"AIService (Query): DIRECT MATCH - Clean note title '{clean_name}' exactly matches query '{query_text}'")
+                    # Then try original name
+                    elif original_name.lower() == query_text.lower():
+                        is_match = True
+                        logger.info(f"AIService (Query): DIRECT MATCH - Note title '{original_name}' exactly matches query '{query_text}'")
+                    # Check metadata title (which is the user-given title at creation time)
+                    elif entity.get('metadata_title') and entity['metadata_title'].lower() == query_text.lower():
+                        is_match = True
+                        logger.info(f"AIService (Query): METADATA TITLE MATCH - Query '{query_text}' exactly matches metadata title '{entity['metadata_title']}'")
+                    # Log exact matches for Cyrillic text for debugging purposes
+                    # This should help us understand why exact matches might not be working for some Cyrillic characters
+                    elif clean_name.lower() == query_text.lower() or query_text.lower() in clean_name.lower():
+                        is_match = True
+                        logger.info(f"AIService (Query): EXACT MATCH for Cyrillic - Query '{query_text}' matches note title '{clean_name}'")
+                    # Special case for Russian/Cyrillic: check if the query matches any word in the title
+                    # This handles cases like 'Заметка 2' when we have 'Содержимое заметки'
+                    elif any(q_word in clean_name.lower() for q_word in query_text.lower().split()):
+                        is_match = True
+                        logger.info(f"AIService (Query): PARTIAL WORD MATCH - Found word from query '{query_text}' in note title '{clean_name}'")
+                    # Check if any word in the title is present in the query
+                    elif any(title_word in query_text.lower() for title_word in clean_name.lower().split()):
+                        is_match = True
+                        logger.info(f"AIService (Query): PARTIAL WORD MATCH - Found word from note title '{clean_name}' in query '{query_text}'")
+                    # Check normalized versions
+                    elif normalized_query == normalized_clean_name:
+                        is_match = True
+                        logger.info(f"AIService (Query): Found exact match for clean note name '{clean_name}'")
+                    elif normalized_query == normalized_entity_name:
+                        is_match = True
+                        logger.info(f"AIService (Query): Found exact match for note '{original_name}'")
+                    # Check if normalized query text contains the normalized note title
+                    elif normalized_clean_name in normalized_query:
+                        is_match = True
+                        logger.info(f"AIService (Query): Found clean note title '{clean_name}' within query")
+                    elif normalized_entity_name in normalized_query:
+                        is_match = True
+                        logger.info(f"AIService (Query): Found note title '{original_name}' within query")
+                    # Check if the normalized note title contains the normalized query
+                    elif normalized_query in normalized_clean_name:
+                        is_match = True
+                        logger.info(f"AIService (Query): Query '{query_text}' found within clean note title '{clean_name}'")
+                    elif normalized_query in normalized_entity_name:
+                        is_match = True
+                        logger.info(f"AIService (Query): Query '{query_text}' found within note title '{original_name}'")
+                    # Check for matching significant words in either version
+                    elif len(normalized_clean_name) > 3:
+                        for word in normalized_clean_name.split():
+                            if len(word) > 3 and word in normalized_query:
+                                is_match = True
+                                logger.info(f"AIService (Query): Found word match for clean note name '{clean_name}' with word '{word}'")
+                                break
+                    elif len(normalized_entity_name) > 3:
+                        for word in normalized_entity_name.split():
+                            if len(word) > 3 and word in normalized_query:
+                                is_match = True
+                                logger.info(f"AIService (Query): Found word match for note '{original_name}' with word '{word}'")
+                                break
+                    
+                    if is_match:
+                        logger.info(f"AIService (Query): Found match for Note '{entity['name']}' - TYPE: {entity['type']}")
                 
                 if is_match:
                     logger.info(f"AIService (Query): Found direct match: Type='{entity['type']}', Name='{entity['name']}'")
@@ -258,8 +402,9 @@ class AIService:
                                 logger.warning(f"AIService (Query): Unknown entity type '{entity['type']}' encountered for direct loading."); 
                                 continue
 
-                            # Add to direct sources data
-                            source_item = { 'type': entity['type'], 'name': entity['name'], 'content': content, 'file_path': str(file_path_to_load) }
+                            # Add to direct sources data - use metadata title when available for better UI display
+                            display_name = entity.get('metadata_title') if entity.get('metadata_title') else entity['name']
+                            source_item = { 'type': entity['type'], 'name': display_name, 'content': content, 'file_path': str(file_path_to_load) }
                             direct_sources_data.append(source_item)
                             directly_included_paths.add(str(file_path_to_load.resolve())) # Add resolved path
                             
@@ -267,6 +412,7 @@ class AIService:
                             if entity['type'] == 'Note':
                                 logger.info(f"AIService (Query): Added Note to direct_sources_data: {entity['name']} with path {file_path_to_load}")
                                 logger.info(f"AIService (Query): Current direct_sources_data count: {len(direct_sources_data)}")
+                                logger.info(f"AIService (Query): Direct source data note content first 100 chars: {content[:100] if content else '(empty)'}")
                             
                             logger.info(f"AIService (Query): Successfully loaded direct content for '{entity['name']}' (Length: {len(content)})")
                     except Exception as e: logger.error(f"AIService (Query): Error loading direct content for '{entity['name']}': {e}", exc_info=True)

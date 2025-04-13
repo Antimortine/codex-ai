@@ -54,8 +54,15 @@ class NoteService:
 
         # 2. Write the note file (triggers indexing)
         try:
-            file_service.write_text_file(path=note_path, content=note_in.content, trigger_index=True) # Use keywords
-            logger.debug(f"Wrote note file {note_path}")
+            # Ensure content is properly normalized for UTF-8 encoding
+            normalized_content = note_in.content
+            if normalized_content.startswith('\ufeff'):  # Remove UTF-8 BOM if present
+                normalized_content = normalized_content[1:]
+                logger.info(f"Removed UTF-8 BOM from note content before saving")
+                
+            # Write with explicit UTF-8 encoding
+            file_service.write_text_file(path=note_path, content=normalized_content, trigger_index=True) # Use keywords
+            logger.debug(f"Wrote note file {note_path} with UTF-8 encoding")
         except Exception as file_err:
             logger.error(f"Failed to write note file {note_path} after metadata update: {file_err}", exc_info=True)
             # Attempt to rollback metadata change
@@ -192,11 +199,21 @@ class NoteService:
         if note_in.content is not None and note_in.content != current_note.content:
             logger.debug(f"Updating content for note {note_id} in file {note_path}")
             try:
-                # Write file AND trigger index update
-                file_service.write_text_file(path=note_path, content=note_in.content, trigger_index=True) # Use keywords
-                new_content = note_in.content
+                # Ensure content is properly normalized for UTF-8 encoding
+                normalized_content = note_in.content
+                if normalized_content.startswith('\ufeff'):  # Remove UTF-8 BOM if present
+                    normalized_content = normalized_content[1:]
+                    logger.info(f"Removed UTF-8 BOM from note content before updating")
+                
+                # Write file AND trigger index update with explicit UTF-8 encoding
+                file_service.write_text_file(path=note_path, content=normalized_content, trigger_index=True) # Use keywords
+                new_content = normalized_content
                 content_updated = True
-                logger.debug(f"Successfully updated content file for note {note_id}")
+                logger.debug(f"Successfully updated content file for note {note_id} with UTF-8 encoding")
+                
+                # If this is a previously corrupted file, log the fix
+                if current_note.content and (current_note.content.startswith('\ufeff') or current_note.content.startswith('ÿþ')):
+                    logger.info(f"Fixed encoding for previously corrupted note {note_id}")
             except Exception as file_err:
                 logger.error(f"Failed to write updated content file for note {note_id}: {file_err}", exc_info=True)
                 raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail="Failed to save updated note content.") from file_err
