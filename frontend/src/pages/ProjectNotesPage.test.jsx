@@ -46,32 +46,38 @@ vi.mock('../components/NoteTreeViewer', () => ({
     if (!treeData || treeData.length === 0) {
       return <div data-testid="mock-note-tree-viewer">No notes or folders found.</div>;
     }
-    const renderMockNode = (node) => (
-        <div key={node.id} data-testid={`node-${node.id}`}>
-            <span>{node.type === 'folder' ? '📁' : '📄'} {node.name} ({node.path})</span>
-            {node.type === 'folder' && (
-                <>
-                    <button data-testid={`create-folder-${node.id}`} onClick={() => handlers.onCreateFolder(node.path)} disabled={isBusy}>+ Folder</button>
-                    <button data-testid={`create-note-${node.id}`} onClick={() => handlers.onCreateNote(node.path)} disabled={isBusy}>+ Note</button>
-                    {node.path !== '/' && (
-                         <button data-testid={`rename-folder-${node.id}`} onClick={() => handlers.onRenameFolder(node.path, node.name)} disabled={isBusy}>Rename</button>
-                    )}
-                    {node.path !== '/' && (
-                        <button data-testid={`delete-folder-${node.id}`} onClick={() => handlers.onDeleteFolder(node.path)} disabled={isBusy}>Delete Folder</button>
-                    )}
-                </>
-            )}
-            {node.type === 'note' && (
-                 <>
-                    <button data-testid={`move-note-${node.note_id}`} onClick={() => handlers.onMoveNote(node.note_id, node.path)} disabled={isBusy}>Move</button>
-                    <button data-testid={`delete-note-${node.note_id}`} onClick={() => handlers.onDeleteNote(node.note_id, node.name)} disabled={isBusy}>Delete Note</button>
-                 </>
-            )}
-            {node.children && node.children.length > 0 && (
-                <div style={{ marginLeft: '20px' }}>{node.children.map(renderMockNode)}</div>
-            )}
-        </div>
-    );
+    const renderMockNode = (node) => {
+        // Create testId based on node type (folder or note)
+        const nodeId = node.type === 'folder' ? node.id : node.note_id;
+        const testId = `node-${nodeId}`;
+        
+        return (
+            <div key={nodeId} data-testid={testId}>
+                <span>{node.type === 'folder' ? '📁' : '📄'} {node.name} ({node.path})</span>
+                {node.type === 'folder' && (
+                    <>
+                        <button data-testid={`create-folder-${nodeId}`} onClick={() => handlers.onCreateFolder(node.path)} disabled={isBusy}>+ Folder</button>
+                        <button data-testid={`create-note-${nodeId}`} onClick={() => handlers.onCreateNote(node.path)} disabled={isBusy}>+ Note</button>
+                        {node.path !== '/' && (
+                             <button data-testid={`rename-folder-${nodeId}`} onClick={() => handlers.onRenameFolder(node.path, node.name)} disabled={isBusy}>Rename</button>
+                        )}
+                        {node.path !== '/' && (
+                            <button data-testid={`delete-folder-${nodeId}`} onClick={() => handlers.onDeleteFolder(node.path)} disabled={isBusy}>Delete Folder</button>
+                        )}
+                    </>
+                )}
+                {node.type === 'note' && (
+                     <>
+                        <button data-testid={`move-note-${nodeId}`} onClick={() => handlers.onMoveNote(nodeId, node.folder_path)} disabled={isBusy}>Move</button>
+                        <button data-testid={`delete-note-${nodeId}`} onClick={() => handlers.onDeleteNote(nodeId, node.name)} disabled={isBusy}>Delete Note</button>
+                     </>
+                )}
+                {node.children && node.children.length > 0 && (
+                    <div style={{ marginLeft: '20px' }}>{node.children.map(renderMockNode)}</div>
+                )}
+            </div>
+        );
+    };
     return (
         <div data-testid="mock-note-tree-viewer">
             <p data-testid="tree-node-count">Nodes: {treeData?.length ?? 0}</p>
@@ -161,8 +167,11 @@ describe('ProjectNotesPage (Modal Flow)', () => {
         const currentMockTreeData = JSON.parse(JSON.stringify(MOCK_TREE_DATA_TEMPLATE));
         api.getProject.mockResolvedValue({ data: MOCK_PROJECT });
         api.getNoteTree.mockResolvedValue({ data: { tree: currentMockTreeData } });
-        // ... other API mocks ...
-        // window.prompt no longer needed
+        api.createNote.mockResolvedValue({ data: { id: 'new-note-id' } });
+        api.updateNote.mockResolvedValue({ data: { success: true } });
+        api.renameFolder.mockResolvedValue({ data: { success: true } });
+        api.deleteNote.mockResolvedValue({ data: { success: true } });
+        api.deleteFolder.mockResolvedValue({ data: { success: true } });
         window.confirm = vi.fn(() => true);
         mockTreeViewerHandlers = {};
     });
@@ -201,7 +210,10 @@ describe('ProjectNotesPage (Modal Flow)', () => {
              expect(NoteTreeViewer).toHaveBeenCalled();
              const lastCallArgs = NoteTreeViewer.mock.lastCall[0];
              expect(lastCallArgs.handlers).toBeDefined();
-             // ... check handler types ...
+             expect(lastCallArgs.handlers.onCreateNote).toBeDefined();
+             expect(lastCallArgs.handlers.onCreateFolder).toBeDefined();
+             expect(lastCallArgs.handlers.onRenameFolder).toBeDefined();
+             expect(lastCallArgs.handlers.onMoveNote).toBeDefined();
          });
      });
 
@@ -254,6 +266,469 @@ describe('ProjectNotesPage (Modal Flow)', () => {
         // Modal should be closed after successful submission
         await waitFor(() => {
             expect(screen.queryByTestId('modal-overlay')).not.toBeInTheDocument();
+        });
+    });
+
+    // --- Modal Opening Tests ---
+    it('opens create note modal via root button', async () => {
+        const user = userEvent.setup();
+        renderComponent();
+        
+        // Wait for component to be fully loaded
+        await screen.findByTestId('mock-note-tree-viewer');
+        
+        // Click the "+ New Note (Root)" button
+        const createNoteButton = screen.getByText('+ New Note (Root)');
+        await user.click(createNoteButton);
+        
+        // Verify modal is open with correct title
+        const modal = screen.getByTestId('mock-modal');
+        expect(modal).toBeInTheDocument();
+        expect(screen.getByTestId('modal-title')).toHaveTextContent('Create New Note');
+        
+        // Verify modal content contains expected elements
+        const modalContent = screen.getByTestId('modal-content');
+        expect(within(modalContent).getByText('Enter a name for the new note:')).toBeInTheDocument();
+        expect(within(modalContent).getByRole('textbox')).toBeInTheDocument();
+        expect(within(modalContent).getByRole('button', { name: 'Create' })).toBeInTheDocument();
+        expect(within(modalContent).getByRole('button', { name: 'Cancel' })).toBeInTheDocument();
+    });
+    
+    it('opens create note modal via folder button in tree viewer', async () => {
+        const user = userEvent.setup();
+        renderComponent();
+        
+        // Wait for component to be fully loaded
+        await screen.findByTestId('mock-note-tree-viewer');
+        
+        // Find and click the create note button for a specific folder
+        const folderNode = await screen.findByTestId('node-folder-1');
+        const createNoteButton = within(folderNode).getByTestId('create-note-folder-1');
+        await user.click(createNoteButton);
+        
+        // Verify modal is open with correct title
+        expect(screen.getByTestId('mock-modal')).toBeInTheDocument();
+        expect(screen.getByTestId('modal-title')).toHaveTextContent('Create New Note');
+    });
+    
+    it('opens create folder modal via root button', async () => {
+        const user = userEvent.setup();
+        renderComponent();
+        
+        // Wait for component to be fully loaded
+        await screen.findByTestId('mock-note-tree-viewer');
+        
+        // Click the "+ New Folder (Root)" button
+        const createFolderButton = screen.getByText('+ New Folder (Root)');
+        await user.click(createFolderButton);
+        
+        // Verify modal is open with correct title
+        const modal = screen.getByTestId('mock-modal');
+        expect(modal).toBeInTheDocument();
+        expect(screen.getByTestId('modal-title')).toHaveTextContent('Create New Folder');
+        
+        // Verify modal content contains expected elements
+        const modalContent = screen.getByTestId('modal-content');
+        expect(within(modalContent).getByText('Enter a name for the new folder:')).toBeInTheDocument();
+        expect(within(modalContent).getByRole('textbox')).toBeInTheDocument();
+        expect(within(modalContent).getByRole('button', { name: 'Create' })).toBeInTheDocument();
+    });
+    
+    it('opens create folder modal via tree viewer button', async () => {
+        const user = userEvent.setup();
+        renderComponent();
+        
+        // Wait for component to be fully loaded
+        await screen.findByTestId('mock-note-tree-viewer');
+        
+        // Find and click the create folder button for a specific folder
+        const folderNode = await screen.findByTestId('node-folder-1');
+        const createFolderButton = within(folderNode).getByTestId('create-folder-folder-1');
+        await user.click(createFolderButton);
+        
+        // Verify modal is open with correct title
+        expect(screen.getByTestId('mock-modal')).toBeInTheDocument();
+        expect(screen.getByTestId('modal-title')).toHaveTextContent('Create New Folder');
+    });
+    
+    it('opens rename folder modal via tree viewer button', async () => {
+        const user = userEvent.setup();
+        renderComponent();
+        
+        // Wait for component to be fully loaded
+        await screen.findByTestId('mock-note-tree-viewer');
+        
+        // Find and click the rename folder button
+        const folderNode = await screen.findByTestId('node-folder-1');
+        const renameFolderButton = within(folderNode).getByTestId('rename-folder-folder-1');
+        await user.click(renameFolderButton);
+        
+        // Verify modal is open with correct title
+        expect(screen.getByTestId('mock-modal')).toBeInTheDocument();
+        expect(screen.getByTestId('modal-title')).toHaveTextContent('Rename Folder');
+        
+        // Verify initial value in input is the current folder name
+        const modalContent = screen.getByTestId('modal-content');
+        const input = within(modalContent).getByRole('textbox');
+        expect(input).toHaveValue('Documents'); // The name of folder-1
+    });
+    
+    it('opens move note modal via tree viewer button', async () => {
+        const user = userEvent.setup();
+        renderComponent();
+        
+        // Wait for component to be fully loaded
+        await screen.findByTestId('mock-note-tree-viewer');
+        
+        // Find and click the move note button
+        const noteNode = await screen.findByTestId('node-note-1');
+        const moveNoteButton = within(noteNode).getByTestId('move-note-note-1');
+        await user.click(moveNoteButton);
+        
+        // Verify modal is open with correct title
+        expect(screen.getByTestId('mock-modal')).toBeInTheDocument();
+        expect(screen.getByTestId('modal-title')).toHaveTextContent('Move Note');
+        
+        // Verify dropdown contains folder options
+        const modalContent = screen.getByTestId('modal-content');
+        const select = within(modalContent).getByRole('combobox');
+        expect(select).toBeInTheDocument();
+        expect(within(select).getAllByRole('option').length).toBeGreaterThanOrEqual(3); // Root, Documents, Projects
+    });
+    
+    // --- Create Note Modal Tests ---
+    it('creates note via modal with valid input', async () => {
+        const user = userEvent.setup();
+        renderComponent();
+        
+        // Wait for component to be fully loaded
+        await screen.findByTestId('mock-note-tree-viewer');
+        
+        // Open create note modal
+        await user.click(screen.getByText('+ New Note (Root)'));
+        
+        // Type a note title and submit
+        const modalContent = screen.getByTestId('modal-content');
+        await user.type(within(modalContent).getByRole('textbox'), NEW_NOTE_TITLE);
+        await user.click(within(modalContent).getByRole('button', { name: 'Create' }));
+        
+        // Verify API was called with correct params
+        expect(api.createNote).toHaveBeenCalledWith(TEST_PROJECT_ID, expect.objectContaining({
+            title: NEW_NOTE_TITLE,
+            folder_path: '/'
+        }));
+        
+        // Verify modal is closed after successful submission
+        await waitFor(() => {
+            expect(screen.queryByTestId('mock-modal')).not.toBeInTheDocument();
+        });
+        
+        // Verify note tree was refreshed
+        expect(api.getNoteTree).toHaveBeenCalledTimes(2); // Initial load + after creation
+    });
+    
+    it('shows error for empty note title and prevents API call', async () => {
+        const user = userEvent.setup();
+        renderComponent();
+        
+        // Wait for component to be fully loaded
+        await screen.findByTestId('mock-note-tree-viewer');
+        
+        // Open create note modal
+        await user.click(screen.getByText('+ New Note (Root)'));
+        
+        // Submit without typing anything
+        const modalContent = screen.getByTestId('modal-content');
+        await user.click(within(modalContent).getByRole('button', { name: 'Create' }));
+        
+        // Verify error message is displayed
+        expect(within(modalContent).getByText('Please enter a valid note name')).toBeInTheDocument();
+        
+        // Verify API was not called
+        expect(api.createNote).not.toHaveBeenCalled();
+        
+        // Verify modal is still open
+        expect(screen.getByTestId('mock-modal')).toBeInTheDocument();
+    });
+    
+    // --- Create Folder Modal Tests ---
+    it('creates folder via modal with valid input', async () => {
+        const user = userEvent.setup();
+        renderComponent();
+        
+        // Wait for component to be fully loaded
+        await screen.findByTestId('mock-note-tree-viewer');
+        
+        // Open create folder modal
+        await user.click(screen.getByText('+ New Folder (Root)'));
+        
+        // Type a folder name and submit
+        const modalContent = screen.getByTestId('modal-content');
+        await user.type(within(modalContent).getByRole('textbox'), NEW_FOLDER_NAME);
+        await user.click(within(modalContent).getByRole('button', { name: 'Create' }));
+        
+        // Verify API was called with correct params - specially check .folder title
+        expect(api.createNote).toHaveBeenCalledWith(TEST_PROJECT_ID, expect.objectContaining({
+            title: '.folder',
+            folder_path: `/${NEW_FOLDER_NAME}`
+        }));
+        
+        // Verify modal is closed after successful submission
+        await waitFor(() => {
+            expect(screen.queryByTestId('mock-modal')).not.toBeInTheDocument();
+        });
+        
+        // Verify note tree was refreshed
+        expect(api.getNoteTree).toHaveBeenCalledTimes(2); // Initial load + after creation
+    });
+    
+    it('shows error for folder name with slashes and prevents API call', async () => {
+        const user = userEvent.setup();
+        renderComponent();
+        
+        // Wait for component to be fully loaded
+        await screen.findByTestId('mock-note-tree-viewer');
+        
+        // Open create folder modal
+        await user.click(screen.getByText('+ New Folder (Root)'));
+        
+        // Type a folder name with slashes and submit
+        const modalContent = screen.getByTestId('modal-content');
+        await user.type(within(modalContent).getByRole('textbox'), 'Invalid/Folder/Name');
+        await user.click(within(modalContent).getByRole('button', { name: 'Create' }));
+        
+        // Verify error message is displayed
+        expect(within(modalContent).getByText('Folder names cannot contain "/" characters')).toBeInTheDocument();
+        
+        // Verify API was not called
+        expect(api.createNote).not.toHaveBeenCalled();
+        
+        // Verify modal is still open
+        expect(screen.getByTestId('mock-modal')).toBeInTheDocument();
+    });
+    
+    // --- Rename Folder Modal Tests ---
+    it('renames folder via modal with valid input', async () => {
+        const user = userEvent.setup();
+        renderComponent();
+        
+        // Wait for component to be fully loaded
+        await screen.findByTestId('mock-note-tree-viewer');
+        
+        // Find and open rename folder modal
+        const folderNode = await screen.findByTestId('node-folder-1');
+        await user.click(within(folderNode).getByTestId('rename-folder-folder-1'));
+        
+        // Clear the input and type a new folder name
+        const modalContent = screen.getByTestId('modal-content');
+        const input = within(modalContent).getByRole('textbox');
+        await user.clear(input);
+        await user.type(input, 'Renamed Folder');
+        await user.click(within(modalContent).getByRole('button', { name: 'Rename' }));
+        
+        // Verify API was called with correct params
+        expect(api.renameFolder).toHaveBeenCalledWith(TEST_PROJECT_ID, {
+            old_path: '/Documents',
+            new_name: 'Renamed Folder'
+        });
+        
+        // Verify modal is closed after successful submission
+        await waitFor(() => {
+            expect(screen.queryByTestId('mock-modal')).not.toBeInTheDocument();
+        });
+        
+        // Verify note tree was refreshed
+        expect(api.getNoteTree).toHaveBeenCalledTimes(2); // Initial load + after rename
+    });
+    
+    it('does not call API when folder name is unchanged', async () => {
+        const user = userEvent.setup();
+        renderComponent();
+        
+        // Wait for component to be fully loaded
+        await screen.findByTestId('mock-note-tree-viewer');
+        
+        // Find and open rename folder modal
+        const folderNode = await screen.findByTestId('node-folder-1');
+        await user.click(within(folderNode).getByTestId('rename-folder-folder-1'));
+        
+        // Submit without changing the input value
+        const modalContent = screen.getByTestId('modal-content');
+        await user.click(within(modalContent).getByRole('button', { name: 'Rename' }));
+        
+        // Verify API was not called
+        expect(api.renameFolder).not.toHaveBeenCalled();
+        
+        // Verify modal is closed
+        await waitFor(() => {
+            expect(screen.queryByTestId('mock-modal')).not.toBeInTheDocument();
+        });
+    });
+    
+    // --- Move Note Modal Tests ---
+    it('moves note via modal to different folder', async () => {
+        const user = userEvent.setup();
+        renderComponent();
+        
+        // Wait for component to be fully loaded
+        await screen.findByTestId('mock-note-tree-viewer');
+        
+        // Find and open move note modal
+        // First verify folder-1 (Documents) exists
+        const folderNode = await screen.findByTestId('node-folder-1');
+        expect(folderNode).toBeInTheDocument();
+        
+        // Ensure the note inside the folder can be found
+        const noteId = MOCK_TREE_DATA_TEMPLATE[0].children[0].note_id; // note-1
+        // Get node based on note_id
+        const noteNode = await screen.findByTestId(`node-${noteId}`);
+        expect(noteNode).toBeInTheDocument();
+        
+        // Then click the move button
+        await user.click(within(noteNode).getByTestId(`move-note-${noteId}`));
+        
+        // Select a different folder and submit
+        const modalContent = screen.getByTestId('modal-content');
+        const select = within(modalContent).getByRole('combobox');
+        // Note is currently in /Documents, we'll move it to /Projects
+        await user.selectOptions(select, '/Projects');
+        await user.click(within(modalContent).getByRole('button', { name: 'Move' }));
+        
+        // Verify API was called with correct params
+        expect(api.updateNote).toHaveBeenCalledWith(TEST_PROJECT_ID, 'note-1', {
+            folder_path: '/Projects'
+        });
+        
+        // Verify modal is closed after successful submission
+        await waitFor(() => {
+            expect(screen.queryByTestId('mock-modal')).not.toBeInTheDocument();
+        });
+        
+        // Verify note tree was refreshed
+        expect(api.getNoteTree).toHaveBeenCalledTimes(2); // Initial load + after move
+    });
+    
+    it('does not call API when note destination is unchanged', async () => {
+        const user = userEvent.setup();
+        renderComponent();
+        
+        // Wait for component to be fully loaded
+        await screen.findByTestId('mock-note-tree-viewer');
+        
+        // Find and open move note modal
+        // First verify folder-1 (Documents) exists
+        const folderNode = await screen.findByTestId('node-folder-1');
+        expect(folderNode).toBeInTheDocument();
+        
+        // Ensure the note inside the folder can be found
+        const noteId = MOCK_TREE_DATA_TEMPLATE[0].children[0].note_id; // note-1
+        // Get node based on note_id
+        const noteNode = await screen.findByTestId(`node-${noteId}`);
+        expect(noteNode).toBeInTheDocument();
+        
+        // Then click the move button
+        await user.click(within(noteNode).getByTestId(`move-note-${noteId}`));
+        
+        // Select the same folder and submit
+        const modalContent = screen.getByTestId('modal-content');
+        const select = within(modalContent).getByRole('combobox');
+        await user.selectOptions(select, '/Documents'); // Same as current location
+        await user.click(within(modalContent).getByRole('button', { name: 'Move' }));
+        
+        // Verify API was not called
+        expect(api.updateNote).not.toHaveBeenCalled();
+        
+        // Verify modal is closed
+        await waitFor(() => {
+            expect(screen.queryByTestId('mock-modal')).not.toBeInTheDocument();
+        });
+    });
+    
+    // --- Busy State Tests ---
+    it('disables buttons during note creation API call', async () => {
+        const user = userEvent.setup();
+        
+        // Mock a delayed API response to test busy state
+        api.createNote.mockImplementationOnce(() => new Promise(resolve => {
+            setTimeout(() => resolve({ data: { id: 'new-note-id' } }), 100);
+        }));
+        
+        renderComponent();
+        
+        // Wait for component to be fully loaded
+        await screen.findByTestId('mock-note-tree-viewer');
+        
+        // Open create note modal
+        await user.click(screen.getByText('+ New Note (Root)'));
+        
+        // Type a note title and submit
+        const modalContent = screen.getByTestId('modal-content');
+        await user.type(within(modalContent).getByRole('textbox'), NEW_NOTE_TITLE);
+        await user.click(within(modalContent).getByRole('button', { name: 'Create' }));
+        
+        // Check that buttons are disabled during API call
+        expect(within(modalContent).getByRole('button', { name: 'Create' })).toBeDisabled();
+        expect(within(modalContent).getByRole('button', { name: 'Cancel' })).toBeDisabled();
+        
+        // Verify tree viewer shows busy state
+        expect(screen.getByTestId('is-busy-prop')).toHaveTextContent('true');
+        
+        // Wait for API call to complete
+        await waitFor(() => {
+            expect(screen.queryByTestId('mock-modal')).not.toBeInTheDocument();
+        });
+    });
+    
+    // --- Error Handling Tests ---
+    it('shows error message when API call fails', async () => {
+        const user = userEvent.setup();
+        
+        // Mock API failure
+        const errorMessage = 'Server error: Could not create note';
+        api.createNote.mockRejectedValueOnce(new Error(errorMessage));
+        
+        renderComponent();
+        
+        // Wait for component to be fully loaded
+        await screen.findByTestId('mock-note-tree-viewer');
+        
+        // Open create note modal
+        await user.click(screen.getByText('+ New Note (Root)'));
+        
+        // Type a note title and submit
+        const modalContent = screen.getByTestId('modal-content');
+        await user.type(within(modalContent).getByRole('textbox'), NEW_NOTE_TITLE);
+        await user.click(within(modalContent).getByRole('button', { name: 'Create' }));
+        
+        // Check that error message is displayed
+        await waitFor(() => {
+            expect(within(modalContent).getByText(`Failed to perform action: ${errorMessage}`)).toBeInTheDocument();
+        });
+        
+        // Verify modal is still open
+        expect(screen.getByTestId('mock-modal')).toBeInTheDocument();
+        
+        // Verify buttons are re-enabled after error
+        expect(within(modalContent).getByRole('button', { name: 'Create' })).not.toBeDisabled();
+        expect(within(modalContent).getByRole('button', { name: 'Cancel' })).not.toBeDisabled();
+    });
+    
+    it('closes modal when close button is clicked', async () => {
+        const user = userEvent.setup();
+        renderComponent();
+        
+        // Wait for component to be fully loaded
+        await screen.findByTestId('mock-note-tree-viewer');
+        
+        // Open create note modal
+        await user.click(screen.getByText('+ New Note (Root)'));
+        
+        // Click the close button
+        await user.click(screen.getByTestId('modal-close-button'));
+        
+        // Verify modal is closed
+        await waitFor(() => {
+            expect(screen.queryByTestId('mock-modal')).not.toBeInTheDocument();
         });
     });
 
