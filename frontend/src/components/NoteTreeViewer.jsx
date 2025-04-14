@@ -224,6 +224,29 @@ Node.propTypes = {
 
 
 /**
+ * Filter out system notes (like '.folder') from the tree data
+ */
+function filterSystemNodes(nodes) {
+  if (!Array.isArray(nodes)) return [];
+  
+  return nodes
+    .filter(node => {
+      // Filter out notes with title '.folder'
+      if (node.type === 'note' && node.name === '.folder') {
+        return false;
+      }
+      return true;
+    })
+    .map(node => {
+      // Apply filtering recursively to children
+      if (node.children && node.children.length > 0) {
+        return { ...node, children: filterSystemNodes(node.children) };
+      }
+      return node;
+    });
+}
+
+/**
  * NoteTreeViewer Component - Renders the hierarchical note structure using react-arborist.
  */
 function NoteTreeViewer({
@@ -237,11 +260,14 @@ function NoteTreeViewer({
   if (!treeData) {
     return <div>Loading tree structure...</div>;
   }
+  
+  // Filter out system notes before rendering
+  const filteredTreeData = filterSystemNodes(treeData);
 
   return (
     <Tree
       ref={treeRef}
-      data={treeData}
+      data={filteredTreeData}
       openByDefault={false}
       width="100%"
       height={600}

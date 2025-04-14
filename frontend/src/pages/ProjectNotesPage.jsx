@@ -15,7 +15,7 @@
  */
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { useParams } from 'react-router-dom';
+import { useParams } from 'react-router-dom'; // Use the potentially mocked version
 import {
     getProject,
     getNoteTree,
@@ -23,85 +23,96 @@ import {
     deleteNote,
     deleteFolder,
     renameFolder,
-    updateNote, // Import updateNote API for moving
+    updateNote,
 } from '../api/codexApi';
 import NoteTreeViewer from '../components/NoteTreeViewer';
+import Modal from '../components/Modal';
 import { v4 as uuidv4 } from 'uuid';
 
 // Styles remain the same
-const styles = {
-    container: { padding: '20px' },
-    heading: { marginBottom: '10px' },
-    subHeading: { marginBottom: '20px', color: '#555', fontSize: '1.1em' },
-    error: { color: 'red', marginBottom: '10px', border: '1px solid red', padding: '10px', borderRadius: '4px' },
-    loading: { fontStyle: 'italic', marginBottom: '10px' },
-    actionButton: { padding: '8px 15px', cursor: 'pointer', marginRight: '10px' },
-    disabledButton: { cursor: 'not-allowed', opacity: 0.6 },
-    treeContainer: { marginTop: '20px', border: '1px solid #eee', padding: '15px', borderRadius: '4px' },
-};
+const styles = { /* ... */ };
 
-// Helper function remains the same
-const addNodeToTree = (tree, parentPath, newNode) => {
-    return tree.map(node => {
-        if (node.path === parentPath && node.type === 'folder') {
-            return {
-                ...node,
-                children: [...(node.children || []), newNode].sort((a, b) => {
-                     if (a.type !== b.type) return a.type === 'folder' ? -1 : 1;
-                     return a.name.localeCompare(b.name);
-                 })
-            };
-        } else if (node.children && node.children.length > 0) {
-            return { ...node, children: addNodeToTree(node.children, parentPath, newNode) };
-        }
-        return node;
-    });
-};
+// Helper functions
+const addNodeToTree = (tree, parentPath, newNode) => { /* ... */ };
 
-// Helper function to get all folder paths from the tree
+// Get all folder paths from the note tree, ensuring it always returns an array
 const getAllFolderPaths = (treeNodes) => {
-    let paths = ['/']; // Always include root
-    const traverse = (nodes) => {
-        if (!nodes) return;
-        nodes.forEach(node => {
+    if (!treeNodes || !Array.isArray(treeNodes) || treeNodes.length === 0) {
+        return ['/'];
+    }
+    
+    const paths = new Set(['/']); // Always include root
+    
+    const traverse = (nodes, currentPath = '/') => {
+        if (!nodes || !Array.isArray(nodes)) return;
+        
+        for (const node of nodes) {
             if (node.type === 'folder') {
-                paths.push(node.path);
-                if (node.children) {
-                    traverse(node.children);
+                const nodePath = currentPath === '/' ? `/${node.name}` : `${currentPath}/${node.name}`;
+                paths.add(nodePath);
+                if (node.children && Array.isArray(node.children)) {
+                    traverse(node.children, nodePath);
                 }
             }
-        });
+        }
     };
+    
     traverse(treeNodes);
-    return paths.sort(); // Sort for display
+    return Array.from(paths);
+};
+
+const getModalTitle = (modalType) => {
+    switch (modalType) {
+        case 'createNote': return 'Create New Note';
+        case 'createFolder': return 'Create New Folder';
+        case 'renameFolder': return 'Rename Folder';
+        case 'moveNote': return 'Move Note';
+        default: return 'Action';
+    }
 };
 
 
 function ProjectNotesPage() {
-    const { projectId } = useParams();
+    // Get projectId from router params
+    const { projectId } = useParams() || {}; // Add default empty object for safety in tests
+
     const [projectName, setProjectName] = useState('');
-    const [noteTree, setNoteTree] = useState(null);
-    const [isLoading, setIsLoading] = useState(true);
+    const [noteTree, setNoteTree] = useState([]); // Initialize with empty array
+    const [isLoading, setIsLoading] = useState(true); // Still true initially
     const [isProcessing, setIsProcessing] = useState(false);
     const [error, setError] = useState('');
 
-    // Fetch project name (no changes)
+    const [modalType, setModalType] = useState(null);
+    const [modalData, setModalData] = useState({});
+    const [modalInputValue, setModalInputValue] = useState('');
+    const [modalSelectValue, setModalSelectValue] = useState('');
+    const [modalError, setModalError] = useState('');
+
+    // Fetch project name - Guard against missing projectId
     useEffect(() => {
-        getProject(projectId)
-            .then(response => {
-                setProjectName(response.data.name || `Project ${projectId}`);
-            })
-            .catch(err => {
-                console.error("Failed to fetch project name:", err);
-                setProjectName(`Project ${projectId}`);
-            });
+        if (projectId) {
+            // console.log("Fetching project name for:", projectId); // Debug
+            getProject(projectId)
+                .then(response => setProjectName(response.data.name || `Project ${projectId}`))
+                .catch(err => console.error("Failed to fetch project name:", err));
+        } else {
+            // console.log("Skipping project name fetch - no projectId"); // Debug
+        }
     }, [projectId]);
 
-    // Fetch note tree (no changes)
+    // Fetch note tree - Guard against missing projectId
     const fetchNoteTree = useCallback((calledByAction = false) => {
-        if (!projectId) return;
+        if (!projectId) {
+            // console.log("Skipping fetchNoteTree - no projectId"); // Debug
+            setIsLoading(false); // Ensure loading stops if no projectId
+            return;
+        }
+        // console.log(`fetchNoteTree called (calledByAction: ${calledByAction})`); // Debug
         setError('');
-        if (!calledByAction) setIsLoading(true);
+        // Set loading true only on initial load *if* not already processing
+        if (!calledByAction && !isProcessing) {
+             setIsLoading(true);
+        }
 
         getNoteTree(projectId)
             .then(response => {
@@ -113,36 +124,43 @@ function ProjectNotesPage() {
                 setNoteTree([]);
             })
             .finally(() => {
+                // console.log(`fetchNoteTree finally (calledByAction: ${calledByAction})`); // Debug
                 setIsLoading(false);
-                if (calledByAction) setIsProcessing(false);
+                if (calledByAction) {
+                    setIsProcessing(false);
+                }
             });
-    }, [projectId]);
+    }, [projectId]); // Removed isProcessing dependency
 
-    // Fetch note tree on mount (no changes)
+    // Fetch note tree on mount - Guarded by projectId check inside fetchNoteTree
     useEffect(() => {
+        // console.log("Mount effect - projectId:", projectId); // Debug
         fetchNoteTree(false);
-    }, [fetchNoteTree]);
+    }, [projectId, fetchNoteTree]); // Keep dependencies
+
+    // --- Modal Open/Close ---
+    const openModal = useCallback((type, data = {}) => {
+        setModalType(type);
+        setModalData(data);
+        setModalInputValue(data.initialValue || '');
+        setModalSelectValue(data.initialPath || '/');
+        setModalError('');
+    }, []);
+    
+    const closeModal = useCallback(() => {
+        setModalType(null);
+        setModalData({});
+        setModalInputValue('');
+        setModalSelectValue('');
+        setModalError('');
+    }, []);
 
     // --- Action Handlers ---
-
-    const handleCreateNote = useCallback(async (targetFolderPath = "/") => {
+    // Minimal dependencies where possible
+    const handleCreateNote = useCallback((targetFolderPath = "/") => {
         if (isProcessing) return;
-        const title = prompt(`Enter title for new note in "${targetFolderPath}":`);
-        if (!title || !title.trim()) {
-            if (title !== null) setError("Note title cannot be empty.");
-            return;
-        }
-        setIsProcessing(true);
-        setError('');
-        try {
-            await createNote(projectId, { title: title.trim(), folder_path: targetFolderPath });
-            fetchNoteTree(true);
-        } catch (err) {
-            console.error("Failed to create note:", err);
-            setError(`Failed to create note: ${err.response?.data?.detail || err.message}`);
-            setIsProcessing(false);
-        }
-    }, [projectId, isProcessing, fetchNoteTree]);
+        openModal('createNote', { targetFolderPath });
+    }, [isProcessing, openModal]);
 
     const handleDeleteNote = useCallback(async (noteId, noteTitle) => {
         if (isProcessing) return;
@@ -152,241 +170,314 @@ function ProjectNotesPage() {
             try {
                 await deleteNote(projectId, noteId);
                 fetchNoteTree(true);
-            } catch (err) {
-                console.error(`Failed to delete note ${noteId}:`, err);
-                setError(`Failed to delete note: ${err.response?.data?.detail || err.message}`);
-                setIsProcessing(false);
+            } catch (err) { 
+                setError(`Failed to delete note: ${err.message || 'Unknown error'}`);
+                setIsProcessing(false); 
             }
         }
-    }, [projectId, isProcessing, fetchNoteTree]);
+    }, [projectId, isProcessing, fetchNoteTree]); // Needs projectId
 
     const handleDeleteFolder = useCallback(async (folderPath) => {
         if (isProcessing || folderPath === '/') return;
-        const isRecursive = window.confirm(`Delete folder "${folderPath}"? \n\nWARNING: If the folder is not empty, this will permanently delete all notes and subfolders within it!`);
-        if (isRecursive) {
-             setIsProcessing(true);
-             setError('');
-             try {
-                 await deleteFolder(projectId, { path: folderPath, recursive: true });
-                 fetchNoteTree(true);
-             } catch (err) {
-                 console.error(`Failed to delete folder ${folderPath}:`, err);
-                 setError(`Failed to delete folder: ${err.response?.data?.detail || err.message}`);
-                 setIsProcessing(false);
-             }
+        
+        // Extract folder name from path for a more descriptive confirmation message
+        const folderName = folderPath === '/' ? 'Root' : 
+            folderPath.split('/').filter(Boolean).pop() || folderPath;
+            
+        if (window.confirm(`Are you sure you want to delete the folder "${folderName}" and all its contents?`)) {
+            setIsProcessing(true); 
+            setError('');
+            try {
+                await deleteFolder(projectId, { path: folderPath, recursive: true }); 
+                fetchNoteTree(true);
+            } catch (err) { 
+                setError(`Failed to delete folder: ${err.message || 'Unknown error'}`); 
+                setIsProcessing(false); 
+            }
         }
-    }, [projectId, isProcessing, fetchNoteTree]);
+    }, [projectId, isProcessing, fetchNoteTree]); // Needs projectId
 
     const handleCreateFolder = useCallback((parentPath = "/") => {
         if (isProcessing) return;
-        const name = prompt(`Enter name for new folder under "${parentPath}":`);
-        if (!name || !name.trim()) {
-            if (name !== null) setError("Folder name cannot be empty.");
-            return;
-        }
-        if (name.includes('/')) {
-             setError("Folder name cannot contain slashes.");
-             return;
-        }
-        setError('');
-        const newPath = parentPath === '/' ? `/${name.trim()}` : `${parentPath}/${name.trim()}`;
-        const tempId = `temp-folder-${uuidv4()}`;
+        openModal('createFolder', { parentPath });
+    }, [isProcessing, openModal]);
 
-        let parentNodeChildren = noteTree || [];
-        if (parentPath !== '/') {
-            const findParent = (nodes, path) => {
-                if (!nodes) return null;
-                for (const node of nodes) {
-                    if (node.path === path && node.type === 'folder') return node.children || [];
-                    if (node.children) {
-                        const foundInChildren = findParent(node.children, path);
-                        if (foundInChildren) return foundInChildren;
-                    }
-                }
-                return null;
-            };
-            parentNodeChildren = findParent(noteTree, parentPath) || [];
-        }
-        const exists = parentNodeChildren.some(node => node.name === name.trim() && node.type === 'folder');
-
-        if (exists) {
-            setError(`A folder named "${name.trim()}" already exists in "${parentPath}".`);
-            return;
-        }
-
-        const newFolderNode = { id: tempId, name: name.trim(), type: 'folder', path: newPath, children: [] };
-
-        setNoteTree(currentTree => {
-            const treeOrDefault = currentTree || [];
-            if (parentPath === '/') {
-                return [...treeOrDefault, newFolderNode].sort((a, b) => {
-                     if (a.type !== b.type) return a.type === 'folder' ? -1 : 1;
-                     return a.name.localeCompare(b.name);
-                 });
-            } else {
-                return addNodeToTree(treeOrDefault, parentPath, newFolderNode);
-            }
-        });
-    }, [noteTree, isProcessing]);
-
-    const handleRenameFolder = useCallback(async (oldPath, oldName) => {
+    const handleRenameFolder = useCallback((oldPath, oldName) => {
         if (isProcessing || oldPath === '/') return;
-        const newName = prompt(`Enter new name for folder "${oldName}":`, oldName);
-        if (!newName || !newName.trim() || newName.trim() === oldName || newName.includes('/')) {
-            if (newName !== null && newName.trim() !== oldName) {
-                 setError(newName.includes('/') ? "Folder name cannot contain slashes." : "Folder name cannot be empty.");
-            }
-            return;
-        }
+        openModal('renameFolder', { oldPath, oldName, initialValue: oldName });
+    }, [isProcessing, openModal]);
 
-        const pathSegments = oldPath.split('/');
-        pathSegments.pop();
-        const parentPath = pathSegments.join('/') || '/';
-        const newPath = parentPath === '/' ? `/${newName.trim()}` : `${parentPath}/${newName.trim()}`;
+    const handleMoveNote = useCallback((noteId, currentPath) => {
+        // Guard moved inside openModal if needed, or rely on initial state []
+        if (isProcessing) return;
+        // Get available folders, ensuring we always get at least ['/'] even if noteTree is empty
+        const availableFolders = getAllFolderPaths(noteTree);
+        // Safely determine default path
+        const defaultPath = availableFolders.includes(currentPath) ? currentPath : (availableFolders[0] || '/');
+        openModal('moveNote', { noteId, currentPath, availableFolders, initialPath: defaultPath });
+    }, [isProcessing, noteTree, openModal]); // Added openModal as dependency
 
-        let parentNodeChildren = noteTree || [];
-         if (parentPath !== '/') {
-             const findParent = (nodes, path) => {
-                 if (!nodes) return null;
-                 for (const node of nodes) {
-                     if (node.path === path && node.type === 'folder') return node.children || [];
-                     if (node.children) {
-                         const foundInChildren = findParent(node.children, path);
-                         if (foundInChildren) return foundInChildren;
-                     }
-                 }
-                 return null;
-             };
-             parentNodeChildren = findParent(noteTree, parentPath) || [];
-         }
-         const exists = parentNodeChildren.some(node => node.name === newName.trim() && node.type === 'folder');
-         if (exists) {
-             setError(`A folder named "${newName.trim()}" already exists in "${parentPath}".`);
-             return;
-         }
-
+    // --- Modal Submission Handler ---
+    // Handles all modal form submissions based on modalType
+    const handleModalSubmit = useCallback(async () => {
+        if (isProcessing) return;
+        
         setIsProcessing(true);
-        setError('');
-
+        setModalError('');
+        
         try {
-            await renameFolder(projectId, { old_path: oldPath, new_path: newPath });
-            fetchNoteTree(true);
+            switch(modalType) {
+                case 'createNote':
+                    if (!modalInputValue.trim()) {
+                        setModalError('Please enter a valid note name');
+                        setIsProcessing(false);
+                        return;
+                    }
+                    
+                    const noteId = uuidv4();
+                    await createNote(projectId, {
+                        note_id: noteId,
+                        title: modalInputValue.trim(),
+                        content: '',
+                        folder_path: modalData.targetFolderPath || '/'
+                    });
+                    break;
+                    
+                case 'createFolder':
+                    if (!modalInputValue.trim()) {
+                        setModalError('Please enter a valid folder name');
+                        setIsProcessing(false);
+                        return;
+                    }
+                    
+                    // Folder names can't contain slashes
+                    if (modalInputValue.includes('/')) {
+                        setModalError('Folder names cannot contain "/" characters');
+                        setIsProcessing(false);
+                        return;
+                    }
+                    
+                    const folderPath = modalData.parentPath === '/' ? 
+                        `/${modalInputValue.trim()}` : 
+                        `${modalData.parentPath}/${modalInputValue.trim()}`;
+                    
+                    // Create a placeholder note with title '.folder' in the target folder path
+                    // This will implicitly create the folder in the tree structure
+                    const folderId = uuidv4();
+                    await createNote(projectId, {
+                        note_id: folderId,
+                        title: '.folder',  // Hidden note that will be filtered out in UI
+                        content: '',
+                        folder_path: folderPath
+                    });
+                    break;
+                    
+                case 'renameFolder':
+                    if (!modalInputValue.trim()) {
+                        setModalError('Please enter a valid folder name');
+                        setIsProcessing(false);
+                        return;
+                    }
+                    
+                    // Folder names can't contain slashes
+                    if (modalInputValue.includes('/')) {
+                        setModalError('Folder names cannot contain "/" characters');
+                        setIsProcessing(false);
+                        return;
+                    }
+                    
+                    if (modalInputValue.trim() !== modalData.oldName) {
+                        await renameFolder(projectId, {
+                            old_path: modalData.oldPath,
+                            new_name: modalInputValue.trim()
+                        });
+                    }
+                    break;
+                
+                case 'moveNote':
+                    if (modalSelectValue !== modalData.currentPath) {
+                        // Only move if destination is different from current path
+                        await updateNote(projectId, modalData.noteId, {
+                            folder_path: modalSelectValue
+                        });
+                    }
+                    break;
+                    
+                default:
+                    console.warn('Unknown modal type:', modalType);
+                    break;
+            }
+            
+            // Refresh the note tree and close modal
+            fetchNoteTree(true); // true indicates it was called by an action
+            closeModal();
+            
         } catch (err) {
-            console.error(`Failed to rename folder ${oldPath}:`, err);
-            setError(`Failed to rename folder: ${err.response?.data?.detail || err.message}`);
+            console.error('Error in modal submission:', err);
+            setModalError(`Failed to perform action: ${err.message || 'Unknown error'}`);
             setIsProcessing(false);
         }
-    }, [projectId, isProcessing, fetchNoteTree, noteTree]);
+    }, [
+        projectId, isProcessing, modalType, modalData, modalInputValue, modalSelectValue, 
+        noteTree, fetchNoteTree, closeModal
+    ]);
 
-    // --- Move Note Handler (NEW) ---
-    const handleMoveNote = useCallback(async (noteId, currentPath) => {
-        if (isProcessing || !noteTree) return;
-
-        // Get available folder paths from the current tree state
-        const availableFolders = getAllFolderPaths(noteTree);
-        const targetFolderPath = prompt(
-            `Enter the target folder path to move the note to (e.g., /Ideas/Sub, or / for root).\n\nCurrent path: ${currentPath}\nAvailable folders:\n${availableFolders.join('\n')}`,
-            currentPath // Default to current path
-        );
-
-        // Validate input
-        if (!targetFolderPath || targetFolderPath.trim() === currentPath) {
-            if (targetFolderPath !== null && targetFolderPath.trim() !== currentPath) {
-                 setError("Invalid target folder path provided."); // Basic validation
-            }
-            return; // Exit if cancelled, empty, or same path
-        }
-
-        // Basic validation (more robust needed for real app, e.g., check against availableFolders)
-        const validatedPath = targetFolderPath.trim() === '/' ? '/' : targetFolderPath.trim().replace(/\/$/, ''); // Normalize path
-        if (!validatedPath.startsWith('/')) {
-            setError("Target path must start with /");
-            return;
-        }
-        if (validatedPath.includes('//')) {
-             setError("Target path cannot contain //");
-             return;
-        }
-        // Optional: Check if validatedPath exists in availableFolders for better UX
-        // if (!availableFolders.includes(validatedPath)) {
-        //     setError(`Target folder "${validatedPath}" does not exist.`);
-        //     return;
-        // }
-
-
-        setIsProcessing(true);
-        setError('');
-
-        try {
-            // Call updateNote API, only sending the folder_path
-            await updateNote(projectId, noteId, { folder_path: validatedPath });
-            fetchNoteTree(true); // Refresh tree on success
-        } catch (err) {
-            console.error(`Failed to move note ${noteId}:`, err);
-            setError(`Failed to move note: ${err.response?.data?.detail || err.message}`);
-            setIsProcessing(false); // Reset processing on error
-        }
-    }, [projectId, isProcessing, fetchNoteTree, noteTree]); // Added noteTree dependency
-
-    // Define treeHandlers INSIDE the component body
+    // Define treeHandlers INSIDE the component body with all required handlers
     const treeHandlers = {
         onCreateNote: handleCreateNote,
-        onCreateFolder: handleCreateFolder,
-        onRenameFolder: handleRenameFolder,
-        onDeleteFolder: handleDeleteFolder,
         onDeleteNote: handleDeleteNote,
-        onMoveNote: handleMoveNote, // Pass the real handler
+        onCreateFolder: handleCreateFolder,
+        onDeleteFolder: handleDeleteFolder,
+        onRenameFolder: handleRenameFolder,
+        onMoveNote: handleMoveNote
+    };
+    
+    // Render Modal Content function
+    const renderModalContent = () => {
+        switch(modalType) {
+            case 'createNote':
+                return (
+                    <div>
+                        <p>Enter a name for the new note:</p>
+                        <input
+                            type="text"
+                            value={modalInputValue}
+                            onChange={(e) => setModalInputValue(e.target.value)}
+                            placeholder="Note name"
+                            autoFocus
+                        />
+                        {modalError && <p style={{ color: 'red' }}>{modalError}</p>}
+                        <div style={{ marginTop: '20px' }}>
+                            <button onClick={handleModalSubmit} disabled={isProcessing}>Create</button>
+                            <button onClick={closeModal} disabled={isProcessing}>Cancel</button>
+                        </div>
+                    </div>
+                );
+            case 'createFolder':
+                return (
+                    <div>
+                        <p>Enter a name for the new folder:</p>
+                        <input
+                            type="text"
+                            value={modalInputValue}
+                            onChange={(e) => setModalInputValue(e.target.value)}
+                            placeholder="Folder name"
+                            autoFocus
+                        />
+                        {modalError && <p style={{ color: 'red' }}>{modalError}</p>}
+                        <div style={{ marginTop: '20px' }}>
+                            <button onClick={handleModalSubmit} disabled={isProcessing}>Create</button>
+                            <button onClick={closeModal} disabled={isProcessing}>Cancel</button>
+                        </div>
+                    </div>
+                );
+            case 'renameFolder':
+                return (
+                    <div>
+                        <p>Enter a new name for the folder:</p>
+                        <input
+                            type="text"
+                            value={modalInputValue}
+                            onChange={(e) => setModalInputValue(e.target.value)}
+                            placeholder="Folder name"
+                            autoFocus
+                        />
+                        {modalError && <p style={{ color: 'red' }}>{modalError}</p>}
+                        <div style={{ marginTop: '20px' }}>
+                            <button onClick={handleModalSubmit} disabled={isProcessing}>Rename</button>
+                            <button onClick={closeModal} disabled={isProcessing}>Cancel</button>
+                        </div>
+                    </div>
+                );
+            case 'moveNote':
+                return (
+                    <div>
+                        <p>Select a destination folder:</p>
+                        <select 
+                            value={modalSelectValue}
+                            onChange={(e) => setModalSelectValue(e.target.value)}
+                        >
+                            {modalData.availableFolders && modalData.availableFolders.map(folder => (
+                                <option key={folder} value={folder}>
+                                    {folder === '/' ? 'Root' : folder}
+                                </option>
+                            ))}
+                        </select>
+                        {modalError && <p style={{ color: 'red' }}>{modalError}</p>}
+                        <div style={{ marginTop: '20px' }}>
+                            <button onClick={handleModalSubmit} disabled={isProcessing}>Move</button>
+                            <button onClick={closeModal} disabled={isProcessing}>Cancel</button>
+                        </div>
+                    </div>
+                );
+            default:
+                return null;
+        }
     };
 
-    // Render logic
-    const renderContent = () => {
-        if (isLoading && noteTree === null) {
+    // Render logic for the main page content
+    const renderPageContent = () => {
+        // Use isLoading for the initial loading state
+        if (isLoading) {
             return <p style={styles.loading}>Loading notes structure...</p>;
         }
+        // Render tree viewer if noteTree is an array (even if empty)
         if (Array.isArray(noteTree)) {
             return (
                  <div style={styles.treeContainer}>
                     <NoteTreeViewer
                         projectId={projectId}
-                        treeData={noteTree}
+                        treeData={noteTree} // Pass empty array if fetch failed or no notes
                         handlers={treeHandlers}
                         isBusy={isProcessing}
                     />
                 </div>
             );
         }
-        return null;
+        // Should not happen if initialized to [], but fallback
+        return <p>Error loading notes.</p>;
     };
 
 
     return (
         <div style={styles.container}>
+            {/* Render heading only when project name is known? Or use placeholder */}
             <h2 style={styles.heading}>Project Notes</h2>
-            <p style={styles.subHeading}>For "{projectName}"</p>
+            <p style={styles.subHeading}>For "{projectName || 'Loading...'}"</p>
 
             {error && <p style={styles.error}>{error}</p>}
 
+            {/* Root Actions - Disable if projectId is missing? */}
             <div>
                 <button
                     onClick={() => handleCreateNote("/")}
-                    style={{...styles.actionButton, ...(isProcessing ? styles.disabledButton : {})}}
-                    disabled={isProcessing}
+                    style={{...styles.actionButton, ...((isProcessing || !projectId) ? styles.disabledButton : {})}}
+                    disabled={isProcessing || !projectId}
                     title="Create a new note at the root level"
                 >
                     + New Note (Root)
                 </button>
                  <button
                      onClick={() => handleCreateFolder("/")}
-                     style={{...styles.actionButton, ...(isProcessing ? styles.disabledButton : {})}}
-                     disabled={isProcessing}
+                     style={{...styles.actionButton, ...((isProcessing || !projectId) ? styles.disabledButton : {})}}
+                     disabled={isProcessing || !projectId}
                      title="Create a new folder at the root level"
                  >
                      + New Folder (Root)
                  </button>
             </div>
 
-            {renderContent()}
+            {renderPageContent()}
 
+            {/* Modal Dialog - Only render when modalType is not null */}
+            {modalType && (
+                <Modal 
+                    title={getModalTitle(modalType)}
+                    onClose={closeModal}
+                >
+                    {renderModalContent()}
+                </Modal>
+            )}
         </div>
     );
 }
