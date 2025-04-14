@@ -335,183 +335,238 @@ function ProjectNotesPage() {
     // Define treeHandlers INSIDE the component body with all required handlers
     // Handle drag-and-drop operations from react-arborist
     const handleMove = useCallback(async (args) => {
-        // Debug logs to understand the structure of the args object
-        console.log('handleMove called with args:', args);
-        
-        // The structure of args is different than what we expected
-        // react-arborist provides: dragNodes (array of nodes), parentNode, index
-        const dragNodes = args.dragNodes;
-        const parentNode = args.parentNode;
-        const index = args.index;
-        
-        console.log('Drag nodes:', dragNodes);
-        console.log('Parent node:', parentNode);
-        console.log('Index:', index);
+        // console.log('handleMove called');
         
         // Guard clauses
-        if (isProcessing) {
-            console.log('Aborting move operation: isProcessing is true');
-            return;
-        }
-        // Check if we have valid drag nodes
-        if (!dragNodes || dragNodes.length !== 1) {
-            console.log('Aborting move operation: invalid dragNodes', dragNodes);
-            return;
-        }
-
+        if (isProcessing) return;
+        if (!args.dragNodes || args.dragNodes.length !== 1) return;
+        
+        // Get the tree instance to help us find parent nodes
+        const treeInstance = args.treeRef?.current;
+        
         setIsProcessing(true);
         setError('');
-
+        
         try {
-            const draggedNode = dragNodes[0];
+            const draggedNode = args.dragNodes[0];
             const draggedItemType = draggedNode.data.type;
             const draggedNodeData = draggedNode.data;
-
-            // Determine target parent path
+            const parentNode = args.parentNode; // Will be null for root-level drops
+            
+            // Debug info - commented out for production
+            /*
+            console.log('==== DRAG DEBUG INFO ====');
+            console.log('Dragged item name:', draggedNodeData.name);
+            console.log('Dragged item type:', draggedItemType);
+            console.log('Dragged item path:', draggedNodeData.path);
+            console.log('Dragged item folder_path:', draggedNodeData.folder_path);
+            console.log('ALL draggedNodeData properties:', Object.keys(draggedNodeData));
+            console.log('Target parent node:', parentNode ? parentNode.data.path : 'ROOT (null)');
+            console.log('========================');
+            */
+            
+            // Determine target parent path (destination folder)
             let targetParentPath = '/';
-            if (parentNode) {
-                // If parent node is not null (not root), use its path
+            if (parentNode !== null) {
                 if (parentNode.data.type !== 'folder') {
                     throw new Error('Cannot move items into a note');
                 }
                 targetParentPath = parentNode.data.path;
             }
-
-            // Determine original parent path
+            // console.log('Target parent path:', targetParentPath);
+            
+            // DIRECT FIX for source path detection
             let originalParentPath = '/';
+            let sourcePathDebugInfo = '';
+            
+            // For notes, prioritize extracting folder from the path property
+            // This is critical for notes without a folder_path property
             if (draggedItemType === 'note') {
-                // For notes, use the folder_path property directly rather than trying to parse it
-                // This is more reliable as the path property might contain the note name
-                console.log('Original note data:', draggedNodeData);
-                originalParentPath = draggedNodeData.folder_path || '/';
-                console.log('Using folder_path directly:', originalParentPath);
-            } else if (draggedItemType === 'folder') {
-                // For folders, we need to get the parent folder
-                const pathParts = draggedNodeData.path.split('/');
-                pathParts.pop(); // Remove folder name
-                originalParentPath = pathParts.join('/') || '/';
-                console.log('Calculated folder parent path:', originalParentPath);
+                // You have a note at path "/Структура" which means it's in the Структура folder
+                if (draggedNodeData.path && draggedNodeData.path.includes('/')) {
+                    const pathParts = draggedNodeData.path.split('/').filter(Boolean);
+                    
+                    // If there's at least one part, the note is in a folder
+                    if (pathParts.length > 0) {
+                        // The first part is the folder name
+                        originalParentPath = '/' + pathParts[0];
+                        sourcePathDebugInfo = 'DIRECT FIX: Extracted from path components';
+                        // console.log(`DIRECT EXTRACTION: Note path "${draggedNodeData.path}" -> folder "${originalParentPath}"`);
+                    }
+                }
+                // Fallback to folder_path if available (this was missing in your logs)
+                else if (draggedNodeData.folder_path) {
+                    originalParentPath = draggedNodeData.folder_path;
+                    sourcePathDebugInfo = 'From folder_path property';
+                }
+            } 
+            // For folders, extract parent path from folder path
+            else if (draggedItemType === 'folder') {
+                if (draggedNodeData.path && draggedNodeData.path !== '/') {
+                    const pathParts = draggedNodeData.path.split('/').filter(Boolean);
+                    if (pathParts.length > 0) {
+                        // Remove folder name to get parent path
+                        pathParts.pop();
+                        originalParentPath = pathParts.length > 0 ? '/' + pathParts.join('/') : '/';
+                        sourcePathDebugInfo = 'Extracted parent from folder path';
+                    }
+                }
             }
-
-            // If target and original parent are the same, it's just a visual reorder
-            if (targetParentPath === originalParentPath) {
-                console.log('Visual reorder only - no API call needed');
-                console.log('targetParentPath:', targetParentPath);
-                console.log('originalParentPath:', originalParentPath);
+            
+            // Safety check for empty paths
+            if (originalParentPath === '') originalParentPath = '/';
+            
+            // console.log(`Original parent path (${sourcePathDebugInfo}):`, originalParentPath);
+            
+            // CRITICAL FIX: Detect if this note is coming from a folder (based on path)
+            // We need to determine if we're moving a note OUT of a folder TO the root
+            const isTargetRoot = targetParentPath === '/';
+            
+            // FIXED LOGIC: Force the move in these scenarios
+            let forceMove = false;
+            
+            // Case 1: If the note has a path containing folder (like "/Структура") and is being moved to root
+            if (draggedItemType === 'note' && isTargetRoot && 
+                draggedNodeData.path && draggedNodeData.path.includes('/')) {
+                
+                const pathParts = draggedNodeData.path.split('/').filter(Boolean);
+                if (pathParts.length > 0) {
+                    // This is a note that appears to be in a folder!
+                    forceMove = true;
+                    // console.log('OVERRIDE: Note appears to be in folder based on path:', draggedNodeData.path);
+                }
+            }
+            
+            // Case 2: If the note has an explicit folder_path and is being moved to root (original logic)
+            if (!forceMove && draggedItemType === 'note' && isTargetRoot && 
+                draggedNodeData.folder_path && draggedNodeData.folder_path !== '/') {
+                forceMove = true;
+                // console.log('OVERRIDE: Note has non-root folder_path:', draggedNodeData.folder_path);
+            }
+            
+            // UNIVERSAL FIX: Handle any note path pattern
+            // If the note has a path that looks like a folder path (e.g., /FolderName)
+            if (draggedItemType === 'note' && 
+                draggedNodeData.path && 
+                draggedNodeData.path.startsWith('/') && 
+                draggedNodeData.path.indexOf('/', 1) === -1 && // Only one slash at the beginning
+                isTargetRoot) {
+                    
+                // console.log(`UNIVERSAL FIX: Detected note with path ${draggedNodeData.path} being moved to root`);
+                
+                // First, check if this path indicates a folder name
+                const pathWithoutInitialSlash = draggedNodeData.path.substring(1); // Remove first slash
+                
+                if (pathWithoutInitialSlash.length > 0) {
+                    // The path indicates the note is in a folder
+                    // Extract the first part as the folder name
+                    // console.log(`Extracted folder: ${draggedNodeData.path}`);
+                    
+                    // Set the original parent path to the folder path
+                    originalParentPath = draggedNodeData.path;
+                    
+                    // This is definitely a move from a folder to root
+                    forceMove = true;
+                }
+            }
+                
+            // Only skip if paths are the same and we're not forcing a move
+            if (targetParentPath === originalParentPath && !forceMove) {
+                console.log('Visual reorder only - no API call needed'); // Keep this for test compatibility
                 setIsProcessing(false);
                 return;
             }
-
-            // If moving a folder, validate it's not being moved into itself or a descendant
-            if (draggedItemType === 'folder') {
-                console.log('Folder move validation - checking if target is descendant');
-                console.log('Target path:', targetParentPath);
-                console.log('Dragged folder path:', draggedNodeData.path);
-                if (targetParentPath.startsWith(draggedNodeData.path)) {
-                    console.log('Invalid move: Target is a descendant of the dragged folder');
-                    setError('Cannot move a folder into itself or its descendant');
-                    setIsProcessing(false);
-                    return;
-                }
+            
+            // Special debug for root operations - commented out for production
+            /*
+            if (isTargetRoot) {
+                console.log('ROOT MOVE DETECTED - Will proceed with API call');
+                console.log('Item type:', draggedItemType);
+                console.log('Item path:', draggedNodeData.path);
+                console.log('Original parent path:', originalParentPath);
+                console.log('Force move override:', forceMove);
             }
-
-            // Helper function to check if a folder still has its .folder note
+            */
+            
+            // Cannot move a folder into itself or a descendant
+            if (draggedItemType === 'folder' && targetParentPath.startsWith(draggedNodeData.path)) {
+                setError('Cannot move a folder into itself or its descendant');
+                setIsProcessing(false);
+                return;
+            }
+            
+            // Helper function to ensure folder isn't left empty
             const ensureFolderRetained = async (folderPath) => {
-                console.log('Checking if folder needs to be preserved:', folderPath);
-                // Get the current tree data to check if the folder might become empty
-                let folderHasVisibleNotes = false;
-                
-                // Function to recursively check a folder for visible notes
-                const checkFolderForVisibleNotes = (nodes, targetPath) => {
+                // Check if folder will be empty after the move
+                const hasRemainingNotes = (nodes, targetPath) => {
                     if (!nodes || !Array.isArray(nodes)) return false;
-                    
                     for (const node of nodes) {
-                        if (node.type === 'folder') {
-                            if (node.path === targetPath) {
-                                // Check if this folder has any visible notes
-                                const hasVisibleNotes = node.children?.some(child => 
-                                    child.type === 'note' && child.name !== '.folder'
-                                );
-                                return hasVisibleNotes;
-                            }
-                            // Check children folders
-                            const childResult = checkFolderForVisibleNotes(node.children, targetPath);
-                            if (childResult) return true;
+                        if (node.type === 'folder' && node.path === targetPath) {
+                            return node.children?.some(child => 
+                                child.type === 'note' && child.name !== '.folder'
+                            );
                         }
+                        const result = hasRemainingNotes(node.children, targetPath);
+                        if (result) return true;
                     }
                     return false;
                 };
                 
-                folderHasVisibleNotes = checkFolderForVisibleNotes(noteTree, folderPath);
-                
-                // If folder doesn't have visible notes, ensure it still has its .folder note
-                if (!folderHasVisibleNotes) {
-                    console.log('Folder might become empty, ensuring .folder note exists:', folderPath);
+                // If folder will be empty, create .folder note to preserve it
+                if (!hasRemainingNotes(noteTree, folderPath)) {
                     try {
-                        // Create a new .folder note if needed
                         const folderId = uuidv4();
                         await createNote(projectId, {
                             note_id: folderId,
-                            title: '.folder',
+                            title: '.folder', // Hidden placeholder note
                             content: '',
                             folder_path: folderPath
                         });
-                        console.log('Created .folder note to preserve folder:', folderPath);
                     } catch (error) {
-                        console.warn('Error ensuring folder retention:', error);
-                        // Don't throw here - we still want the original operation to succeed
+                        console.warn('Error creating placeholder note:', error);
                     }
                 }
             };
-                
-            // Perform the appropriate API call based on item type
+            
+            // Perform the move operation
             if (draggedItemType === 'note') {
-                console.log('Moving note via API', draggedNodeData.note_id, 'to', targetParentPath);
-                try {
-                    // Check if the source folder might become empty after this move
-                    await ensureFolderRetained(originalParentPath);
-                    
-                    // Now perform the actual move
-                    const result = await updateNote(projectId, draggedNodeData.note_id, {
-                        folder_path: targetParentPath
-                    });
-                    console.log('Note move API response:', result);
-                } catch (error) {
-                    console.error('Error in updateNote API call:', error);
-                    throw error;
-                }
+                // For notes, preserve original folder if needed
+                await ensureFolderRetained(originalParentPath);
+                
+                // Update the note's folder_path
+                await updateNote(projectId, draggedNodeData.note_id, {
+                    folder_path: targetParentPath
+                });
             } else if (draggedItemType === 'folder') {
                 // Extract folder name from path
                 const folderName = draggedNodeData.path.split('/').filter(Boolean).pop();
                 
-                // Calculate new path
+                // Construct new path based on target location
                 const newPath = targetParentPath === '/' ? 
                     `/${folderName}` : 
                     `${targetParentPath}/${folderName}`;
                 
-                console.log('Moving folder via API', draggedNodeData.path, 'to', newPath);
-                try {
-                    const result = await renameFolder(projectId, {
-                        old_path: draggedNodeData.path,
-                        new_path: newPath
-                    });
-                    console.log('Folder move API response:', result);
-                } catch (error) {
-                    console.error('Error in renameFolder API call:', error);
-                    throw error;
-                }
+                // Move folder by renaming its path
+                await renameFolder(projectId, {
+                    old_path: draggedNodeData.path,
+                    new_path: newPath
+                });
             }
-
+            
             // Refresh tree after successful operation
-            console.log('Operation successful, refreshing note tree');
             fetchNoteTree(true);
+            
+            // Clear the drag source info to avoid stale data in future operations
+            window._dragSourceInfo = null;
         } catch (err) {
             console.error('Error during drag-and-drop operation:', err);
-            console.error('Error details:', err.message, err.stack);
             setError(`Failed to move item: ${err.message || 'Unknown error'}`);
             setIsProcessing(false);
+            
+            // Also clear drag info on errors
+            window._dragSourceInfo = null;
         }
-    }, [projectId, isProcessing, fetchNoteTree]);
+    }, [projectId, isProcessing, fetchNoteTree, noteTree]);
 
     const treeHandlers = {
         onCreateNote: handleCreateNote,

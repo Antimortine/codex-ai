@@ -283,15 +283,99 @@ function NoteTreeViewer({
       projectId={projectId}
       isBusy={isBusy}
       onMove={onMove}
-      // Enable drag and drop functionality
+      // Enable drag and drop functionality 
       draggable={true} // Allow nodes to be dragged
-      onDrop={onMove} // Ensure onDrop is also set to onMove for compatibility
+      onDragStart={(args) => {
+        // Store initial locations when drag starts - most reliable method
+        // console.log('Drag start detected');
+        if (args.node && args.node.data) {
+          const nodeData = args.node.data;
+          
+          // For node types, store the initial location differently
+          if (nodeData.type === 'note') {
+            // Store the current folder path as a special property
+            // console.log('Setting initial note location:', nodeData.folder_path || '/');
+            // Create global storage to track original positions
+            window._dragSourceInfo = {
+              type: 'note',
+              id: nodeData.note_id,
+              sourcePath: nodeData.folder_path || '/',
+              name: nodeData.name
+            };
+          } else if (nodeData.type === 'folder') {
+            // For folders, store the parent path
+            const folderPath = nodeData.path;
+            let parentPath = '/';
+            if (folderPath && folderPath !== '/') {
+              const parts = folderPath.split('/').filter(Boolean);
+              parts.pop(); // Remove folder name
+              parentPath = parts.length > 0 ? '/' + parts.join('/') : '/';
+            }
+            // console.log('Setting initial folder location:', parentPath);
+            window._dragSourceInfo = {
+              type: 'folder',
+              id: nodeData.id,
+              sourcePath: parentPath,
+              name: nodeData.name,
+              fullPath: folderPath
+            };
+          }
+        }
+      }}
+      onDrop={(args) => {
+        // console.log('NoteTreeViewer onDrop called');
+        
+        // Check global drag info first for most reliable source info
+        if (window._dragSourceInfo) {
+          // console.log('Using global drag source information:', window._dragSourceInfo);
+          
+          // Create enhanced args with source path info
+          const enhancedArgs = {...args};
+          
+          if (enhancedArgs.dragNodes && enhancedArgs.dragNodes.length === 1) {
+            const dragNode = enhancedArgs.dragNodes[0];
+            const dragSourceInfo = window._dragSourceInfo;
+            
+            // Add explicit source path from our trusted global store
+            if (dragNode.data.type === dragSourceInfo.type) {
+              // For notes, set the folder_path directly
+              if (dragNode.data.type === 'note') {
+                if (dragSourceInfo.id === dragNode.data.note_id) {
+                  // console.log('Setting explicit folder_path from dragSourceInfo:', dragSourceInfo.sourcePath);
+                  dragNode.data._originalFolderPath = dragSourceInfo.sourcePath;
+                  dragNode.data.folder_path = dragSourceInfo.sourcePath;
+                }
+              }
+              // For folders, set _originalParentPath
+              else if (dragNode.data.type === 'folder') {
+                if (dragSourceInfo.fullPath === dragNode.data.path) {
+                  // console.log('Setting explicit parent path from dragSourceInfo:', dragSourceInfo.sourcePath);
+                  dragNode.data._originalParentPath = dragSourceInfo.sourcePath;
+                }
+              }
+            }
+          }
+          
+          // Call onMove with our enhanced arguments
+          onMove(enhancedArgs);
+        }
+        // Fallback if no global drag info
+        else {
+          // console.warn('No global drag source info found, using fallback method');
+          onMove(args);
+        }
+      }}
       canDrop={(args) => {
         // Basic validation - using correct argument structure
         if (!args.dragNodes || args.dragNodes.length !== 1) return false;
         const draggedNode = args.dragNodes[0];
         const targetNode = args.parentNode;
         
+        // Log drop attempts without creating circular references
+        console.log('canDrop check - draggedType:', draggedNode.data.type);
+        console.log('canDrop check - draggedPath:', draggedNode.data.path);
+        console.log('canDrop check - targetNode:', targetNode ? targetNode.data.path : 'ROOT');
+
         // Cannot drop into a note
         if (targetNode && targetNode.data.type === 'note') return false;
         
@@ -300,6 +384,11 @@ function NoteTreeViewer({
           const targetPath = targetNode.data.path;
           const draggedPath = draggedNode.data.path;
           if (targetPath.startsWith(draggedPath)) return false;
+        }
+        
+        // Root drops are allowed
+        if (!targetNode) {
+          console.log('Allowing drop to ROOT level');
         }
         
         return true;
