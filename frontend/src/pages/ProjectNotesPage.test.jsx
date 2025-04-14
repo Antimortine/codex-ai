@@ -529,7 +529,7 @@ describe('ProjectNotesPage (Modal Flow)', () => {
         // Verify API was called with correct params
         expect(api.renameFolder).toHaveBeenCalledWith(TEST_PROJECT_ID, {
             old_path: '/Documents',
-            new_name: 'Renamed Folder'
+            new_path: '/Renamed Folder'
         });
         
         // Verify modal is closed after successful submission
@@ -824,9 +824,19 @@ describe('ProjectNotesPage (Modal Flow)', () => {
 
         // Verify proper API call - matches actual component implementation
         await waitFor(() => {
+            // Calculate the expected new path using the same logic as in the component
+            const oldPathParts = oldPath.split('/');
+            oldPathParts.pop(); // Remove the last part (current folder name)
+            const parentPath = oldPathParts.length > 0 ? oldPathParts.join('/') : '';
+            
+            // Construct the new path by combining parent path with new folder name
+            const expectedNewPath = parentPath === '' || parentPath === '/' 
+                ? `/${newName}` 
+                : `${parentPath}/${newName}`;
+                
             expect(api.renameFolder).toHaveBeenCalledWith(TEST_PROJECT_ID, { 
                 old_path: oldPath, 
-                new_name: newName  // Component uses 'new_name' not 'new_path'
+                new_path: expectedNewPath
             });
         });
         

@@ -287,9 +287,19 @@ function ProjectNotesPage() {
                     }
                     
                     if (modalInputValue.trim() !== modalData.oldName) {
+                        // Determine the parent path of the folder being renamed
+                        const oldPathParts = modalData.oldPath.split('/');
+                        oldPathParts.pop(); // Remove the last part (current folder name)
+                        const parentPath = oldPathParts.length > 0 ? oldPathParts.join('/') : '';
+                        
+                        // Construct the new path by combining parent path with new folder name
+                        const newPath = parentPath === '' || parentPath === '/' 
+                            ? `/${modalInputValue.trim()}` 
+                            : `${parentPath}/${modalInputValue.trim()}`;
+                        
                         await renameFolder(projectId, {
                             old_path: modalData.oldPath,
-                            new_name: modalInputValue.trim()
+                            new_path: newPath
                         });
                     }
                     break;
