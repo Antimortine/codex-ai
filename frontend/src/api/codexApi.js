@@ -71,36 +71,36 @@ export const updateChapterPlan = (projectId, chapterId, data) => apiClient.put(`
 export const getChapterSynopsis = (projectId, chapterId) => apiClient.get(`/projects/${projectId}/chapters/${chapterId}/synopsis`);
 export const updateChapterSynopsis = (projectId, chapterId, data) => apiClient.put(`/projects/${projectId}/chapters/${chapterId}/synopsis`, data); // data: { content: "..." }
 
-// --- Note Endpoints --- ADDED
+// --- Note Endpoints ---
 /**
- * Lists all notes for a project, sorted by last modified descending.
+ * Lists all notes for a project (flat list, basic details).
  * @param {string} projectId - The ID of the project.
- * @returns {Promise<AxiosResponse<any>>} - Expected data: { notes: [{id, title, last_modified}, ...] }
+ * @returns {Promise<AxiosResponse<any>>} - Expected data: { notes: [{id, title, folder_path, last_modified}, ...] }
  */
 export const listNotes = (projectId) => apiClient.get(`/projects/${projectId}/notes/`);
 
 /**
  * Creates a new note for a project.
  * @param {string} projectId - The ID of the project.
- * @param {object} data - The request body. e.g., { title: "New Note Title" }
- * @returns {Promise<AxiosResponse<any>>} - Returns the created note {id, title, last_modified}.
+ * @param {object} data - The request body. e.g., { title: "New Note Title", folder_path?: "/MyFolder" }
+ * @returns {Promise<AxiosResponse<any>>} - Returns the created note {id, title, content, folder_path, last_modified}.
  */
 export const createNote = (projectId, data) => apiClient.post(`/projects/${projectId}/notes/`, data);
 
 /**
- * Gets a specific note by ID, including its content.
+ * Gets a specific note by ID, including its content and folder path.
  * @param {string} projectId - The ID of the project.
  * @param {string} noteId - The ID of the note.
- * @returns {Promise<AxiosResponse<any>>} - Returns the full note {id, title, content, last_modified}.
+ * @returns {Promise<AxiosResponse<any>>} - Returns the full note {id, title, content, folder_path, last_modified}.
  */
 export const getNote = (projectId, noteId) => apiClient.get(`/projects/${projectId}/notes/${noteId}`);
 
 /**
- * Updates a specific note (title and/or content).
+ * Updates a specific note (title, content, and/or folder path).
  * @param {string} projectId - The ID of the project.
  * @param {string} noteId - The ID of the note.
- * @param {object} data - The request body. e.g., { title?: "Updated Title", content?: "Updated content." }
- * @returns {Promise<AxiosResponse<any>>} - Returns the updated note {id, title, content, last_modified}.
+ * @param {object} data - The request body. e.g., { title?: "Updated Title", content?: "Updated content.", folder_path?: "/NewFolder" }
+ * @returns {Promise<AxiosResponse<any>>} - Returns the updated note {id, title, content, folder_path, last_modified}.
  */
 export const updateNote = (projectId, noteId, data) => apiClient.patch(`/projects/${projectId}/notes/${noteId}`, data);
 
@@ -111,6 +111,34 @@ export const updateNote = (projectId, noteId, data) => apiClient.patch(`/project
  * @returns {Promise<AxiosResponse<any>>} - Returns a success message {message: "..."}.
  */
 export const deleteNote = (projectId, noteId) => apiClient.delete(`/projects/${projectId}/notes/${noteId}`);
+
+// --- Note Tree/Folder Endpoints --- ADDED
+/**
+ * Gets the hierarchical note tree structure for a project.
+ * @param {string} projectId - The ID of the project.
+ * @returns {Promise<AxiosResponse<any>>} - Expected data: { tree: [NoteTreeNode, ...] }
+ */
+export const getNoteTree = (projectId) => apiClient.get(`/projects/${projectId}/notes/tree`);
+
+/**
+ * Renames a virtual folder.
+ * @param {string} projectId - The ID of the project.
+ * @param {object} data - The request body. { old_path: string, new_path: string }
+ * @returns {Promise<AxiosResponse<any>>} - Returns a success message {message: "..."}.
+ */
+export const renameFolder = (projectId, data) => apiClient.patch(`/projects/${projectId}/notes/folders`, data);
+
+/**
+ * Deletes a virtual folder, optionally recursively.
+ * @param {string} projectId - The ID of the project.
+ * @param {object} data - The request body. { path: string, recursive: boolean }
+ * @returns {Promise<AxiosResponse<any>>} - Returns a success message {message: "..."}.
+ */
+export const deleteFolder = (projectId, data) => apiClient.request({
+    method: 'DELETE',
+    url: `/projects/${projectId}/notes/folders`,
+    data: data // Send data in the body for DELETE
+});
 // --- END ADDED ---
 
 // --- Chapter Compilation Endpoint ---

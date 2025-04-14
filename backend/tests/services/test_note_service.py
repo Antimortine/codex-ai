@@ -13,785 +13,529 @@
 # limitations under the License.
 
 import pytest
+from unittest.mock import patch, MagicMock, call, ANY
+from fastapi import HTTPException, status
+import time
 from pathlib import Path
-import json
-import time # Import time for timestamps
-from fastapi import HTTPException
-import sys
-from unittest.mock import patch, MagicMock, call, ANY # Import ANY
 
 # Import the service instance we are testing
-from app.services import file_service # Import the module itself
-# Import BASE_PROJECT_DIR from config
+from app.services.note_service import note_service, NoteService
+from app.models.note import NoteCreate, NoteUpdate, NoteRead, NoteList, NoteReadBasic, NoteTree, NoteTreeNode
+from app.models.project import ProjectRead # For mocking project service
 from app.core.config import BASE_PROJECT_DIR
-# Import index_manager's module to specify the correct patch target
-import app.rag.index_manager
 
-# --- Test Path Helper Methods ---
-# (Unchanged - Omitted for brevity)
-def test_get_project_path():
-    project_id = "test-project-id"
-    expected_path = BASE_PROJECT_DIR / project_id
-    assert file_service.file_service._get_project_path(project_id) == expected_path
+# --- Fixtures ---
 
-def test_get_chapters_dir():
-    project_id = "test-project-id"
-    expected_path = BASE_PROJECT_DIR / project_id / "chapters"
-    assert file_service.file_service._get_chapters_dir(project_id) == expected_path
+@pytest.fixture
+def mock_project_service():
+    with patch('app.services.note_service.project_service', autospec=True) as mock_ps:
+        mock_ps.get_by_id.return_value = ProjectRead(id="test_proj_id", name="Test Project", last_modified=time.time())
+        yield mock_ps
 
-def test_get_chapter_path():
-    project_id = "test-project-id"
-    chapter_id = "test-chapter-id"
-    expected_path = BASE_PROJECT_DIR / project_id / "chapters" / chapter_id
-    assert file_service.file_service._get_chapter_path(project_id, chapter_id) == expected_path
+@pytest.fixture
+def mock_file_service():
+    with patch('app.services.note_service.file_service', autospec=True) as mock_fs:
+        # Default mock behaviors (can be overridden in tests)
+        mock_fs.read_project_metadata.return_value = {"notes": {}}
+        mock_fs.write_project_metadata.return_value = None
+        mock_fs.write_text_file.return_value = None
+        mock_fs.read_text_file.return_value = "Default note content"
+        mock_fs.delete_file.return_value = None
+        mock_fs.path_exists.return_value = True # Assume paths exist by default
+        mock_fs._get_note_path.side_effect = lambda project_id, note_id: BASE_PROJECT_DIR / project_id / "notes" / f"{note_id}.md"
+        mock_fs.get_file_mtime.return_value = time.time()
+        yield mock_fs
 
-def test_get_scene_path():
-    project_id = "test-project-id"
-    chapter_id = "test-chapter-id"
-    scene_id = "test-scene-id"
-    expected_path = BASE_PROJECT_DIR / project_id / "chapters" / chapter_id / f"{scene_id}.md"
-    assert file_service.file_service._get_scene_path(project_id, chapter_id, scene_id) == expected_path
+@pytest.fixture
+def mock_uuid():
+    with patch('app.services.note_service.generate_uuid') as mock_gen_uuid:
+        mock_gen_uuid.return_value = "mock_note_uuid_1"
+        yield mock_gen_uuid
 
-def test_get_characters_dir():
-    project_id = "test-project-id"
-    expected_path = BASE_PROJECT_DIR / project_id / "characters"
-    assert file_service.file_service._get_characters_dir(project_id) == expected_path
+# --- Test _validate_folder_path ---
 
-def test_get_character_path():
-    project_id = "test-project-id"
-    character_id = "test-char-id"
-    expected_path = BASE_PROJECT_DIR / project_id / "characters" / f"{character_id}.md"
-    assert file_service.file_service._get_character_path(project_id, character_id) == expected_path
+def test_validate_folder_path_valid():
+    assert note_service._validate_folder_path("/") == "/"
+    assert note_service._validate_folder_path("/folder") == "/folder"
+    assert note_service._validate_folder_path("/folder/sub") == "/folder/sub"
+    assert note_service._validate_folder_path(" /folder/sub ") == "/folder/sub" # Strips whitespace
+    assert note_service._validate_folder_path("/folder/sub/") == "/folder/sub" # Removes trailing slash
+    assert note_service._validate_folder_path(None) == "/" # Handles None
+    assert note_service._validate_folder_path("") == "/" # Handles empty string
+    assert note_service._validate_folder_path("  ") == "/" # Handles whitespace string
 
-# --- ADDED: Test Notes Path Helpers ---
-def test_get_notes_dir():
-    project_id = "test-project-id"
-    expected_path = BASE_PROJECT_DIR / project_id / "notes"
-    assert file_service.file_service._get_notes_dir(project_id) == expected_path
+def test_validate_folder_path_invalid():
+    with pytest.raises(HTTPException) as excinfo:
+        note_service._validate_folder_path("folder") # Missing leading slash
+    assert excinfo.value.status_code == 400
 
-def test_get_note_path():
-    project_id = "test-project-id"
-    note_id = "test-note-uuid" # Note ID is UUID without extension
+    with pytest.raises(HTTPException) as excinfo:
+        note_service._validate_folder_path("/folder//sub") # Contains //
+    assert excinfo.value.status_code == 400
+
+# --- Test CRUD Operations with folder_path ---
+
+def test_create_note_success(mock_project_service, mock_file_service, mock_uuid):
+    project_id = "test_proj_id"
+    note_in = NoteCreate(title="My Note", content="Note details", folder_path="/Ideas")
+    mock_file_service.read_project_metadata.return_value = {"notes": {}} # Start empty
+    current_time = time.time()
+    mock_file_service.get_file_mtime.return_value = current_time
+
+    created_note = note_service.create(project_id=project_id, note_in=note_in)
+
+    assert created_note.id == "mock_note_uuid_1"
+    assert created_note.title == note_in.title
+    assert created_note.content == note_in.content
+    assert created_note.folder_path == "/Ideas" # Validated path
+    assert created_note.last_modified == current_time
+    assert created_note.project_id == project_id
+
+    mock_project_service.get_by_id.assert_called_once_with(project_id=project_id)
+    mock_file_service.read_project_metadata.assert_called_once_with(project_id=project_id)
+    mock_file_service.write_project_metadata.assert_called_once_with(
+        project_id=project_id,
+        data={"notes": {"mock_note_uuid_1": {"title": "My Note", "folder_path": "/Ideas"}}}
+    )
+    expected_path = BASE_PROJECT_DIR / project_id / "notes" / "mock_note_uuid_1.md"
+    mock_file_service.write_text_file.assert_called_once_with(path=expected_path, content=note_in.content, trigger_index=True)
+    mock_file_service.get_file_mtime.assert_called_once_with(expected_path)
+
+def test_create_note_default_folder_path(mock_project_service, mock_file_service, mock_uuid):
+    project_id = "test_proj_id"
+    note_in = NoteCreate(title="Root Note", content="Details") # No folder_path provided
+    mock_file_service.read_project_metadata.return_value = {"notes": {}}
+
+    created_note = note_service.create(project_id=project_id, note_in=note_in)
+
+    assert created_note.folder_path == "/"
+    mock_file_service.write_project_metadata.assert_called_once_with(
+        project_id=project_id,
+        data={"notes": {"mock_note_uuid_1": {"title": "Root Note", "folder_path": "/"}}}
+    )
+
+def test_get_note_by_id_success(mock_project_service, mock_file_service):
+    project_id = "test_proj_id"
+    note_id = "note1"
+    mock_file_service.read_project_metadata.return_value = {
+        "notes": {note_id: {"title": "Existing Note", "folder_path": "/ExistingFolder"}}
+    }
+    mock_file_service.read_text_file.return_value = "Content of note 1"
+    current_time = time.time()
+    mock_file_service.get_file_mtime.return_value = current_time
     expected_path = BASE_PROJECT_DIR / project_id / "notes" / f"{note_id}.md"
-    assert file_service.file_service._get_note_path(project_id, note_id) == expected_path
-# --- END ADDED ---
 
-def test_get_content_block_path():
-    project_id = "test-project-id"
-    expected_plan_path = BASE_PROJECT_DIR / project_id / "plan.md"
-    expected_synopsis_path = BASE_PROJECT_DIR / project_id / "synopsis.md"
-    expected_world_path = BASE_PROJECT_DIR / project_id / "world.md"
-    assert file_service.file_service._get_content_block_path(project_id, "plan.md") == expected_plan_path
-    assert file_service.file_service._get_content_block_path(project_id, "synopsis.md") == expected_synopsis_path
-    assert file_service.file_service._get_content_block_path(project_id, "world.md") == expected_world_path
-    with pytest.raises(ValueError):
-        file_service.file_service._get_content_block_path(project_id, "invalid_block.md")
+    note = note_service.get_by_id(project_id=project_id, note_id=note_id)
 
-def test_get_chapter_plan_path():
-    project_id = "test-project-id"
-    chapter_id = "test-chapter-id"
-    expected_path = BASE_PROJECT_DIR / project_id / "chapters" / chapter_id / "plan.md"
-    assert file_service.file_service._get_chapter_plan_path(project_id, chapter_id) == expected_path
+    assert note.id == note_id
+    assert note.title == "Existing Note"
+    assert note.content == "Content of note 1"
+    assert note.folder_path == "/ExistingFolder"
+    assert note.last_modified == current_time
+    assert note.project_id == project_id
 
-def test_get_chapter_synopsis_path():
-    project_id = "test-project-id"
-    chapter_id = "test-chapter-id"
-    expected_path = BASE_PROJECT_DIR / project_id / "chapters" / chapter_id / "synopsis.md"
-    assert file_service.file_service._get_chapter_synopsis_path(project_id, chapter_id) == expected_path
+    mock_project_service.get_by_id.assert_called_once_with(project_id=project_id)
+    mock_file_service.read_project_metadata.assert_called_once_with(project_id=project_id)
+    mock_file_service.read_text_file.assert_called_once_with(path=expected_path)
+    mock_file_service.get_file_mtime.assert_called_once_with(expected_path)
 
-def test_get_project_metadata_path():
-    project_id = "test-project-id"
-    expected_path = BASE_PROJECT_DIR / project_id / "project_meta.json"
-    assert file_service.file_service._get_project_metadata_path(project_id) == expected_path
-
-def test_get_chapter_metadata_path():
-    project_id = "test-project-id"
-    chapter_id = "test-chapter-id"
-    expected_path = BASE_PROJECT_DIR / project_id / "chapters" / chapter_id / "chapter_meta.json"
-    assert file_service.file_service._get_chapter_metadata_path(project_id, chapter_id) == expected_path
-
-def test_get_chat_history_path():
-    project_id = "test-project-id"
-    expected_path = BASE_PROJECT_DIR / project_id / "chat_history.json"
-    assert file_service.file_service._get_chat_history_path(project_id) == expected_path
-
-
-# --- Test Basic File Operations using temp_project_dir ---
-# (Unchanged - Omitted for brevity)
-def test_create_directory(temp_project_dir: Path, monkeypatch):
-    monkeypatch.setattr(file_service, 'BASE_PROJECT_DIR', temp_project_dir)
-    project_id = "temp-proj"
-    new_dir = file_service.file_service._get_chapters_dir(project_id)
-    assert not new_dir.exists()
-    file_service.file_service.create_directory(new_dir)
-    assert new_dir.exists()
-    assert new_dir.is_dir()
-    file_service.file_service.create_directory(new_dir)
-    assert new_dir.exists()
-
-@patch('app.rag.index_manager.index_manager', autospec=True)
-def test_write_read_text_file_no_trigger(mock_index_mgr: MagicMock, temp_project_dir: Path, monkeypatch):
-    monkeypatch.setattr(file_service, 'BASE_PROJECT_DIR', temp_project_dir)
-    project_id = "txt-proj"
-    file_path = file_service.file_service._get_project_path(project_id) / "test_file.txt"
-    content = "Hello, World!\nThis is a test."
-    file_service.file_service.write_text_file(file_path, content, trigger_index=False)
-    mock_index_mgr.index_file.assert_not_called()
-    assert file_path.exists()
-    assert file_path.read_text(encoding='utf-8') == content
-    read_content = file_service.file_service.read_text_file(file_path)
-    assert read_content == content
-    non_existent_path = file_service.file_service._get_project_path(project_id) / "not_real.txt"
-    with pytest.raises(HTTPException) as exc_info:
-        file_service.file_service.read_text_file(non_existent_path)
-    assert exc_info.value.status_code == 404
-
-# --- MODIFIED: Test JSON read/write with 'notes' key ---
-@patch('app.rag.index_manager.index_manager', autospec=True)
-def test_write_read_json_file(mock_index_mgr: MagicMock, temp_project_dir: Path, monkeypatch):
-    monkeypatch.setattr(file_service, 'BASE_PROJECT_DIR', temp_project_dir)
-    project_id = "json-proj"
-    file_path = file_service.file_service._get_project_metadata_path(project_id)
-    # Include notes key in test data
-    data = {
-        "name": "Test Project",
-        "version": 1,
-        "items": [1, "two", None],
-        "chapters": {},
-        "characters": {},
-        "chat_sessions": {},
-        "notes": {"note1": {"title": "My First Note"}} # Add notes key
+def test_get_note_by_id_missing_folder_path_in_meta(mock_project_service, mock_file_service):
+    project_id = "test_proj_id"
+    note_id = "note_old_meta"
+    mock_file_service.read_project_metadata.return_value = {
+        "notes": {note_id: {"title": "Old Note"}} # Missing folder_path
     }
-    file_service.file_service.write_json_file(file_path, data)
-    mock_index_mgr.index_file.assert_not_called()
-    assert file_path.exists()
-    raw_content = file_path.read_text(encoding='utf-8')
-    assert '"name": "Test Project"' in raw_content
-    assert '"notes": {' in raw_content # Check notes key written
-    read_data = file_service.file_service.read_json_file(file_path)
-    assert read_data == data # Should read back exactly what was written
+    note = note_service.get_by_id(project_id=project_id, note_id=note_id)
+    assert note.folder_path == "/" # Should default to root
 
-    # --- MODIFIED: Use read_project_metadata for default check ---
-    # Test reading file missing some keys - defaults should be added by read_project_metadata
-    minimal_data = {"name": "Minimal Project"}
-    minimal_project_id = "json-proj-min"
-    minimal_path = file_service.file_service._get_project_metadata_path(minimal_project_id)
-    minimal_path.parent.mkdir(parents=True, exist_ok=True)
-    minimal_path.write_text(json.dumps(minimal_data), encoding='utf-8')
-    # Use read_project_metadata here
-    read_minimal = file_service.file_service.read_project_metadata(minimal_project_id)
-    assert read_minimal["name"] == "Minimal Project"
-    assert read_minimal["chapters"] == {}
-    assert read_minimal["characters"] == {}
-    assert read_minimal["chat_sessions"] == {}
-    assert read_minimal["notes"] == {} # Assert default notes key added by read_project_metadata
-    # --- END MODIFIED ---
-
-    # Test reading non-existent file still adds defaults (using read_project_metadata)
-    non_existent_project_id = "non_existent_proj"
-    read_non_existent = file_service.file_service.read_project_metadata(non_existent_project_id) # Use metadata reader
-    assert read_non_existent["project_name"] == f"Project {non_existent_project_id}" # Check default name
-    assert read_non_existent["chapters"] == {}
-    assert read_non_existent["characters"] == {}
-    assert read_non_existent["chat_sessions"] == {}
-    assert read_non_existent["notes"] == {} # Assert default notes key
-
-    # Test reading invalid JSON still returns empty dict from base read_json_file
-    invalid_json_path = file_service.file_service._get_project_path(project_id) / "invalid.json"
-    invalid_json_path.parent.mkdir(parents=True, exist_ok=True)
-    invalid_json_path.write_text("{invalid json", encoding='utf-8')
-    read_invalid = file_service.file_service.read_json_file(invalid_json_path)
-    assert read_invalid == {} # Base function returns empty
-
-    # Test reading file that's a list still returns empty dict from base read_json_file
-    list_json_path = file_service.file_service._get_project_path(project_id) / "list.json"
-    list_json_path.write_text("[1, 2, 3]", encoding='utf-8')
-    read_list = file_service.file_service.read_json_file(list_json_path)
-    assert read_list == {}
-# --- END MODIFIED ---
-
-
-# --- Tests for Index Interaction ---
-# (Unchanged - Omitted for brevity)
-@patch('app.rag.index_manager.index_manager', autospec=True)
-def test_write_text_file_triggers_index(mock_index_mgr: MagicMock, temp_project_dir: Path, monkeypatch):
-    monkeypatch.setattr(file_service, 'BASE_PROJECT_DIR', temp_project_dir)
-    project_id = "index-proj"
-    file_path = file_service.file_service._get_project_path(project_id) / "plan.md"
-    content = "Index this content."
-    file_service.file_service.write_text_file(file_path, content, trigger_index=True)
-    assert file_path.exists()
-    assert file_path.read_text(encoding='utf-8') == content
-    mock_index_mgr.index_file.assert_called_once_with(file_path)
-
-@patch('app.rag.index_manager.index_manager', autospec=True)
-def test_write_text_file_no_trigger_for_non_md(mock_index_mgr: MagicMock, temp_project_dir: Path, monkeypatch):
-    monkeypatch.setattr(file_service, 'BASE_PROJECT_DIR', temp_project_dir)
-    project_id = "index-proj-non-md"
-    file_path = file_service.file_service._get_project_path(project_id) / "notes.txt"
-    content = "Some notes."
-    file_service.file_service.write_text_file(file_path, content, trigger_index=True)
-    assert file_path.exists()
-    mock_index_mgr.index_file.assert_not_called()
-
-@patch('app.rag.index_manager.index_manager', autospec=True)
-def test_write_text_file_no_trigger_outside_base(mock_index_mgr: MagicMock, tmp_path: Path):
-    file_path = tmp_path / "outside_file.md"
-    content = "Outside content."
-    assert not str(file_path.resolve()).startswith(str(BASE_PROJECT_DIR.resolve()))
-    file_service.file_service.write_text_file(file_path, content, trigger_index=True)
-    assert file_path.exists()
-    mock_index_mgr.index_file.assert_not_called()
-
-@patch('app.rag.index_manager.index_manager', autospec=True)
-def test_delete_file_triggers_index_delete(mock_index_mgr: MagicMock, temp_project_dir: Path, monkeypatch):
-    monkeypatch.setattr(file_service, 'BASE_PROJECT_DIR', temp_project_dir)
-    project_id = "delete-proj"
-    file_path = file_service.file_service._get_project_path(project_id) / "to_delete.md"
-    file_path.parent.mkdir(parents=True, exist_ok=True)
-    file_path.write_text("Delete me", encoding='utf-8')
-    assert file_path.exists()
-    file_service.file_service.delete_file(file_path)
-    assert not file_path.exists()
-    mock_index_mgr.delete_doc.assert_called_once_with(file_path)
-
-@patch('app.rag.index_manager.index_manager', autospec=True)
-def test_delete_file_no_trigger_for_non_md(mock_index_mgr: MagicMock, temp_project_dir: Path, monkeypatch):
-    monkeypatch.setattr(file_service, 'BASE_PROJECT_DIR', temp_project_dir)
-    project_id = "delete-proj-non-md"
-    file_path = file_service.file_service._get_project_path(project_id) / "notes.txt"
-    file_path.parent.mkdir(parents=True, exist_ok=True)
-    file_path.write_text("Delete me", encoding='utf-8')
-    assert file_path.exists()
-    file_service.file_service.delete_file(file_path)
-    assert not file_path.exists()
-    mock_index_mgr.delete_doc.assert_not_called()
-
-@patch('app.rag.index_manager.index_manager', autospec=True)
-def test_delete_directory_triggers_index_delete(mock_index_mgr: MagicMock, temp_project_dir: Path, monkeypatch):
-    monkeypatch.setattr(file_service, 'BASE_PROJECT_DIR', temp_project_dir)
-    project_id = "delete-dir-proj"
-    chapter_id = "ch1"
-    dir_path = file_service.file_service._get_chapter_path(project_id, chapter_id)
-    scene1_path = dir_path / "scene1.md"
-    scene2_path = dir_path / "scene2.md"
-    notes_path = dir_path / "notes.txt"
-    sub_dir = dir_path / "subdir"
-    sub_scene_path = sub_dir / "sub_scene.md"
-    dir_path.mkdir(parents=True, exist_ok=True)
-    sub_dir.mkdir(exist_ok=True)
-    scene1_path.write_text("Scene 1", encoding='utf-8')
-    scene2_path.write_text("Scene 2", encoding='utf-8')
-    notes_path.write_text("Notes", encoding='utf-8')
-    sub_scene_path.write_text("Sub Scene", encoding='utf-8')
-    assert dir_path.exists()
-    assert scene1_path.exists()
-    assert sub_scene_path.exists()
-    file_service.file_service.delete_directory(dir_path)
-    assert not dir_path.exists()
-    expected_calls = [call(scene1_path), call(scene2_path), call(sub_scene_path)]
-    mock_index_mgr.delete_doc.assert_has_calls(expected_calls, any_order=True)
-    assert mock_index_mgr.delete_doc.call_count == len(expected_calls)
-
-# --- Listing and Setup Methods ---
-# (Unchanged - Omitted for brevity)
-def test_list_subdirectories(temp_project_dir: Path, monkeypatch):
-    monkeypatch.setattr(file_service, 'BASE_PROJECT_DIR', temp_project_dir)
-    project_id = "list-proj"
-    proj_path = file_service.file_service._get_project_path(project_id)
-    chapters_path = file_service.file_service._get_chapters_dir(project_id)
-    chars_path = file_service.file_service._get_characters_dir(project_id)
-    other_dir = proj_path / "other"
-    file1 = proj_path / "file1.txt"
-    proj_path.mkdir(parents=True, exist_ok=True)
-    chapters_path.mkdir(exist_ok=True)
-    chars_path.mkdir(exist_ok=True)
-    other_dir.mkdir(exist_ok=True)
-    file1.touch()
-    subdirs = file_service.file_service.list_subdirectories(proj_path)
-    assert sorted(subdirs) == sorted(["chapters", "characters", "other"])
-    assert file_service.file_service.list_subdirectories(chapters_path) == []
-    assert file_service.file_service.list_subdirectories(proj_path / "nonexistent") == []
-
-def test_list_markdown_files(temp_project_dir: Path, monkeypatch):
-    monkeypatch.setattr(file_service, 'BASE_PROJECT_DIR', temp_project_dir)
-    project_id = "list-md-proj"
-    chapter_id = "ch1"
-    chapter_path = file_service.file_service._get_chapter_path(project_id, chapter_id)
-    scene1_path = chapter_path / "scene1.md"
-    scene2_path = chapter_path / "scene2.MD" # Test case insensitivity
-    notes_path = chapter_path / "notes.txt"
-    meta_path = chapter_path / "chapter_meta.json"
-    subdir = chapter_path / "subdir"
-    chapter_path.mkdir(parents=True, exist_ok=True)
-    subdir.mkdir(exist_ok=True)
-    scene1_path.touch()
-    scene2_path.touch()
-    notes_path.touch()
-    meta_path.touch()
-    md_files = file_service.file_service.list_markdown_files(chapter_path)
-    assert sorted(md_files) == sorted(["scene1", "scene2"])
-    assert file_service.file_service.list_markdown_files(subdir) == []
-    assert file_service.file_service.list_markdown_files(chapter_path / "nonexistent") == []
-
-def test_setup_chapter_structure(temp_project_dir: Path, monkeypatch):
-    monkeypatch.setattr(file_service, 'BASE_PROJECT_DIR', temp_project_dir)
-    project_id = "setup-chap-proj"
-    chapter_id = "ch_setup"
-    chapter_path = file_service.file_service._get_chapter_path(project_id, chapter_id)
-    meta_path = file_service.file_service._get_chapter_metadata_path(project_id, chapter_id)
-    assert not chapter_path.exists()
-    assert not meta_path.exists()
-    with patch('app.rag.index_manager.index_manager', autospec=True) as mock_index_mgr:
-        file_service.file_service.setup_chapter_structure(project_id, chapter_id)
-        mock_index_mgr.index_file.assert_not_called()
-    assert chapter_path.exists()
-    assert chapter_path.is_dir()
-    assert meta_path.exists()
-    assert meta_path.is_file()
-    meta_content = json.loads(meta_path.read_text())
-    assert meta_content == {"scenes": {}}
-
-# --- MODIFIED: Test setup_project_structure for Notes ---
-@patch('app.rag.index_manager.index_manager', autospec=True)
-def test_setup_project_structure(mock_index_mgr: MagicMock, temp_project_dir: Path, monkeypatch):
-    """Test setting up the project structure and initial file indexing."""
-    monkeypatch.setattr(file_service, 'BASE_PROJECT_DIR', temp_project_dir)
-    project_id = "setup-proj"
-    proj_path = file_service.file_service._get_project_path(project_id)
-    chapters_path = file_service.file_service._get_chapters_dir(project_id)
-    chars_path = file_service.file_service._get_characters_dir(project_id)
-    notes_path = file_service.file_service._get_notes_dir(project_id) # Get notes dir path
-    plan_path = file_service.file_service._get_content_block_path(project_id, "plan.md")
-    synopsis_path = file_service.file_service._get_content_block_path(project_id, "synopsis.md")
-    world_path = file_service.file_service._get_content_block_path(project_id, "world.md")
-    meta_path = file_service.file_service._get_project_metadata_path(project_id)
-    chat_history_path = file_service.file_service._get_chat_history_path(project_id)
-
-    assert not proj_path.exists()
-
-    file_service.file_service.setup_project_structure(project_id)
-
-    # Assert directories exist
-    assert proj_path.exists() and proj_path.is_dir()
-    assert chapters_path.exists() and chapters_path.is_dir()
-    assert chars_path.exists() and chars_path.is_dir()
-    assert notes_path.exists() and notes_path.is_dir() # Assert notes dir exists
-
-    # Assert files exist and have empty content initially
-    assert plan_path.exists() and plan_path.read_text() == ""
-    assert synopsis_path.exists() and synopsis_path.read_text() == ""
-    assert world_path.exists() and world_path.read_text() == ""
-    assert meta_path.exists()
-    meta_content = json.loads(meta_path.read_text())
-    # Assert notes key initialized in metadata
-    expected_meta = {
-        "project_name": "",
-        "chapters": {},
-        "characters": {},
-        "chat_sessions": {},
-        "notes": {} # Check for notes key
+def test_get_all_notes_success(mock_project_service, mock_file_service):
+    project_id = "test_proj_id"
+    time1 = time.time() - 100
+    time2 = time.time() - 50
+    mock_file_service.read_project_metadata.return_value = {
+        "notes": {
+            "note1": {"title": "Note One", "folder_path": "/FolderA"},
+            "note2": {"title": "Note Two", "folder_path": "/"},
+            "note3": {"title": "Note Three"} # Missing path
+        }
     }
-    assert meta_content == expected_meta # Use variable for comparison
-    assert chat_history_path.exists()
-    chat_history_content = json.loads(chat_history_path.read_text())
-    assert chat_history_content == {}
+    # Mock mtime to control sorting
+    mock_file_service.get_file_mtime.side_effect = [time1, time2, 0.0] # note2 is newest, note3 has no mtime
 
-    # Assert index_manager was called for the .md files
-    expected_index_calls = [call(plan_path), call(synopsis_path), call(world_path)]
-    mock_index_mgr.index_file.assert_has_calls(expected_index_calls, any_order=True)
-    assert mock_index_mgr.index_file.call_count == 3
-# --- END MODIFIED ---
+    note_list = note_service.get_all_for_project(project_id=project_id)
 
+    assert len(note_list.notes) == 3
+    # Check sorting (note2 newest, then note1, then note3 with 0.0 mtime)
+    assert note_list.notes[0].id == "note2"
+    assert note_list.notes[1].id == "note1"
+    assert note_list.notes[2].id == "note3"
 
-# --- Chat History and Session Metadata Tests ---
-# (Unchanged - Omitted for brevity)
-def test_read_chat_history_file_success(temp_project_dir: Path, monkeypatch):
-    monkeypatch.setattr(file_service, 'BASE_PROJECT_DIR', temp_project_dir)
-    project_id = "chat-proj"
-    history_path = file_service.file_service._get_chat_history_path(project_id)
-    history_data = {
-        "session1": [{"id": 0, "query": "q1", "response": {"answer": "a1"}}],
-        "session2": [{"id": 0, "query": "q2", "error": "e2"}],
-        "session3_invalid": "not a list" # Invalid entry
+    # Check content
+    assert note_list.notes[0].title == "Note Two"
+    assert note_list.notes[0].folder_path == "/"
+    assert note_list.notes[0].last_modified == time2
+
+    assert note_list.notes[1].title == "Note One"
+    assert note_list.notes[1].folder_path == "/FolderA"
+    assert note_list.notes[1].last_modified == time1
+
+    assert note_list.notes[2].title == "Note Three"
+    assert note_list.notes[2].folder_path == "/" # Defaulted
+    assert note_list.notes[2].last_modified == 0.0
+
+    mock_project_service.get_by_id.assert_called_once_with(project_id=project_id)
+    mock_file_service.read_project_metadata.assert_called_once_with(project_id=project_id)
+    assert mock_file_service.get_file_mtime.call_count == 3
+
+def test_update_note_folder_path(mock_project_service, mock_file_service):
+    project_id = "test_proj_id"
+    note_id = "note_to_move"
+    initial_meta = {
+        "notes": {note_id: {"title": "Move Me", "folder_path": "/OldFolder"}}
     }
-    history_path.parent.mkdir(parents=True, exist_ok=True)
-    history_path.write_text(json.dumps(history_data), encoding='utf-8')
-    read_data = file_service.file_service.read_chat_history_file(project_id)
-    assert "session1" in read_data
-    assert "session2" in read_data
-    assert "session3_invalid" not in read_data
-    assert read_data["session1"] == history_data["session1"]
+    mock_file_service.read_project_metadata.return_value = initial_meta
+    mock_file_service.read_text_file.return_value = "Content"
+    mock_file_service.get_file_mtime.return_value = time.time()
 
-def test_read_chat_history_file_not_found(temp_project_dir: Path, monkeypatch):
-    monkeypatch.setattr(file_service, 'BASE_PROJECT_DIR', temp_project_dir)
-    project_id = "chat-proj-404"
-    read_data = file_service.file_service.read_chat_history_file(project_id)
-    assert read_data == {}
+    update_data = NoteUpdate(folder_path="/NewFolder/Sub")
 
-def test_read_chat_history_file_not_dict(temp_project_dir: Path, monkeypatch):
-    monkeypatch.setattr(file_service, 'BASE_PROJECT_DIR', temp_project_dir)
-    project_id = "chat-proj-list"
-    history_path = file_service.file_service._get_chat_history_path(project_id)
-    history_path.parent.mkdir(parents=True, exist_ok=True)
-    history_path.write_text(json.dumps([1, 2, 3]), encoding='utf-8') # Write a list instead of dict
-    read_data = file_service.file_service.read_chat_history_file(project_id)
-    assert read_data == {}
+    updated_note = note_service.update(project_id=project_id, note_id=note_id, note_in=update_data)
 
-def test_write_chat_history_file(temp_project_dir: Path, monkeypatch):
-    monkeypatch.setattr(file_service, 'BASE_PROJECT_DIR', temp_project_dir)
-    project_id = "chat-proj-write"
-    history_path = file_service.file_service._get_chat_history_path(project_id)
-    history_data = {
-        "s1": [{"id": 0, "query": "q"}],
-        "s2": []
+    assert updated_note.folder_path == "/NewFolder/Sub"
+    assert updated_note.title == "Move Me" # Title not updated
+    assert updated_note.content == "Content" # Content not updated
+
+    # Check that metadata write was called with updated path
+    mock_file_service.write_project_metadata.assert_called_once()
+    args, kwargs = mock_file_service.write_project_metadata.call_args
+    assert kwargs['project_id'] == project_id
+    assert kwargs['data']['notes'][note_id]['folder_path'] == "/NewFolder/Sub"
+    assert kwargs['data']['notes'][note_id]['title'] == "Move Me"
+
+    # Check that content file write was NOT called
+    mock_file_service.write_text_file.assert_not_called()
+
+def test_update_note_all_fields(mock_project_service, mock_file_service):
+    project_id = "test_proj_id"
+    note_id = "note_update_all"
+    initial_meta = {
+        "notes": {note_id: {"title": "Old Title", "folder_path": "/Old"}}
     }
-    file_service.file_service.write_chat_history_file(project_id, history_data)
-    assert history_path.exists()
-    read_back = json.loads(history_path.read_text(encoding='utf-8'))
-    assert read_back == history_data
+    mock_file_service.read_project_metadata.return_value = initial_meta
+    mock_file_service.read_text_file.return_value = "Old Content"
+    mock_file_service.get_file_mtime.return_value = time.time()
 
-def test_read_write_delete_chat_session_history(temp_project_dir: Path, monkeypatch):
-    monkeypatch.setattr(file_service, 'BASE_PROJECT_DIR', temp_project_dir)
-    project_id = "chat-session-rw"
-    session_id_1 = "sess_abc"
-    session_id_2 = "sess_xyz"
-    history1 = [{"id": 0, "query": "q1"}]
-    history2 = [{"id": 0, "query": "q2"}]
-    assert file_service.file_service.read_chat_session_history(project_id, session_id_1) == []
-    file_service.file_service.write_chat_session_history(project_id, session_id_1, history1)
-    assert file_service.file_service.read_chat_session_history(project_id, session_id_1) == history1
-    assert file_service.file_service.read_chat_session_history(project_id, session_id_2) == []
-    file_service.file_service.write_chat_session_history(project_id, session_id_2, history2)
-    assert file_service.file_service.read_chat_session_history(project_id, session_id_1) == history1
-    assert file_service.file_service.read_chat_session_history(project_id, session_id_2) == history2
-    file_service.file_service.delete_chat_session_history(project_id, session_id_1)
-    assert file_service.file_service.read_chat_session_history(project_id, session_id_1) == []
-    assert file_service.file_service.read_chat_session_history(project_id, session_id_2) == history2
-    file_service.file_service.delete_chat_session_history(project_id, "non-existent")
-    assert file_service.file_service.read_chat_session_history(project_id, session_id_2) == history2
+    update_data = NoteUpdate(title="New Title", content="New Content", folder_path="/New")
 
+    updated_note = note_service.update(project_id=project_id, note_id=note_id, note_in=update_data)
 
-def test_get_chat_sessions_metadata_success(temp_project_dir: Path, monkeypatch):
-    monkeypatch.setattr(file_service, 'BASE_PROJECT_DIR', temp_project_dir)
-    project_id = "meta-proj"
-    meta_path = file_service.file_service._get_project_metadata_path(project_id)
-    meta_data = {
-        "project_name": "Meta Test",
-        "chapters": {},
-        "characters": {},
-        "chat_sessions": {
-            "sess1": {"name": "Session One"},
-            "sess2": {"name": "Session Two"}
-        },
-        "notes": {} # Add notes key
+    assert updated_note.title == "New Title"
+    assert updated_note.content == "New Content"
+    assert updated_note.folder_path == "/New"
+
+    # Check metadata write
+    mock_file_service.write_project_metadata.assert_called_once()
+    args, kwargs = mock_file_service.write_project_metadata.call_args
+    assert kwargs['data']['notes'][note_id]['title'] == "New Title"
+    assert kwargs['data']['notes'][note_id]['folder_path'] == "/New"
+
+    # Check content file write
+    expected_path = BASE_PROJECT_DIR / project_id / "notes" / f"{note_id}.md"
+    mock_file_service.write_text_file.assert_called_once_with(path=expected_path, content="New Content", trigger_index=True)
+
+def test_delete_note_success(mock_project_service, mock_file_service):
+    project_id = "test_proj_id"
+    note_id = "note_to_delete"
+    initial_meta = {
+        "notes": {note_id: {"title": "Delete Me", "folder_path": "/"}}
     }
-    meta_path.parent.mkdir(parents=True, exist_ok=True)
-    meta_path.write_text(json.dumps(meta_data), encoding='utf-8')
-    sessions = file_service.file_service.get_chat_sessions_metadata(project_id)
-    assert sessions == meta_data["chat_sessions"]
+    mock_file_service.read_project_metadata.return_value = initial_meta
+    mock_file_service.path_exists.return_value = True # File exists
 
-def test_get_chat_sessions_metadata_missing_key(temp_project_dir: Path, monkeypatch):
-    monkeypatch.setattr(file_service, 'BASE_PROJECT_DIR', temp_project_dir)
-    project_id = "meta-proj-nokey"
-    meta_path = file_service.file_service._get_project_metadata_path(project_id)
-    meta_data = {"project_name": "No Key", "notes": {}} # Missing chat_sessions, but has notes
-    meta_path.parent.mkdir(parents=True, exist_ok=True)
-    meta_path.write_text(json.dumps(meta_data), encoding='utf-8')
-    sessions = file_service.file_service.get_chat_sessions_metadata(project_id)
-    assert sessions == {} # Should return empty dict
+    note_service.delete(project_id=project_id, note_id=note_id)
 
-def test_add_update_delete_chat_session_metadata(temp_project_dir: Path, monkeypatch):
-    monkeypatch.setattr(file_service, 'BASE_PROJECT_DIR', temp_project_dir)
-    project_id = "meta-crud"
-    meta_path = file_service.file_service._get_project_metadata_path(project_id)
-    session_id_1 = "crud_s1"
-    session_id_2 = "crud_s2"
-    meta_path.parent.mkdir(parents=True, exist_ok=True)
-    # Initialize with notes key
-    file_service.file_service.write_project_metadata(project_id, {"chat_sessions": {}, "notes": {}})
-    file_service.file_service.add_chat_session_metadata(project_id, session_id_1, "First Session")
-    meta = file_service.file_service.read_project_metadata(project_id)
-    assert meta["chat_sessions"] == {session_id_1: {"name": "First Session"}}
-    file_service.file_service.add_chat_session_metadata(project_id, session_id_2, "Second Session")
-    meta = file_service.file_service.read_project_metadata(project_id)
-    assert meta["chat_sessions"] == {
-        session_id_1: {"name": "First Session"},
-        session_id_2: {"name": "Second Session"}
+    # Check file deletion was called
+    expected_path = BASE_PROJECT_DIR / project_id / "notes" / f"{note_id}.md"
+    mock_file_service.delete_file.assert_called_once_with(path=expected_path)
+
+    # Check metadata write was called with note removed
+    mock_file_service.write_project_metadata.assert_called_once()
+    args, kwargs = mock_file_service.write_project_metadata.call_args
+    assert note_id not in kwargs['data']['notes']
+
+# --- Test get_note_tree ---
+
+def test_get_note_tree_empty(mock_project_service, mock_file_service):
+    project_id = "test_proj_id"
+    mock_file_service.read_project_metadata.return_value = {"notes": {}}
+    tree = note_service.get_note_tree(project_id=project_id)
+    assert tree.tree == []
+
+def test_get_note_tree_flat(mock_project_service, mock_file_service):
+    project_id = "test_proj_id"
+    time1 = time.time() - 10
+    time2 = time.time() - 5
+    mock_file_service.read_project_metadata.return_value = {
+        "notes": {
+            "note_b": {"title": "Note B", "folder_path": "/"},
+            "note_a": {"title": "Note A", "folder_path": "/"},
+        }
     }
-    file_service.file_service.update_chat_session_metadata(project_id, session_id_1, "Updated First")
-    meta = file_service.file_service.read_project_metadata(project_id)
-    assert meta["chat_sessions"][session_id_1]["name"] == "Updated First"
-    assert meta["chat_sessions"][session_id_2]["name"] == "Second Session"
-    file_service.file_service.delete_chat_session_metadata(project_id, session_id_2)
-    meta = file_service.file_service.read_project_metadata(project_id)
-    assert meta["chat_sessions"] == {session_id_1: {"name": "Updated First"}}
-    file_service.file_service.delete_chat_session_metadata(project_id, "non-existent")
-    meta = file_service.file_service.read_project_metadata(project_id)
-    assert meta["chat_sessions"] == {session_id_1: {"name": "Updated First"}}
+    mock_file_service.get_file_mtime.side_effect = lambda path: time1 if "note_a" in str(path) else time2
+    tree = note_service.get_note_tree(project_id=project_id)
 
-# --- Tests for get_project_last_content_modification ---
-# (Unchanged - Omitted for brevity)
-def create_mock_path(path_str, is_dir, is_file, mtime, children=None, suffix='.txt', relative_parts=None):
-    """Helper to create a mock Path object."""
-    mock = MagicMock(spec=Path)
-    mock.name = Path(path_str).name
-    mock.is_dir.return_value = is_dir
-    mock.is_file.return_value = is_file
-    mock.stat.return_value.st_mtime = mtime
-    mock.suffix = suffix
-    mock.__str__.return_value = path_str
-    mock.resolve.return_value = mock # Simple resolve for testing
+    assert len(tree.tree) == 2
+    # Check sorting (alphabetical for notes at same level)
+    assert tree.tree[0].id == "note_a"
+    assert tree.tree[0].name == "Note A"
+    assert tree.tree[0].type == "note"
+    assert tree.tree[0].path == "/"
+    assert tree.tree[0].note_id == "note_a"
+    assert tree.tree[0].last_modified == time1
+    assert tree.tree[0].children == []
 
-    # Mock relative_to to return a mock object with parts
-    mock_relative = MagicMock()
-    mock_relative.parts = relative_parts if relative_parts is not None else Path(path_str).parts
-    mock.relative_to.return_value = mock_relative
+    assert tree.tree[1].id == "note_b"
+    assert tree.tree[1].name == "Note B"
+    assert tree.tree[1].type == "note"
+    assert tree.tree[1].path == "/"
+    assert tree.tree[1].note_id == "note_b"
+    assert tree.tree[1].last_modified == time2
+    assert tree.tree[1].children == []
 
-    # Mock rglob to return children if provided
-    if children is not None:
-        mock.rglob.return_value = children
-    else:
-        mock.rglob.return_value = []
+def test_get_note_tree_nested(mock_project_service, mock_file_service):
+    project_id = "test_proj_id"
+    mock_file_service.read_project_metadata.return_value = {
+        "notes": {
+            "note_root": {"title": "Root Note", "folder_path": "/"},
+            "note_c1": {"title": "C1 Note", "folder_path": "/FolderC"},
+            "note_a1": {"title": "A1 Note", "folder_path": "/FolderA"},
+            "note_a2": {"title": "A2 Note", "folder_path": "/FolderA/SubA"},
+            "note_b1": {"title": "B1 Note", "folder_path": "/FolderB"},
+        }
+    }
+    # Mock mtime just to return something
+    mock_file_service.get_file_mtime.return_value = time.time()
 
-    return mock
+    tree = note_service.get_note_tree(project_id=project_id)
 
-@patch('app.services.file_service.Path', autospec=True)
-def test_get_last_content_modification_empty_dir(mock_path_cls):
-    """Test with an empty directory."""
-    dir_mtime = time.time() - 1000
-    mock_project_path = create_mock_path("user_projects/proj_empty", is_dir=True, is_file=False, mtime=dir_mtime, children=[])
-    mock_path_cls.return_value = mock_project_path # Mock Path() constructor
+    assert len(tree.tree) == 4 # 3 Folders + 1 Root Note
+    # Check sorting (Folders first, then notes, then alpha)
+    assert tree.tree[0].type == "folder"
+    assert tree.tree[0].name == "FolderA"
+    assert tree.tree[0].path == "/FolderA"
+    assert tree.tree[0].id == "/FolderA"
 
-    # Mock path_exists used internally
-    with patch.object(file_service.file_service, 'path_exists', return_value=True):
-        result_mtime = file_service.file_service.get_project_last_content_modification(mock_project_path)
+    assert tree.tree[1].type == "folder"
+    assert tree.tree[1].name == "FolderB"
+    assert tree.tree[1].path == "/FolderB"
 
-    assert result_mtime == dir_mtime # Should return the directory's own mtime
+    assert tree.tree[2].type == "folder"
+    assert tree.tree[2].name == "FolderC"
+    assert tree.tree[2].path == "/FolderC"
 
-@patch('app.services.file_service.Path', autospec=True)
-def test_get_last_content_modification_only_irrelevant_files(mock_path_cls):
-    """Test with only files that should be ignored."""
-    dir_mtime = time.time() - 2000
-    file1_mtime = time.time() - 1500
-    file2_mtime = time.time() - 1800 # Older than file1, newer than dir
+    assert tree.tree[3].type == "note"
+    assert tree.tree[3].name == "Root Note"
+    assert tree.tree[3].path == "/"
+    assert tree.tree[3].id == "note_root"
 
-    mock_file1 = create_mock_path("user_projects/proj_irrelevant/config.ini", is_dir=False, is_file=True, mtime=file1_mtime, suffix='.ini')
-    mock_file2 = create_mock_path("user_projects/proj_irrelevant/image.jpg", is_dir=False, is_file=True, mtime=file2_mtime, suffix='.jpg')
-    mock_project_path = create_mock_path("user_projects/proj_irrelevant", is_dir=True, is_file=False, mtime=dir_mtime, children=[mock_file1, mock_file2])
-    mock_path_cls.return_value = mock_project_path
+    # Check children of FolderA (Subfolder first, then note, alpha)
+    folder_a_node = tree.tree[0]
+    assert len(folder_a_node.children) == 2
+    assert folder_a_node.children[0].type == "folder"
+    assert folder_a_node.children[0].name == "SubA"
+    assert folder_a_node.children[0].path == "/FolderA/SubA"
+    assert folder_a_node.children[1].type == "note"
+    assert folder_a_node.children[1].name == "A1 Note"
+    assert folder_a_node.children[1].path == "/FolderA" # Note path is parent folder
+    assert folder_a_node.children[1].id == "note_a1"
 
-    with patch.object(file_service.file_service, 'path_exists', return_value=True):
-        result_mtime = file_service.file_service.get_project_last_content_modification(mock_project_path)
+    # Check children of SubA
+    sub_a_node = folder_a_node.children[0]
+    assert len(sub_a_node.children) == 1
+    assert sub_a_node.children[0].type == "note"
+    assert sub_a_node.children[0].name == "A2 Note"
+    assert sub_a_node.children[0].id == "note_a2"
 
-    assert result_mtime == dir_mtime # Should return dir mtime as no relevant files found
+    # Check children of FolderB
+    folder_b_node = tree.tree[1]
+    assert len(folder_b_node.children) == 1
+    assert folder_b_node.children[0].type == "note"
+    assert folder_b_node.children[0].name == "B1 Note"
 
-@patch('app.services.file_service.Path', autospec=True)
-def test_get_last_content_modification_finds_latest_md(mock_path_cls):
-    """Test finding the latest among .md and .json files."""
-    dir_mtime = time.time() - 3000
-    plan_mtime = time.time() - 2500
-    scene1_mtime = time.time() - 1000 # Latest
-    meta_mtime = time.time() - 2800
-    other_mtime = time.time() - 500 # Irrelevant but newest overall
-
-    mock_plan = create_mock_path("user_projects/proj_latest/plan.md", is_dir=False, is_file=True, mtime=plan_mtime, suffix='.md')
-    mock_scene1 = create_mock_path("user_projects/proj_latest/chapters/ch1/scene1.md", is_dir=False, is_file=True, mtime=scene1_mtime, suffix='.md')
-    mock_meta = create_mock_path("user_projects/proj_latest/project_meta.json", is_dir=False, is_file=True, mtime=meta_mtime, suffix='.json')
-    mock_other = create_mock_path("user_projects/proj_latest/temp.tmp", is_dir=False, is_file=True, mtime=other_mtime, suffix='.tmp')
-    mock_project_path = create_mock_path("user_projects/proj_latest", is_dir=True, is_file=False, mtime=dir_mtime, children=[mock_plan, mock_scene1, mock_meta, mock_other])
-    mock_path_cls.return_value = mock_project_path
-
-    with patch.object(file_service.file_service, 'path_exists', return_value=True):
-        result_mtime = file_service.file_service.get_project_last_content_modification(mock_project_path)
-
-    assert result_mtime == scene1_mtime # Should return the mtime of the latest relevant file
-
-@patch('app.services.file_service.Path', autospec=True)
-def test_get_last_content_modification_skips_excluded_dirs(mock_path_cls):
-    """Test that files within excluded directories are ignored."""
-    dir_mtime = time.time() - 4000
-    plan_mtime = time.time() - 3000 # This should be the latest relevant
-    venv_file_mtime = time.time() - 1000 # Newest overall, but excluded
-    chroma_file_mtime = time.time() - 2000 # Also excluded
-
-    mock_plan = create_mock_path("user_projects/proj_exclude/plan.md", is_dir=False, is_file=True, mtime=plan_mtime, suffix='.md', relative_parts=('plan.md',))
-    # Mock files within excluded dirs - need correct relative_parts
-    mock_venv_file = create_mock_path("user_projects/proj_exclude/venv/lib/site.py", is_dir=False, is_file=True, mtime=venv_file_mtime, suffix='.py', relative_parts=('venv', 'lib', 'site.py'))
-    mock_chroma_file = create_mock_path("user_projects/proj_exclude/chroma_db/data.log", is_dir=False, is_file=True, mtime=chroma_file_mtime, suffix='.log', relative_parts=('chroma_db', 'data.log'))
-    mock_project_path = create_mock_path("user_projects/proj_exclude", is_dir=True, is_file=False, mtime=dir_mtime, children=[mock_plan, mock_venv_file, mock_chroma_file])
-    mock_path_cls.return_value = mock_project_path
-
-    with patch.object(file_service.file_service, 'path_exists', return_value=True):
-        result_mtime = file_service.file_service.get_project_last_content_modification(mock_project_path)
-
-    assert result_mtime == plan_mtime # Should ignore files in venv and chroma_db
-
-@patch('app.services.file_service.Path', autospec=True)
-def test_get_last_content_modification_handles_stat_error(mock_path_cls):
-    """Test that it handles OSError when stating a file."""
-    dir_mtime = time.time() - 3000
-    plan_mtime = time.time() - 2000 # Should be the result
-    error_file_mtime = time.time() - 1000 # Would be latest, but stat fails
-
-    mock_plan = create_mock_path("user_projects/proj_stat_err/plan.md", is_dir=False, is_file=True, mtime=plan_mtime, suffix='.md')
-    mock_error_file = create_mock_path("user_projects/proj_stat_err/error.json", is_dir=False, is_file=True, mtime=error_file_mtime, suffix='.json')
-    # Make stat raise an error for this specific file
-    mock_error_file.stat.side_effect = OSError("Permission denied")
-    mock_project_path = create_mock_path("user_projects/proj_stat_err", is_dir=True, is_file=False, mtime=dir_mtime, children=[mock_plan, mock_error_file])
-    mock_path_cls.return_value = mock_project_path
-
-    with patch.object(file_service.file_service, 'path_exists', return_value=True):
-        result_mtime = file_service.file_service.get_project_last_content_modification(mock_project_path)
-
-    assert result_mtime == plan_mtime # Should ignore the file that caused stat error
-
-@patch('app.services.file_service.Path', autospec=True)
-def test_get_last_content_modification_non_existent_dir(mock_path_cls):
-    """Test when the project path doesn't exist."""
-    mock_project_path = create_mock_path("user_projects/proj_non_exist", is_dir=False, is_file=False, mtime=0)
-    mock_path_cls.return_value = mock_project_path
-
-    # Mock path_exists to return False
-    with patch.object(file_service.file_service, 'path_exists', return_value=False):
-        result_mtime = file_service.file_service.get_project_last_content_modification(mock_project_path)
-
-    assert result_mtime is None
-
-@patch('app.services.file_service.Path', autospec=True)
-def test_get_last_content_modification_path_is_file(mock_path_cls):
-    """Test when the provided path is a file, not a directory."""
-    file_mtime = time.time() - 500
-    mock_file_path = create_mock_path("user_projects/proj_is_file.md", is_dir=False, is_file=True, mtime=file_mtime, suffix='.md')
-    mock_path_cls.return_value = mock_file_path
-
-    # Mock path_exists to return True
-    with patch.object(file_service.file_service, 'path_exists', return_value=True):
-        result_mtime = file_service.file_service.get_project_last_content_modification(mock_file_path)
-
-    assert result_mtime is None # Should return None as it expects a directory
-
-# --- ADDED: Test get_file_mtime ---
-def test_get_file_mtime_success(temp_project_dir: Path, monkeypatch):
-    monkeypatch.setattr(file_service, 'BASE_PROJECT_DIR', temp_project_dir)
-    project_id = "mtime-proj"
-    note_id = "note1" # Use ID without extension here
-    file_path = file_service.file_service._get_note_path(project_id, note_id) # Helper adds .md
-    file_path.parent.mkdir(parents=True, exist_ok=True)
-    content = "Test content"
-    file_path.write_text(content, encoding='utf-8')
-    # Get expected time (allow small variation)
-    expected_mtime = file_path.stat().st_mtime
-
-    mtime = file_service.file_service.get_file_mtime(file_path)
-
-    assert mtime is not None
-    assert abs(mtime - expected_mtime) < 0.1 # Allow small difference
-
-def test_get_file_mtime_non_existent(temp_project_dir: Path, monkeypatch):
-    monkeypatch.setattr(file_service, 'BASE_PROJECT_DIR', temp_project_dir)
-    project_id = "mtime-proj"
-    note_id = "nonexistent"
-    file_path = file_service.file_service._get_note_path(project_id, note_id) # Helper adds .md
-
-    mtime = file_service.file_service.get_file_mtime(file_path)
-    assert mtime is None
-
-def test_get_file_mtime_is_directory(temp_project_dir: Path, monkeypatch):
-    monkeypatch.setattr(file_service, 'BASE_PROJECT_DIR', temp_project_dir)
-    project_id = "mtime-proj"
-    dir_path = file_service.file_service._get_notes_dir(project_id)
-    dir_path.mkdir(parents=True, exist_ok=True)
-
-    mtime = file_service.file_service.get_file_mtime(dir_path)
-    assert mtime is None
-# --- END ADDED ---
+    # Check children of FolderC
+    folder_c_node = tree.tree[2]
+    assert len(folder_c_node.children) == 1
+    assert folder_c_node.children[0].type == "note"
+    assert folder_c_node.children[0].name == "C1 Note"
 
 
-# --- Tests for Chapter Plan/Synopsis Read Methods ---
-# (Unchanged - Omitted for brevity)
-def test_read_chapter_plan_file_success(temp_project_dir: Path, monkeypatch):
-    """Test reading an existing chapter plan file."""
-    monkeypatch.setattr(file_service, 'BASE_PROJECT_DIR', temp_project_dir)
-    project_id = "chap-plan-proj"
-    chapter_id = "ch1"
-    plan_path = file_service.file_service._get_chapter_plan_path(project_id, chapter_id)
-    content = "Chapter 1 plan details."
-    plan_path.parent.mkdir(parents=True, exist_ok=True)
-    plan_path.write_text(content, encoding='utf-8')
+# --- Test rename_folder ---
 
-    read_content = file_service.file_service.read_chapter_plan_file(project_id, chapter_id)
-    assert read_content == content
+def test_rename_folder_success(mock_project_service, mock_file_service):
+    project_id = "test_proj_id"
+    initial_meta = {
+        "notes": {
+            "note1": {"title": "N1", "folder_path": "/Old"},
+            "note2": {"title": "N2", "folder_path": "/Old/Sub"},
+            "note3": {"title": "N3", "folder_path": "/Other"},
+        }
+    }
+    mock_file_service.read_project_metadata.return_value = initial_meta
 
-def test_read_chapter_plan_file_not_found(temp_project_dir: Path, monkeypatch):
-    """Test reading a non-existent chapter plan file."""
-    monkeypatch.setattr(file_service, 'BASE_PROJECT_DIR', temp_project_dir)
-    project_id = "chap-plan-proj"
-    chapter_id = "ch2_no_plan"
-    # Ensure chapter dir exists, but not the plan file
-    chapter_path = file_service.file_service._get_chapter_path(project_id, chapter_id)
-    chapter_path.mkdir(parents=True, exist_ok=True)
+    note_service.rename_folder(project_id=project_id, old_path="/Old", new_path="/New")
 
-    read_content = file_service.file_service.read_chapter_plan_file(project_id, chapter_id)
-    assert read_content is None # Expect None when not found
+    mock_file_service.write_project_metadata.assert_called_once()
+    args, kwargs = mock_file_service.write_project_metadata.call_args
+    updated_meta = kwargs['data']
 
-def test_read_chapter_synopsis_file_success(temp_project_dir: Path, monkeypatch):
-    """Test reading an existing chapter synopsis file."""
-    monkeypatch.setattr(file_service, 'BASE_PROJECT_DIR', temp_project_dir)
-    project_id = "chap-syn-proj"
-    chapter_id = "ch1"
-    synopsis_path = file_service.file_service._get_chapter_synopsis_path(project_id, chapter_id)
-    content = "Chapter 1 synopsis summary."
-    synopsis_path.parent.mkdir(parents=True, exist_ok=True)
-    synopsis_path.write_text(content, encoding='utf-8')
+    assert updated_meta['notes']['note1']['folder_path'] == "/New"
+    assert updated_meta['notes']['note2']['folder_path'] == "/New/Sub"
+    assert updated_meta['notes']['note3']['folder_path'] == "/Other" # Unchanged
 
-    read_content = file_service.file_service.read_chapter_synopsis_file(project_id, chapter_id)
-    assert read_content == content
+def test_rename_folder_no_notes_found(mock_project_service, mock_file_service):
+    project_id = "test_proj_id"
+    initial_meta = { "notes": { "note1": {"title": "N1", "folder_path": "/Other"} } }
+    mock_file_service.read_project_metadata.return_value = initial_meta
 
-def test_read_chapter_synopsis_file_not_found(temp_project_dir: Path, monkeypatch):
-    """Test reading a non-existent chapter synopsis file."""
-    monkeypatch.setattr(file_service, 'BASE_PROJECT_DIR', temp_project_dir)
-    project_id = "chap-syn-proj"
-    chapter_id = "ch2_no_synopsis"
-    chapter_path = file_service.file_service._get_chapter_path(project_id, chapter_id)
-    chapter_path.mkdir(parents=True, exist_ok=True)
+    # Attempt to rename a folder that doesn't contain any notes
+    note_service.rename_folder(project_id=project_id, old_path="/NonExistent", new_path="/New")
 
-    read_content = file_service.file_service.read_chapter_synopsis_file(project_id, chapter_id)
-    assert read_content is None # Expect None when not found
+    # Should not write metadata if no changes were made
+    mock_file_service.write_project_metadata.assert_not_called()
 
-# --- ADDED: Tests for Chapter Plan/Synopsis Write Methods ---
-@patch('app.rag.index_manager.index_manager', autospec=True)
-def test_write_chapter_plan_file(mock_index_mgr: MagicMock, temp_project_dir: Path, monkeypatch):
-    """Test writing a chapter plan file and triggering index."""
-    monkeypatch.setattr(file_service, 'BASE_PROJECT_DIR', temp_project_dir)
-    project_id = "chap-plan-write"
-    chapter_id = "ch1"
-    plan_path = file_service.file_service._get_chapter_plan_path(project_id, chapter_id)
-    content = "New chapter plan content."
+def test_rename_folder_invalid_paths(mock_project_service, mock_file_service):
+    project_id = "test_proj_id"
+    with pytest.raises(HTTPException) as excinfo:
+        note_service.rename_folder(project_id=project_id, old_path="/", new_path="/New")
+    assert excinfo.value.status_code == 400
+    assert "Cannot rename the root folder" in excinfo.value.detail
 
-    # Ensure chapter dir doesn't exist initially to test creation
-    assert not plan_path.parent.exists()
+    with pytest.raises(HTTPException) as excinfo:
+        note_service.rename_folder(project_id=project_id, old_path="/Old", new_path="/")
+    assert excinfo.value.status_code == 400
+    assert "Cannot rename a folder to root" in excinfo.value.detail
 
-    file_service.file_service.write_chapter_plan_file(project_id, chapter_id, content)
+    with pytest.raises(HTTPException) as excinfo:
+        note_service.rename_folder(project_id=project_id, old_path="/Same", new_path="/Same")
+    assert excinfo.value.status_code == 400
+    assert "Old and new paths are the same" in excinfo.value.detail
 
-    assert plan_path.exists()
-    assert plan_path.read_text(encoding='utf-8') == content
-    mock_index_mgr.index_file.assert_called_once_with(plan_path)
+def test_rename_folder_conflict(mock_project_service, mock_file_service):
+    project_id = "test_proj_id"
+    initial_meta = {
+        "notes": {
+            "note1": {"title": "N1", "folder_path": "/Old"},
+            "note2": {"title": "N2", "folder_path": "/Existing"}, # Target path exists
+        }
+    }
+    mock_file_service.read_project_metadata.return_value = initial_meta
 
-@patch('app.rag.index_manager.index_manager', autospec=True)
-def test_write_chapter_synopsis_file(mock_index_mgr: MagicMock, temp_project_dir: Path, monkeypatch):
-    """Test writing a chapter synopsis file and triggering index."""
-    monkeypatch.setattr(file_service, 'BASE_PROJECT_DIR', temp_project_dir)
-    project_id = "chap-syn-write"
-    chapter_id = "ch1"
-    synopsis_path = file_service.file_service._get_chapter_synopsis_path(project_id, chapter_id)
-    content = "New chapter synopsis content."
+    with pytest.raises(HTTPException) as excinfo:
+        note_service.rename_folder(project_id=project_id, old_path="/Old", new_path="/Existing")
+    assert excinfo.value.status_code == 409 # Conflict
+    assert "conflicts with an existing folder" in excinfo.value.detail
 
-    assert not synopsis_path.parent.exists()
 
-    file_service.file_service.write_chapter_synopsis_file(project_id, chapter_id, content)
+# --- Test delete_folder ---
 
-    assert synopsis_path.exists()
-    assert synopsis_path.read_text(encoding='utf-8') == content
-    mock_index_mgr.index_file.assert_called_once_with(synopsis_path)
-# --- END ADDED ---
+def test_delete_folder_empty(mock_project_service, mock_file_service):
+    project_id = "test_proj_id"
+    initial_meta = { "notes": { "note1": {"title": "N1", "folder_path": "/Other"} } }
+    mock_file_service.read_project_metadata.return_value = initial_meta
+
+    # Delete a folder path not referenced by any notes
+    note_service.delete_folder(project_id=project_id, path="/EmptyFolder", recursive=False)
+
+    # No files should be deleted, no metadata written
+    mock_file_service.delete_file.assert_not_called()
+    mock_file_service.write_project_metadata.assert_not_called()
+
+def test_delete_folder_not_empty_non_recursive(mock_project_service, mock_file_service):
+    project_id = "test_proj_id"
+    initial_meta = { "notes": { "note1": {"title": "N1", "folder_path": "/NotEmpty"} } }
+    mock_file_service.read_project_metadata.return_value = initial_meta
+
+    with pytest.raises(HTTPException) as excinfo:
+        note_service.delete_folder(project_id=project_id, path="/NotEmpty", recursive=False)
+    assert excinfo.value.status_code == 409 # Conflict
+    assert "Folder '/NotEmpty' is not empty" in excinfo.value.detail
+
+    mock_file_service.delete_file.assert_not_called()
+    mock_file_service.write_project_metadata.assert_not_called()
+
+def test_delete_folder_not_empty_recursive_success(mock_project_service, mock_file_service):
+    project_id = "test_proj_id"
+    initial_meta = {
+        "notes": {
+            "note1": {"title": "N1", "folder_path": "/ToDelete"},
+            "note2": {"title": "N2", "folder_path": "/ToDelete/Sub"},
+            "note3": {"title": "N3", "folder_path": "/Other"},
+        }
+    }
+    mock_file_service.read_project_metadata.return_value = initial_meta
+    mock_file_service.path_exists.return_value = True # Files exist
+
+    note_service.delete_folder(project_id=project_id, path="/ToDelete", recursive=True)
+
+    # Check that delete_file was called for note1 and note2
+    expected_path1 = BASE_PROJECT_DIR / project_id / "notes" / "note1.md"
+    expected_path2 = BASE_PROJECT_DIR / project_id / "notes" / "note2.md"
+    mock_file_service.delete_file.assert_has_calls([
+        call(path=expected_path1),
+        call(path=expected_path2)
+    ], any_order=True)
+    assert mock_file_service.delete_file.call_count == 2
+
+    # Check metadata write removed note1 and note2
+    mock_file_service.write_project_metadata.assert_called_once()
+    args, kwargs = mock_file_service.write_project_metadata.call_args
+    updated_meta = kwargs['data']
+    assert "note1" not in updated_meta['notes']
+    assert "note2" not in updated_meta['notes']
+    assert "note3" in updated_meta['notes'] # note3 should remain
+
+def test_delete_folder_recursive_file_delete_error(mock_project_service, mock_file_service):
+    project_id = "test_proj_id"
+    initial_meta = {
+        "notes": {
+            "note1": {"title": "N1", "folder_path": "/ToDelete"}, # This one fails delete
+            "note2": {"title": "N2", "folder_path": "/ToDelete/Sub"}, # This one succeeds
+        }
+    }
+    mock_file_service.read_project_metadata.return_value = initial_meta
+    mock_file_service.path_exists.return_value = True
+
+    # Make delete_file fail for note1
+    expected_path1 = BASE_PROJECT_DIR / project_id / "notes" / "note1.md"
+    expected_path2 = BASE_PROJECT_DIR / project_id / "notes" / "note2.md"
+    def delete_side_effect(path):
+        if path == expected_path1:
+            raise HTTPException(status_code=500, detail="Disk error")
+        elif path == expected_path2:
+            return None # Success
+        else:
+            pytest.fail(f"Unexpected call to delete_file with path: {path}")
+    mock_file_service.delete_file.side_effect = delete_side_effect
+
+    # Service should log the error but continue and update metadata for successful deletions
+    note_service.delete_folder(project_id=project_id, path="/ToDelete", recursive=True)
+
+    # Check delete_file was called for both
+    mock_file_service.delete_file.assert_has_calls([
+        call(path=expected_path1),
+        call(path=expected_path2)
+    ], any_order=True)
+
+    # Check metadata write removed only note2 (since note1 failed deletion)
+    mock_file_service.write_project_metadata.assert_called_once()
+    args, kwargs = mock_file_service.write_project_metadata.call_args
+    updated_meta = kwargs['data']
+    assert "note1" in updated_meta['notes'] # note1 remains because delete failed
+    assert "note2" not in updated_meta['notes'] # note2 removed
+
+def test_delete_folder_root(mock_project_service, mock_file_service):
+    project_id = "test_proj_id"
+    with pytest.raises(HTTPException) as excinfo:
+        note_service.delete_folder(project_id=project_id, path="/", recursive=True)
+    assert excinfo.value.status_code == 400
+    assert "Cannot delete the root folder" in excinfo.value.detail

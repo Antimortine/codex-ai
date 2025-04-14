@@ -14,7 +14,10 @@
 
 from fastapi import APIRouter, Depends, HTTPException, status, Body, Path
 from typing import List
-from app.models.note import NoteCreate, NoteUpdate, NoteRead, NoteList, NoteReadBasic
+from app.models.note import (
+    NoteCreate, NoteUpdate, NoteRead, NoteList, NoteReadBasic,
+    NoteTree, FolderRenameRequest, FolderDeleteRequest # Import new models
+)
 from app.models.common import Message
 # Import the service instance
 from app.services.note_service import note_service
@@ -26,13 +29,122 @@ logger = logging.getLogger(__name__)
 router = APIRouter()
 
 # --- Endpoint Definitions ---
+# IMPORTANT: Define specific paths BEFORE paths with parameters to avoid routing conflicts
+
+@router.get(
+    "/tree",
+    response_model=NoteTree,
+    summary="Get Note Tree",
+    description="Retrieves the hierarchical structure of notes and virtual folders for the project.",
+)
+async def get_note_tree(
+    project_id: str = Depends(get_project_dependency),
+):
+    """
+    Retrieves the note structure as a tree, including virtual folders.
+
+    - **project_id**: The UUID of the project.
+    """
+    logger.info(f"API: Received request to get note tree for project {project_id}")
+    try:
+        # Delegate tree building to the service layer
+        note_tree = note_service.get_note_tree(project_id=project_id)
+        logger.info(f"API: Successfully built note tree for project {project_id}")
+        return note_tree
+    except HTTPException as http_exc:
+        logger.warning(f"API: HTTPException during note tree retrieval for project {project_id}: {http_exc.status_code} - {http_exc.detail}")
+        raise http_exc
+    except Exception as e:
+        logger.error(f"API: Unexpected error getting note tree for project {project_id}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Internal error getting note tree: {e}"
+        )
+
+@router.patch(
+    "/folders",
+    response_model=Message,
+    status_code=status.HTTP_200_OK,
+    summary="Rename Virtual Folder",
+    description="Renames a virtual folder by updating the metadata of all contained notes.",
+)
+async def rename_folder(
+    request: FolderRenameRequest = Body(...),
+    project_id: str = Depends(get_project_dependency),
+):
+    """
+    Renames a virtual folder. This updates the `folder_path` metadata for all notes
+    currently residing in the `old_path` or any of its virtual subdirectories.
+
+    - **project_id**: The UUID of the project.
+    - **request**: Contains `old_path` and `new_path`.
+    """
+    logger.info(f"API: Received request to rename folder from '{request.old_path}' to '{request.new_path}' in project {project_id}")
+    try:
+        note_service.rename_folder(
+            project_id=project_id,
+            old_path=request.old_path,
+            new_path=request.new_path
+        )
+        logger.info(f"API: Successfully processed rename folder request for '{request.old_path}' in project {project_id}")
+        return Message(message=f"Folder '{request.old_path}' renamed to '{request.new_path}' successfully.")
+    except HTTPException as http_exc:
+        logger.warning(f"API: HTTPException during folder rename for '{request.old_path}' in project {project_id}: {http_exc.status_code} - {http_exc.detail}")
+        raise http_exc
+    except Exception as e:
+        logger.error(f"API: Unexpected error renaming folder '{request.old_path}' in project {project_id}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Internal error renaming folder: {e}"
+        )
+
+@router.delete(
+    "/folders",
+    response_model=Message,
+    status_code=status.HTTP_200_OK,
+    summary="Delete Virtual Folder",
+    description="Deletes a virtual folder. If recursive is true, deletes all contained notes and subfolders.",
+)
+async def delete_folder(
+    request: FolderDeleteRequest = Body(...),
+    project_id: str = Depends(get_project_dependency),
+):
+    """
+    Deletes a virtual folder.
+
+    - If `recursive` is `false`, the operation will fail if the folder contains any notes.
+    - If `recursive` is `true`, all notes within the specified `path` (and its virtual subdirectories) will be deleted (files and metadata).
+
+    - **project_id**: The UUID of the project.
+    - **request**: Contains `path` and `recursive` flag.
+    """
+    logger.info(f"API: Received request to delete folder '{request.path}' (recursive={request.recursive}) in project {project_id}")
+    try:
+        note_service.delete_folder(
+            project_id=project_id,
+            path=request.path,
+            recursive=request.recursive
+        )
+        logger.info(f"API: Successfully processed delete folder request for '{request.path}' in project {project_id}")
+        return Message(message=f"Folder '{request.path}' deleted successfully.")
+    except HTTPException as http_exc:
+        logger.warning(f"API: HTTPException during folder delete for '{request.path}' in project {project_id}: {http_exc.status_code} - {http_exc.detail}")
+        raise http_exc
+    except Exception as e:
+        logger.error(f"API: Unexpected error deleting folder '{request.path}' in project {project_id}: {e}", exc_info=True)
+        raise HTTPException(
+            status_code=status.HTTP_500_INTERNAL_SERVER_ERROR,
+            detail=f"Internal error deleting folder: {e}"
+        )
+
+# --- Note CRUD Endpoints ---
 
 @router.post(
     "/",
     response_model=NoteRead,
     status_code=status.HTTP_201_CREATED,
     summary="Create Note",
-    description="Creates a new note within the project.",
+    description="Creates a new note within the project, optionally specifying a virtual folder path.",
 )
 async def create_note(
     note_in: NoteCreate = Body(...),
@@ -42,16 +154,16 @@ async def create_note(
     Creates a new note associated with the project.
 
     - **project_id**: The UUID of the project.
-    - **note_in**: The note data (title, optional initial content).
+    - **note_in**: The note data (title, optional initial content, optional folder_path).
     """
-    logger.info(f"API: Received request to create note in project {project_id} with title '{note_in.title}'")
+    logger.info(f"API: Received request to create note in project {project_id} with title '{note_in.title}' in path '{note_in.folder_path}'")
     try:
         # Delegate creation to the service layer
         created_note = note_service.create(project_id=project_id, note_in=note_in)
         logger.info(f"API: Successfully created note {created_note.id} in project {project_id}")
         return created_note
     except HTTPException as http_exc:
-        # Re-raise known HTTP exceptions from the service layer (e.g., project not found)
+        # Re-raise known HTTP exceptions from the service layer (e.g., project not found, invalid path)
         logger.warning(f"API: HTTPException during note creation for project {project_id}: {http_exc.status_code} - {http_exc.detail}")
         raise http_exc
     except Exception as e:
@@ -65,13 +177,14 @@ async def create_note(
     "/",
     response_model=NoteList,
     summary="List Notes",
-    description="Retrieves a list of all notes for the project, sorted by last modified.",
+    description="Retrieves a list of all notes for the project (basic details including folder path), sorted by last modified.",
 )
 async def list_notes(
     project_id: str = Depends(get_project_dependency),
 ):
     """
     Retrieves all notes for a specific project, sorted by last modification date (newest first).
+    Includes basic details like id, title, folder_path, and last_modified.
 
     - **project_id**: The UUID of the project.
     """
@@ -95,14 +208,14 @@ async def list_notes(
     "/{note_id}",
     response_model=NoteRead,
     summary="Get Note",
-    description="Retrieves details and content of a specific note.",
+    description="Retrieves details, content, and folder path of a specific note.",
 )
 async def get_note(
     note_id: str = Path(...),
     project_id: str = Depends(get_project_dependency),
 ):
     """
-    Retrieves a specific note by its ID.
+    Retrieves a specific note by its ID, including its folder path.
 
     - **project_id**: The UUID of the project.
     - **note_id**: The UUID of the note to retrieve.
@@ -132,7 +245,7 @@ async def get_note(
     "/{note_id}",
     response_model=NoteRead,
     summary="Update Note",
-    description="Updates the title or content of an existing note.",
+    description="Updates the title, content, or virtual folder path of an existing note.",
 )
 async def update_note(
     note_id: str = Path(...),
@@ -141,10 +254,11 @@ async def update_note(
 ):
     """
     Updates an existing note. Only fields provided in the request body will be updated.
+    Allows changing the title, content, or moving the note by changing its folder_path.
 
     - **project_id**: The UUID of the project.
     - **note_id**: The UUID of the note to update.
-    - **note_in**: The note data fields to update (title, content).
+    - **note_in**: The note data fields to update (title, content, folder_path).
     """
     logger.info(f"API: Received request to update note {note_id} in project {project_id}")
     # Check if at least one field is provided for update
@@ -177,7 +291,7 @@ async def update_note(
     response_model=Message,
     status_code=status.HTTP_200_OK, # Use 200 OK with message body
     summary="Delete Note",
-    description="Deletes a specific note.",
+    description="Deletes a specific note (file and metadata).",
 )
 async def delete_note(
     note_id: str = Path(...),

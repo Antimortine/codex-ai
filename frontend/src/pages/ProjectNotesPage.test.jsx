@@ -15,7 +15,7 @@
  */
 
 import React from 'react';
-import { render, screen, waitFor } from '@testing-library/react';
+import { render, screen, waitFor, act } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { vi, describe, it, expect, beforeEach } from 'vitest';
@@ -23,326 +23,408 @@ import { vi, describe, it, expect, beforeEach } from 'vitest';
 import ProjectNotesPage from './ProjectNotesPage';
 import * as api from '../api/codexApi';
 
+// --- Mocks ---
 // Mock the API module
 vi.mock('../api/codexApi');
 
+// Mock the NoteTreeViewer component
+vi.mock('../components/NoteTreeViewer', () => ({
+  // Use default export because the component is likely exported as default
+  default: vi.fn(({ projectId, treeData, handlers, isBusy }) => {
+    // Conditional rendering for empty tree
+    if (!treeData || treeData.length === 0) {
+      return <div data-testid="mock-note-tree-viewer">No notes or folders found.</div>;
+    }
+    // Render tree if not empty
+    return (
+        <div data-testid="mock-note-tree-viewer">
+            <p>Project ID: {projectId}</p>
+            <p data-testid="is-busy-prop">Is Busy: {String(isBusy)}</p>
+            {/* Render basic info about the tree */}
+            <p data-testid="tree-node-count">Tree Nodes: {treeData.length}</p>
+            {treeData.map(node => (
+                <div key={node.id} data-testid={`node-${node.id}`}>
+                <span>{node.type === 'folder' ? '📁' : '📄'} {node.name} ({node.path})</span>
+                {/* Add buttons to trigger handlers */}
+                {node.type === 'folder' && (
+                    <button onClick={() => handlers.onCreateNote(node.path)} disabled={isBusy}>+ Note in {node.name}</button>
+                )}
+                {node.type === 'folder' && node.path !== '/' && (
+                    <button data-testid={`delete-folder-${node.id}`} onClick={() => handlers.onDeleteFolder(node.path)} disabled={isBusy}>Delete Folder {node.name}</button>
+                )}
+                {node.type === 'note' && (
+                    <button data-testid={`delete-note-${node.note_id}`} onClick={() => handlers.onDeleteNote(node.note_id, node.name)} disabled={isBusy}>Delete Note {node.name}</button>
+                )}
+                {/* Render children recursively for testing nested scenarios if needed */}
+                {node.children && node.children.length > 0 && (
+                     <div style={{ marginLeft: '20px' }}>
+                         {node.children.map(child => (
+                             <div key={child.id} data-testid={`node-${child.id}`}>
+                                 <span>{child.type === 'folder' ? '📁' : '📄'} {child.name} ({child.path})</span>
+                                  {/* Add buttons for children if needed for tests */}
+                                  {child.type === 'note' && (
+                                     <button data-testid={`delete-note-${child.note_id}`} onClick={() => handlers.onDeleteNote(child.note_id, child.name)} disabled={isBusy}>Delete Note {child.name}</button>
+                                  )}
+                             </div>
+                         ))}
+                     </div>
+                 )}
+                </div>
+            ))}
+            {/* Add a root create button */}
+            <button onClick={() => handlers.onCreateNote('/')} disabled={isBusy}>+ Note in Root</button>
+            {/* Add a root create folder button */}
+            <button onClick={() => handlers.onCreateFolder('/')} disabled={isBusy}>+ Folder in Root</button>
+        </div>
+    );
+  }),
+}));
 
-const TEST_PROJECT_ID = 'proj-notes-123';
-const MOCK_PROJECT = { id: TEST_PROJECT_ID, name: 'Notes Test Project' };
-const MOCK_NOTES = [
-    { id: 'note-abc', title: 'First Note', last_modified: '2024-01-01T10:00:00Z' },
-    { id: 'note-def', title: 'Second Note', last_modified: '2024-01-02T11:00:00Z' },
+// Mock NoteTreeViewer component import after vi.mock
+import NoteTreeViewer from '../components/NoteTreeViewer';
+
+
+// --- Test Data ---
+const TEST_PROJECT_ID = 'proj-notes-tree-123';
+const MOCK_PROJECT = { id: TEST_PROJECT_ID, name: 'Notes Tree Test Project' };
+// Define MOCK_TREE_DATA with nested structure for better testing
+const MOCK_TREE_DATA = [
+    { id: '/FolderA', name: 'FolderA', type: 'folder', path: '/FolderA', children: [
+        { id: 'note-a1', name: 'Note A1', type: 'note', path: '/FolderA', note_id: 'note-a1', last_modified: Date.now()/1000 - 100, children: [] }
+    ]},
+    { id: 'note-root', name: 'Root Note', type: 'note', path: '/', note_id: 'note-root', last_modified: Date.now()/1000 - 200, children: [] }
 ];
 const NEW_NOTE_TITLE = 'My Awesome New Note';
-const NEW_NOTE_RESPONSE = { id: 'note-new', title: NEW_NOTE_TITLE, last_modified: '...' };
+const NEW_NOTE_RESPONSE = { id: 'note-new', title: NEW_NOTE_TITLE, folder_path: '/', last_modified: Date.now()/1000 };
 
+
+// --- Test Setup ---
 const renderComponent = () => {
     return render(
         <MemoryRouter initialEntries={[`/projects/${TEST_PROJECT_ID}/notes`]}>
             <Routes>
                 <Route path="/projects/:projectId/notes" element={<ProjectNotesPage />} />
+                {/* Keep the NoteEditPage route for Link testing if needed */}
                 <Route path="/projects/:projectId/notes/:noteId" element={<div>Note Edit Page Mock</div>} />
             </Routes>
         </MemoryRouter>
     );
 };
 
-describe('ProjectNotesPage', () => {
+describe('ProjectNotesPage (Tree View)', () => {
     beforeEach(() => {
         vi.resetAllMocks();
+        // Setup default successful mocks
         api.getProject.mockResolvedValue({ data: MOCK_PROJECT });
-        api.listNotes.mockResolvedValue({ data: { notes: [...MOCK_NOTES] } });
+        api.getNoteTree.mockResolvedValue({ data: { tree: [...MOCK_TREE_DATA] } });
         api.createNote.mockResolvedValue({ data: NEW_NOTE_RESPONSE });
         api.deleteNote.mockResolvedValue({ data: { message: 'Note deleted' } });
-        global.confirm = vi.fn(() => true);
+        api.deleteFolder.mockResolvedValue({ data: { message: 'Folder deleted' } });
+        // Mock window.prompt and window.confirm
+        window.prompt = vi.fn(() => NEW_NOTE_TITLE); // Default prompt returns a title
+        window.confirm = vi.fn(() => true); // Default confirm returns true
     });
 
-    // --- Basic Rendering and Fetching Tests (Unchanged) ---
+    // --- Basic Rendering and Fetching Tests ---
     it('renders loading state initially', async () => {
-        api.listNotes.mockImplementation(() => new Promise(() => {}));
+        api.getNoteTree.mockImplementation(() => new Promise(() => {})); // Make it hang
         renderComponent();
-        expect(screen.getByText(/Loading notes.../i)).toBeInTheDocument();
-        api.listNotes.mockResolvedValue({ data: { notes: [] } }); // Cleanup hanging promise
+        expect(screen.getByText(/Loading notes structure.../i)).toBeInTheDocument();
+        // Clean up hanging promise after test if necessary, though not strictly required here
+        // as the test finishes before resolution matters.
     });
 
-    it('fetches project name and notes on mount and displays them', async () => {
+    it('fetches project name and note tree on mount and passes data to NoteTreeViewer', async () => {
         renderComponent();
-        expect(await screen.findByRole('heading', { name: /Project Notes for "Notes Test Project"/i })).toBeInTheDocument();
-        expect(await screen.findByText(MOCK_NOTES[0].title)).toBeInTheDocument();
-        expect(screen.getByText(MOCK_NOTES[1].title)).toBeInTheDocument();
+        expect(await screen.findByRole('heading', { name: /Project Notes/i })).toBeInTheDocument();
+        expect(screen.getByText(`For "${MOCK_PROJECT.name}"`)).toBeInTheDocument();
+
+        // Wait for the mock tree viewer to render with data
+        expect(await screen.findByTestId('mock-note-tree-viewer')).toBeInTheDocument();
+
+        // Verify API calls
         await waitFor(() => {
              expect(api.getProject).toHaveBeenCalledWith(TEST_PROJECT_ID);
-             expect(api.listNotes).toHaveBeenCalledWith(TEST_PROJECT_ID);
+             expect(api.getNoteTree).toHaveBeenCalledWith(TEST_PROJECT_ID);
         });
-        expect(screen.getByRole('link', { name: MOCK_NOTES[0].title })).toHaveAttribute('href', `/projects/${TEST_PROJECT_ID}/notes/${MOCK_NOTES[0].id}`);
-        expect(screen.getByRole('link', { name: MOCK_NOTES[1].title })).toHaveAttribute('href', `/projects/${TEST_PROJECT_ID}/notes/${MOCK_NOTES[1].id}`);
+
+        // Verify props passed to the mocked NoteTreeViewer
+        expect(NoteTreeViewer).toHaveBeenCalledWith(
+            expect.objectContaining({
+                projectId: TEST_PROJECT_ID,
+                treeData: MOCK_TREE_DATA,
+                isBusy: false,
+                handlers: expect.any(Object), // Check handlers exist
+            }),
+            expect.anything() // Context argument
+        );
+
+        // Check some content rendered by the mock viewer based on passed data
+        expect(screen.getByText(`Project ID: ${TEST_PROJECT_ID}`)).toBeInTheDocument();
+        // Use test-id for node count check
+        expect(screen.getByTestId('tree-node-count')).toHaveTextContent(`Tree Nodes: ${MOCK_TREE_DATA.length}`);
+        expect(screen.getByText(/📁 FolderA \(\/FolderA\)/)).toBeInTheDocument();
+        expect(screen.getByText(/📄 Root Note \(\/\)/)).toBeInTheDocument();
+        // Check nested node rendered by mock
+        expect(screen.getByText(/📄 Note A1 \(\/FolderA\)/)).toBeInTheDocument();
     });
 
-     it('displays "No notes found" message when API returns empty list', async () => {
-        api.listNotes.mockResolvedValue({ data: { notes: [] } });
+     it('displays message when API returns empty tree', async () => {
+        api.getNoteTree.mockResolvedValue({ data: { tree: [] } });
         renderComponent();
-        expect(await screen.findByRole('heading', { name: /Project Notes for "Notes Test Project"/i })).toBeInTheDocument();
-        expect(await screen.findByText(/No notes found for this project./i)).toBeInTheDocument();
-        expect(screen.queryByText(MOCK_NOTES[0].title)).not.toBeInTheDocument();
+        expect(await screen.findByRole('heading', { name: /Project Notes/i })).toBeInTheDocument();
+        // Wait for loading to finish
+        await waitFor(() => expect(screen.queryByText(/Loading notes structure.../i)).not.toBeInTheDocument());
+        // Check the message rendered by the *mock* NoteTreeViewer when treeData is empty
+        // This relies on the mock's conditional rendering logic.
+        expect(await screen.findByText(/No notes or folders found./i)).toBeInTheDocument();
      });
 
-     it('displays error message if fetching notes fails', async () => {
-        const errorMsg = 'Failed to load notes';
-        api.listNotes.mockRejectedValue(new Error(errorMsg));
+     it('displays error message if fetching tree fails', async () => {
+        const errorMsg = 'Failed to load tree';
+        api.getNoteTree.mockRejectedValue(new Error(errorMsg));
         renderComponent();
-        expect(await screen.findByRole('heading', { name: /Project Notes for "Notes Test Project"/i })).toBeInTheDocument();
-        expect(await screen.findByText(/Failed to load notes. Please try again./i)).toBeInTheDocument();
+        expect(await screen.findByRole('heading', { name: /Project Notes/i })).toBeInTheDocument();
+        expect(await screen.findByText(/Failed to load note structure. Please try again./i)).toBeInTheDocument();
     });
 
-    // --- Create Note Tests (Refocused) ---
-    it('allows creating a new note with Enter key: verifies form submission', async () => {
+    // --- Create Note Tests ---
+    it('handles creating a note in the root folder via button', async () => {
         const user = userEvent.setup();
-        const refreshedNotes = [...MOCK_NOTES, NEW_NOTE_RESPONSE];
-        api.listNotes
-            .mockResolvedValueOnce({ data: { notes: [...MOCK_NOTES] } })
-            .mockResolvedValueOnce({ data: { notes: refreshedNotes } });
+        // Mock the tree refresh call
+        const refreshedTree = [...MOCK_TREE_DATA, { ...NEW_NOTE_RESPONSE, type: 'note', name: NEW_NOTE_TITLE, path: '/', id: NEW_NOTE_RESPONSE.id, children: [] }];
+        api.getNoteTree
+            .mockResolvedValueOnce({ data: { tree: [...MOCK_TREE_DATA] } }) // Initial load
+            .mockResolvedValueOnce({ data: { tree: refreshedTree } }); // After create
 
         renderComponent();
-        expect(await screen.findByText(MOCK_NOTES[0].title)).toBeInTheDocument();
+        expect(await screen.findByTestId('mock-note-tree-viewer')).toBeInTheDocument();
 
-        const input = screen.getByRole('textbox', { name: /new note title/i });
+        // Find the button rendered by the mock viewer to trigger the handler
+        const createRootNoteButton = screen.getByRole('button', { name: /\+ Note in Root/i });
 
-        await user.type(input, NEW_NOTE_TITLE + '{Enter}');
+        await user.click(createRootNoteButton);
+
+        // Verify prompt was called (implicitly via the handler)
+        expect(window.prompt).toHaveBeenCalledWith('Enter title for new note in "/":');
+
+        // Verify API call and tree refresh
+        await waitFor(() => {
+            expect(api.createNote).toHaveBeenCalledTimes(1);
+            expect(api.createNote).toHaveBeenCalledWith(TEST_PROJECT_ID, { title: NEW_NOTE_TITLE, folder_path: "/" });
+        });
+        await waitFor(() => {
+             expect(api.getNoteTree).toHaveBeenCalledTimes(2); // Initial load + refresh
+        });
+
+        // Verify the mock viewer received updated data (implicitly checks state update)
+        // Use findByTestId to wait for the updated count
+        expect(await screen.findByTestId('tree-node-count')).toHaveTextContent(`Tree Nodes: ${refreshedTree.length}`);
+        // Use findByText to wait for the new node text
+        expect(await screen.findByText(`📄 ${NEW_NOTE_TITLE} (/)`)).toBeInTheDocument();
+    });
+
+    it('handles creating a note in a specific folder via button', async () => {
+        const user = userEvent.setup();
+        const targetFolder = MOCK_TREE_DATA[0]; // FolderA
+        const targetPath = targetFolder.path;
+        const specificNoteTitle = "Note In Folder";
+        window.prompt = vi.fn(() => specificNoteTitle); // Specific title for this test
+
+        // Mock the tree refresh call
+        const newNoteInFolder = { id: 'new-in-folder', name: specificNoteTitle, type: 'note', path: targetPath, note_id: 'new-in-folder', last_modified: Date.now()/1000, children: [] };
+        const updatedFolderA = {
+            ...targetFolder,
+            children: [ ...targetFolder.children, newNoteInFolder ]
+        };
+        const refreshedTree = [updatedFolderA, MOCK_TREE_DATA[1]];
+        api.getNoteTree
+            .mockResolvedValueOnce({ data: { tree: [...MOCK_TREE_DATA] } }) // Initial load
+            .mockResolvedValueOnce({ data: { tree: refreshedTree } }); // After create
+
+        renderComponent();
+        expect(await screen.findByTestId('mock-note-tree-viewer')).toBeInTheDocument();
+
+        // Find the button rendered by the mock viewer for FolderA
+        const createNoteInFolderAButton = screen.getByRole('button', { name: `+ Note in ${targetFolder.name}` });
+
+        await user.click(createNoteInFolderAButton);
+
+        expect(window.prompt).toHaveBeenCalledWith(`Enter title for new note in "${targetPath}":`);
 
         await waitFor(() => {
             expect(api.createNote).toHaveBeenCalledTimes(1);
-            expect(api.createNote).toHaveBeenCalledWith(TEST_PROJECT_ID, { title: NEW_NOTE_TITLE });
+            expect(api.createNote).toHaveBeenCalledWith(TEST_PROJECT_ID, { title: specificNoteTitle, folder_path: targetPath });
         });
         await waitFor(() => {
-             expect(api.listNotes).toHaveBeenCalledTimes(2);
+             expect(api.getNoteTree).toHaveBeenCalledTimes(2);
         });
-        await waitFor(() => {
-             expect(input).toHaveValue('');
-             expect(screen.getByText(NEW_NOTE_TITLE)).toBeInTheDocument();
-        });
+         // Verify the mock viewer received updated data and the new node is rendered
+        expect(await screen.findByText(`📄 ${specificNoteTitle} (${targetPath})`)).toBeInTheDocument();
+        // Also check the node count updated
+        expect(screen.getByTestId('tree-node-count')).toHaveTextContent(`Tree Nodes: ${refreshedTree.length}`);
     });
 
-    it('allows creating a new note with button click: verifies API call and final UI state', async () => {
-        const user = userEvent.setup();
-        const refreshedNotes = [...MOCK_NOTES, NEW_NOTE_RESPONSE];
-        api.listNotes
-            .mockResolvedValueOnce({ data: { notes: [...MOCK_NOTES] } })
-            .mockResolvedValueOnce({ data: { notes: refreshedNotes } });
-
-        renderComponent();
-        expect(await screen.findByText(MOCK_NOTES[0].title)).toBeInTheDocument();
-
-        const input = screen.getByRole('textbox', { name: /new note title/i });
-        const createButton = screen.getByRole('button', { name: /create note/i });
-
-        await user.type(input, NEW_NOTE_TITLE);
-        await user.click(createButton);
-
-        await waitFor(() => {
-            expect(api.createNote).toHaveBeenCalledTimes(1);
-            expect(api.createNote).toHaveBeenCalledWith(TEST_PROJECT_ID, { title: NEW_NOTE_TITLE });
-        });
-        await waitFor(() => {
-             expect(api.listNotes).toHaveBeenCalledTimes(2);
-        });
-        await waitFor(() => {
-             expect(input).toHaveValue('');
-             expect(screen.getByText(NEW_NOTE_TITLE)).toBeInTheDocument();
-             expect(createButton).toBeDisabled(); // Correct: Disabled because input is empty
-             expect(createButton).toHaveTextContent('Create Note');
-        });
-    });
-
-    it('displays error message if creating note fails and resets UI', async () => {
-        const user = userEvent.setup();
-        const errorMsg = 'Server error on create';
-        api.createNote.mockRejectedValue(new Error(errorMsg));
-
-        renderComponent();
-        expect(await screen.findByText(MOCK_NOTES[0].title)).toBeInTheDocument();
-
-        const input = screen.getByRole('textbox', { name: /new note title/i });
-        const createButton = screen.getByRole('button', { name: /create note/i });
-        const noteTitle = 'Will Fail Note';
-        await user.type(input, noteTitle);
-        await user.click(createButton);
-
-        await waitFor(() => {
-             expect(api.createNote).toHaveBeenCalledTimes(1);
-        });
-
-        expect(await screen.findByText(/Failed to create note. Please try again./i)).toBeInTheDocument();
-        await waitFor(() => {
-             expect(input).toHaveValue(noteTitle);
-             expect(createButton).not.toBeDisabled();
-        });
-        expect(api.listNotes).toHaveBeenCalledTimes(1);
-    });
-
-    // --- FIX: Renamed test and changed assertion ---
-    it('disables create button when title input is empty or whitespace', async () => {
+    it('does not create note if prompt is cancelled or empty', async () => {
         const user = userEvent.setup();
         renderComponent();
-        expect(await screen.findByText(MOCK_NOTES[0].title)).toBeInTheDocument(); // Wait for load
+        expect(await screen.findByTestId('mock-note-tree-viewer')).toBeInTheDocument();
+        const createRootNoteButton = screen.getByRole('button', { name: /\+ Note in Root/i });
 
-        const createButton = screen.getByRole('button', { name: /create note/i });
-        const input = screen.getByRole('textbox', { name: /new note title/i });
-
-        // 1. Initially disabled
-        expect(createButton).toBeDisabled();
-
-        // 2. Disabled with whitespace
-        await user.type(input, '   ');
-        expect(createButton).toBeDisabled();
-
-        // 3. Enabled with text
-        await user.type(input, 'Valid Title');
-        expect(createButton).not.toBeDisabled();
-
-        // 4. Disabled again when cleared
-        await user.clear(input);
-        expect(createButton).toBeDisabled();
-
-        // Verify no API call happened during these checks
+        // Test cancellation
+        window.prompt = vi.fn(() => null);
+        await user.click(createRootNoteButton);
         expect(api.createNote).not.toHaveBeenCalled();
-        // Verify no error message was displayed
-        expect(screen.queryByText(/Note title cannot be empty./i)).not.toBeInTheDocument();
+        expect(screen.queryByText(/Note title cannot be empty./i)).not.toBeInTheDocument(); // No error on cancel
+
+        // Test empty title
+        window.prompt = vi.fn(() => "   ");
+        await user.click(createRootNoteButton);
+        expect(api.createNote).not.toHaveBeenCalled();
+        expect(screen.getByText(/Note title cannot be empty./i)).toBeInTheDocument(); // Error shown
+
+        expect(api.getNoteTree).toHaveBeenCalledTimes(1); // No refresh occurred
     });
 
-    // --- Delete Note Tests (Refocused - Keep as before) ---
-    it('allows deleting a note: verifies API call and final UI state', async () => {
+    // --- Delete Note Tests ---
+    it('handles deleting a note via button', async () => {
         const user = userEvent.setup();
-        const noteToDelete = MOCK_NOTES[0];
-        const remainingNotes = MOCK_NOTES.filter(n => n.id !== noteToDelete.id);
-        api.listNotes
-            .mockResolvedValueOnce({ data: { notes: [...MOCK_NOTES] } })
-            .mockResolvedValueOnce({ data: { notes: remainingNotes } });
+        const noteToDelete = MOCK_TREE_DATA[1]; // Root Note
+        const remainingTree = [MOCK_TREE_DATA[0]]; // Only FolderA remains
+        api.getNoteTree
+            .mockResolvedValueOnce({ data: { tree: [...MOCK_TREE_DATA] } }) // Initial load
+            .mockResolvedValueOnce({ data: { tree: remainingTree } }); // After delete
 
         renderComponent();
-        expect(await screen.findByText(noteToDelete.title)).toBeInTheDocument();
+        expect(await screen.findByTestId('mock-note-tree-viewer')).toBeInTheDocument();
 
-        const deleteButton = screen.getByRole('button', { name: `Delete note ${noteToDelete.title}` });
+        // Find the delete button for the specific note within the mock viewer
+        const deleteButton = screen.getByTestId(`delete-note-${noteToDelete.note_id}`);
 
         await user.click(deleteButton);
 
-        expect(global.confirm).toHaveBeenCalledWith(`Are you sure you want to delete the note "${noteToDelete.title}"?`);
+        expect(window.confirm).toHaveBeenCalledWith(`Are you sure you want to delete the note "${noteToDelete.name}"?`);
 
         await waitFor(() => {
             expect(api.deleteNote).toHaveBeenCalledTimes(1);
-            expect(api.deleteNote).toHaveBeenCalledWith(TEST_PROJECT_ID, noteToDelete.id);
+            expect(api.deleteNote).toHaveBeenCalledWith(TEST_PROJECT_ID, noteToDelete.note_id);
         });
-
         await waitFor(() => {
-            expect(api.listNotes).toHaveBeenCalledTimes(2);
+             expect(api.getNoteTree).toHaveBeenCalledTimes(2); // Initial load + refresh
         });
-
-        await waitFor(() => {
-             expect(screen.queryByText(noteToDelete.title)).not.toBeInTheDocument();
-             expect(screen.queryByRole('button', { name: `Delete note ${noteToDelete.title}` })).not.toBeInTheDocument();
-        });
-        expect(screen.getByRole('button', { name: `Delete note ${MOCK_NOTES[1].title}` })).not.toBeDisabled();
+        // Verify the mock viewer received updated data
+        expect(await screen.findByTestId('tree-node-count')).toHaveTextContent(`Tree Nodes: ${remainingTree.length}`);
+        expect(screen.queryByText(`📄 ${noteToDelete.name} (${noteToDelete.path})`)).not.toBeInTheDocument();
     });
 
-    it('does not delete note if confirmation is cancelled', async () => {
+    // --- Delete Folder Tests ---
+     it('handles deleting a folder recursively via button', async () => {
         const user = userEvent.setup();
-        global.confirm = vi.fn(() => false);
-        renderComponent();
-        expect(await screen.findByText(MOCK_NOTES[0].title)).toBeInTheDocument();
+        const folderToDelete = MOCK_TREE_DATA[0]; // FolderA
+        const remainingTree = [MOCK_TREE_DATA[1]]; // Only Root Note remains
+        api.getNoteTree
+            .mockResolvedValueOnce({ data: { tree: [...MOCK_TREE_DATA] } }) // Initial load
+            .mockResolvedValueOnce({ data: { tree: remainingTree } }); // After delete
 
-        const noteToDelete = MOCK_NOTES[0];
-        const deleteButton = screen.getByRole('button', { name: `Delete note ${noteToDelete.title}` });
+        renderComponent();
+        expect(await screen.findByTestId('mock-note-tree-viewer')).toBeInTheDocument();
+
+        // Find the delete button for the specific folder within the mock viewer
+        const deleteButton = screen.getByTestId(`delete-folder-${folderToDelete.id}`);
 
         await user.click(deleteButton);
 
-        expect(global.confirm).toHaveBeenCalledWith(`Are you sure you want to delete the note "${noteToDelete.title}"?`);
-        expect(api.deleteNote).not.toHaveBeenCalled();
-        expect(api.listNotes).toHaveBeenCalledTimes(1);
-        expect(deleteButton).toHaveTextContent('Delete');
-        expect(deleteButton).not.toBeDisabled();
+        // Check the specific confirmation message used in the handler
+        expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining(`Delete folder "${folderToDelete.path}"?`));
+        expect(window.confirm).toHaveBeenCalledWith(expect.stringContaining(`permanently delete all notes and subfolders`));
+
+
+        await waitFor(() => {
+            expect(api.deleteFolder).toHaveBeenCalledTimes(1);
+            // Verify it was called recursively
+            expect(api.deleteFolder).toHaveBeenCalledWith(TEST_PROJECT_ID, { path: folderToDelete.path, recursive: true });
+        });
+        await waitFor(() => {
+             expect(api.getNoteTree).toHaveBeenCalledTimes(2); // Initial load + refresh
+        });
+        // Verify the mock viewer received updated data
+        expect(await screen.findByTestId('tree-node-count')).toHaveTextContent(`Tree Nodes: ${remainingTree.length}`);
+        expect(screen.queryByText(`📁 ${folderToDelete.name} (${folderToDelete.path})`)).not.toBeInTheDocument();
     });
 
-    it('displays error message if deleting note fails and resets UI', async () => {
+    // --- Busy State Tests ---
+    it('passes isBusy=true to NoteTreeViewer during API calls', async () => {
         const user = userEvent.setup();
-        const errorMsg = 'Server error on delete';
-        api.deleteNote.mockRejectedValue(new Error(errorMsg));
-        global.confirm = vi.fn(() => true);
+        let resolveInitialGetTree;
+        let resolveDeleteFolder;
+
+        // Make initial load hang
+        api.getNoteTree.mockImplementationOnce(() => new Promise(res => { resolveInitialGetTree = res; }));
+        // Make delete hang
+        api.deleteFolder.mockImplementationOnce(() => new Promise(res => { resolveDeleteFolder = res; }));
 
         renderComponent();
-        const noteToDelete = MOCK_NOTES[0];
-        expect(await screen.findByText(noteToDelete.title)).toBeInTheDocument();
 
-        const deleteButton = screen.getByRole('button', { name: `Delete note ${noteToDelete.title}` });
+        // 1. Check for loading text initially, NoteTreeViewer not rendered yet
+        expect(screen.getByText(/Loading notes structure.../i)).toBeInTheDocument();
+        expect(screen.queryByTestId('mock-note-tree-viewer')).not.toBeInTheDocument();
 
-        await user.click(deleteButton);
-
-        await waitFor(() => {
-             expect(api.deleteNote).toHaveBeenCalledWith(TEST_PROJECT_ID, noteToDelete.id);
+        // Resolve initial load
+        await act(async () => {
+            resolveInitialGetTree({ data: { tree: [...MOCK_TREE_DATA] } });
         });
 
-        expect(await screen.findByText(/Failed to delete note. Please try again./i)).toBeInTheDocument();
-        await waitFor(() => {
-             const buttonAfterError = screen.getByRole('button', { name: `Delete note ${noteToDelete.title}` });
-             expect(buttonAfterError).not.toBeDisabled();
-             expect(buttonAfterError).toHaveTextContent('Delete');
+        // 2. Not busy after load, TreeViewer is rendered
+        expect(await screen.findByTestId('mock-note-tree-viewer')).toBeInTheDocument();
+        expect(screen.queryByText(/Loading notes structure.../i)).not.toBeInTheDocument();
+        expect(screen.getByTestId('is-busy-prop')).toHaveTextContent('Is Busy: false');
+
+
+        // Trigger delete folder
+        const folderToDelete = MOCK_TREE_DATA[0];
+        const deleteButton = screen.getByTestId(`delete-folder-${folderToDelete.id}`);
+        // Need act because clicking updates state (isProcessing)
+        await act(async () => {
+             await user.click(deleteButton);
         });
-        expect(api.listNotes).toHaveBeenCalledTimes(1);
+
+
+        // 3. Busy during delete
+        // Use findByTestId to wait for the prop update
+        expect(await screen.findByTestId('is-busy-prop')).toHaveTextContent('Is Busy: true');
+
+         // Mock the refresh call after delete resolves
+         api.getNoteTree.mockResolvedValueOnce({ data: { tree: [MOCK_TREE_DATA[1]] } }); // After delete
+
+        // Resolve delete
+        await act(async () => {
+            resolveDeleteFolder({ data: { message: 'deleted' } });
+        });
+
+        // 4. Not busy after delete and refresh completes
+        await waitFor(() => {
+            // Check refresh call happened
+            expect(api.getNoteTree).toHaveBeenCalledTimes(2); // Initial + refresh
+            // Check busy state is false again
+            expect(screen.getByTestId('is-busy-prop')).toHaveTextContent('Is Busy: false');
+        });
     });
 
-    // --- Busy State Tests (Simplified - Keep as before) ---
-     it('disables create button momentarily during create operation', async () => {
+     // --- Placeholder Handler Test ---
+     it('calls placeholder alert for create folder', async () => {
         const user = userEvent.setup();
-        let resolveCreate;
-        api.createNote.mockImplementation(() => new Promise(res => { resolveCreate = res; }));
-        api.listNotes
-            .mockResolvedValueOnce({ data: { notes: [...MOCK_NOTES] } })
-            .mockResolvedValueOnce({ data: { notes: [...MOCK_NOTES] } });
+        window.alert = vi.fn(); // Mock alert
 
         renderComponent();
-        expect(await screen.findByText(MOCK_NOTES[0].title)).toBeInTheDocument();
+        expect(await screen.findByTestId('mock-note-tree-viewer')).toBeInTheDocument();
 
-        const input = screen.getByRole('textbox', { name: /new note title/i });
-        const createButton = screen.getByRole('button', { name: /create note/i });
+        // Button rendered by the mock viewer
+        const createRootFolderButton = screen.getByRole('button', { name: /\+ Folder in Root/i });
+        await user.click(createRootFolderButton);
 
-        await user.type(input, 'Busy Note');
-        await user.click(createButton);
-
-        await waitFor(() => {
-             expect(screen.getByRole('button', { name: /creating.../i })).toBeDisabled();
-        });
-
-        resolveCreate({ data: { id: 'new' } });
-        await waitFor(() => {
-            // Button is disabled because input is empty after successful creation
-            expect(screen.getByRole('button', { name: /create note/i })).toBeDisabled();
-        });
+        expect(window.alert).toHaveBeenCalledWith('Placeholder: Create folder under "/"');
+        expect(api.createNote).not.toHaveBeenCalled(); // Ensure wrong API wasn't called
+        window.alert.mockRestore(); // Clean up mock
      });
 
-     it('disables delete button momentarily during delete operation', async () => {
-        const user = userEvent.setup();
-         let resolveDelete;
-        api.deleteNote.mockImplementation(() => new Promise(res => { resolveDelete = res; }));
-         global.confirm = vi.fn(() => true);
-         api.listNotes
-             .mockResolvedValueOnce({ data: { notes: [...MOCK_NOTES] } })
-             .mockResolvedValueOnce({ data: { notes: [...MOCK_NOTES] } });
-
-        renderComponent();
-        const noteToDelete = MOCK_NOTES[0];
-        expect(await screen.findByText(noteToDelete.title)).toBeInTheDocument();
-
-        const deleteButton1 = screen.getByRole('button', { name: `Delete note ${noteToDelete.title}` });
-
-        await user.click(deleteButton1);
-
-        await waitFor(() => {
-             const deletingButton = screen.getByRole('button', { name: `Delete note ${noteToDelete.title}` });
-             expect(deletingButton).toBeDisabled();
-             expect(deletingButton).toHaveTextContent(/Deleting.../i);
-        });
-
-        resolveDelete({ data: { message: 'ok' } });
-        await waitFor(() => {
-            expect(screen.queryByRole('button', { name: /deleting.../i })).not.toBeInTheDocument();
-        });
-     });
 });

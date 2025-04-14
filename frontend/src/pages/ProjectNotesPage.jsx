@@ -15,33 +15,35 @@
  */
 
 import React, { useState, useEffect, useCallback } from 'react';
-import { useParams, Link } from 'react-router-dom';
-import { listNotes, createNote, getProject, deleteNote } from '../api/codexApi'; // Import deleteNote
+import { useParams } from 'react-router-dom';
+import {
+    getProject,
+    getNoteTree, // Use getNoteTree instead of listNotes
+    createNote,
+    deleteNote,
+    deleteFolder, // Import folder delete API
+    // renameFolder, // Import later when implementing rename
+} from '../api/codexApi';
+import NoteTreeViewer from '../components/NoteTreeViewer'; // Import the new component
 
-// Basic styles (keep as before)
+// Basic styles (can be refined)
 const styles = {
     container: { padding: '20px' },
-    heading: { marginBottom: '20px' },
-    error: { color: 'red', marginBottom: '10px' },
+    heading: { marginBottom: '10px' },
+    subHeading: { marginBottom: '20px', color: '#555', fontSize: '1.1em' },
+    error: { color: 'red', marginBottom: '10px', border: '1px solid red', padding: '10px', borderRadius: '4px' },
     loading: { fontStyle: 'italic', marginBottom: '10px' },
-    createForm: { marginBottom: '20px', display: 'flex', gap: '10px', alignItems: 'center' },
-    input: { padding: '8px', flexGrow: 1 },
-    button: { padding: '8px 15px', cursor: 'pointer' },
+    actionButton: { padding: '8px 15px', cursor: 'pointer', marginRight: '10px' },
     disabledButton: { cursor: 'not-allowed', opacity: 0.6 },
-    noteList: { listStyle: 'none', padding: 0 },
-    noteItem: { display: 'flex', justifyContent: 'space-between', alignItems: 'center', padding: '10px', borderBottom: '1px solid #eee' },
-    noteLink: { textDecoration: 'none', color: '#007bff', flexGrow: 1, marginRight: '10px' },
-    deleteButton: { padding: '5px 10px', cursor: 'pointer', backgroundColor: '#dc3545', color: 'white', border: 'none', borderRadius: '3px' }
+    treeContainer: { marginTop: '20px', border: '1px solid #eee', padding: '15px', borderRadius: '4px' },
 };
 
 function ProjectNotesPage() {
     const { projectId } = useParams();
     const [projectName, setProjectName] = useState('');
-    const [notes, setNotes] = useState([]);
-    const [newNoteTitle, setNewNoteTitle] = useState('');
+    const [noteTree, setNoteTree] = useState([]); // State for the tree structure
     const [isLoading, setIsLoading] = useState(true);
-    const [isCreating, setIsCreating] = useState(false);
-    const [deletingNoteId, setDeletingNoteId] = useState(null);
+    const [isProcessing, setIsProcessing] = useState(false); // General busy state
     const [error, setError] = useState('');
 
     // Fetch project name (keep as before)
@@ -53,148 +55,166 @@ function ProjectNotesPage() {
             .catch(err => {
                 console.error("Failed to fetch project name:", err);
                 setProjectName(`Project ${projectId}`);
+                // Optionally set an error state here as well
             });
     }, [projectId]);
 
-    // Function to fetch notes (keep as before)
-    const fetchNotes = useCallback(() => {
+    // Function to fetch the note tree structure
+    const fetchNoteTree = useCallback(() => {
         setError('');
-        listNotes(projectId)
+        setIsLoading(true); // Set loading true when fetching starts
+        getNoteTree(projectId)
             .then(response => {
-                setNotes(response.data.notes || []);
+                setNoteTree(response.data.tree || []);
             })
             .catch(err => {
-                console.error("Failed to fetch notes:", err);
-                setError('Failed to load notes. Please try again.');
-                setNotes([]);
+                console.error("Failed to fetch note tree:", err);
+                setError('Failed to load note structure. Please try again.');
+                setNoteTree([]); // Clear tree on error
             })
             .finally(() => {
                 setIsLoading(false);
             });
     }, [projectId]);
 
-    // Fetch notes on component mount (keep as before)
+    // Fetch note tree on component mount
     useEffect(() => {
-        setIsLoading(true);
-        fetchNotes();
-    }, [fetchNotes]);
+        fetchNoteTree();
+    }, [fetchNoteTree]);
 
-    // Handle creating a new note (FIXED ORDER OF CHECKS)
-    const handleCreateNote = (e) => {
-        e.preventDefault();
+    // --- Action Handlers ---
 
-        // --- FIX: Validate title *first* ---
-        if (!newNoteTitle.trim()) {
-            setError('Note title cannot be empty.');
+    const handleCreateNote = useCallback(async (targetFolderPath = "/") => {
+        if (isProcessing) return;
+
+        const title = prompt(`Enter title for new note in "${targetFolderPath}":`);
+        if (!title || !title.trim()) {
+            if (title !== null) { // Avoid error if user cancels prompt
+                 setError("Note title cannot be empty.");
+            }
             return;
         }
-        // --- Then check if busy ---
-        if (isCreating || deletingNoteId) return;
 
-        // --- Proceed if valid and not busy ---
-        setIsCreating(true);
-        setError(''); // Clear previous errors only if proceeding
+        setIsProcessing(true);
+        setError('');
 
-        createNote(projectId, { title: newNoteTitle.trim() })
-            .then(() => {
-                setNewNoteTitle('');
-                fetchNotes(); // Refresh the list
-            })
-            .catch(err => {
-                console.error("Failed to create note:", err);
-                setError('Failed to create note. Please try again.');
-            })
-            .finally(() => {
-                setIsCreating(false);
-            });
-    };
+        try {
+            await createNote(projectId, { title: title.trim(), folder_path: targetFolderPath });
+            fetchNoteTree(); // Refresh tree on success
+        } catch (err) {
+            console.error("Failed to create note:", err);
+            setError(`Failed to create note: ${err.response?.data?.detail || err.message}`);
+        } finally {
+            setIsProcessing(false);
+        }
+    }, [projectId, isProcessing, fetchNoteTree]);
 
-    // Handle deleting a note (keep as before)
-    const handleDeleteNote = (noteId, noteTitle) => {
-         if (isCreating || deletingNoteId) return;
+    const handleDeleteNote = useCallback(async (noteId, noteTitle) => {
+        if (isProcessing) return;
 
         if (window.confirm(`Are you sure you want to delete the note "${noteTitle}"?`)) {
-            setDeletingNoteId(noteId);
+            setIsProcessing(true);
             setError('');
-
-            deleteNote(projectId, noteId)
-                .then(() => {
-                    fetchNotes();
-                })
-                .catch(err => {
-                    console.error(`Failed to delete note ${noteId}:`, err);
-                    setError('Failed to delete note. Please try again.');
-                })
-                .finally(() => {
-                    setDeletingNoteId(null);
-                });
+            try {
+                await deleteNote(projectId, noteId);
+                fetchNoteTree(); // Refresh tree
+            } catch (err) {
+                console.error(`Failed to delete note ${noteId}:`, err);
+                setError(`Failed to delete note: ${err.response?.data?.detail || err.message}`);
+            } finally {
+                setIsProcessing(false);
+            }
         }
+    }, [projectId, isProcessing, fetchNoteTree]);
+
+    const handleDeleteFolder = useCallback(async (folderPath) => {
+        if (isProcessing || folderPath === '/') return; // Cannot delete root
+
+        // Basic check - ideally, the tree component would know if it has children
+        const isRecursive = window.confirm(`Delete folder "${folderPath}"? \n\nWARNING: If the folder is not empty, this will permanently delete all notes and subfolders within it!`);
+
+        if (isRecursive) { // Only proceed if confirmed recursive for now
+             setIsProcessing(true);
+             setError('');
+             try {
+                 await deleteFolder(projectId, { path: folderPath, recursive: true });
+                 fetchNoteTree(); // Refresh tree
+             } catch (err) {
+                 console.error(`Failed to delete folder ${folderPath}:`, err);
+                 setError(`Failed to delete folder: ${err.response?.data?.detail || err.message}`);
+             } finally {
+                 setIsProcessing(false);
+             }
+        }
+        // Later: Add non-recursive check and API call if needed
+        // else {
+        //     alert("Non-recursive delete not implemented yet. Or folder might be empty.");
+        // }
+
+    }, [projectId, isProcessing, fetchNoteTree]);
+
+    // --- Placeholder Handlers ---
+    const handleCreateFolder = useCallback((parentPath = "/") => {
+        // TODO: Implement folder creation UI (likely just local state update first)
+        alert(`Placeholder: Create folder under "${parentPath}"`);
+    }, []);
+
+    const handleRenameFolder = useCallback((oldPath) => {
+        // TODO: Implement folder rename UI and API call
+        alert(`Placeholder: Rename folder "${oldPath}"`);
+    }, []);
+
+    const handleMoveNote = useCallback((noteId, targetFolderPath) => {
+        // TODO: Implement note move UI (e.g., drag/drop) and API call
+        alert(`Placeholder: Move note ${noteId} to "${targetFolderPath}"`);
+    }, []);
+
+    // Combine handlers for the NoteTreeViewer
+    const treeHandlers = {
+        onCreateNote: handleCreateNote,
+        onCreateFolder: handleCreateFolder,
+        onRenameFolder: handleRenameFolder,
+        onDeleteFolder: handleDeleteFolder,
+        onDeleteNote: handleDeleteNote,
+        onMoveNote: handleMoveNote,
     };
 
-    // Determine if any operation is in progress (keep as before)
-    const isBusy = isCreating || !!deletingNoteId;
-
-    // Render logic (keep as before, button disabled logic is correct now)
     return (
         <div style={styles.container}>
-            <h2 style={styles.heading}>Project Notes for "{projectName}"</h2>
+            <h2 style={styles.heading}>Project Notes</h2>
+            <p style={styles.subHeading}>For "{projectName}"</p>
 
             {error && <p style={styles.error}>{error}</p>}
 
-            <form onSubmit={handleCreateNote} style={styles.createForm}>
-                <input
-                    type="text"
-                    value={newNoteTitle}
-                    onChange={(e) => setNewNoteTitle(e.target.value)}
-                    placeholder="New note title..."
-                    style={styles.input}
-                    disabled={isBusy}
-                    aria-label="New note title"
-                />
+            {/* Root level actions */}
+            <div>
                 <button
-                    type="submit"
-                    disabled={isBusy || !newNoteTitle.trim()} // This logic is correct
-                    style={{
-                        ...styles.button,
-                        ...(isBusy || !newNoteTitle.trim() ? styles.disabledButton : {})
-                    }}
+                    onClick={() => handleCreateNote("/")} // Create at root
+                    style={{...styles.actionButton, ...(isProcessing ? styles.disabledButton : {})}}
+                    disabled={isProcessing}
                 >
-                    {isCreating ? 'Creating...' : 'Create Note'}
+                    + New Note (Root)
                 </button>
-            </form>
+                 {/* <button
+                     onClick={() => handleCreateFolder("/")} // Create folder at root
+                     style={{...styles.actionButton, ...(isProcessing ? styles.disabledButton : {})}}
+                     disabled={isProcessing}
+                 >
+                     + New Folder (Root)
+                 </button> */}
+            </div>
 
             {isLoading ? (
-                <p style={styles.loading}>Loading notes...</p>
+                <p style={styles.loading}>Loading notes structure...</p>
             ) : (
-                <ul style={styles.noteList}>
-                    {notes.length === 0 && !isLoading ? (
-                        <li>No notes found for this project.</li>
-                    ) : (
-                        notes.map(note => (
-                            <li key={note.id} style={styles.noteItem}>
-                                <Link
-                                    to={`/projects/${projectId}/notes/${note.id}`}
-                                    style={styles.noteLink}
-                                    onClick={(e) => { if (deletingNoteId === note.id) e.preventDefault(); }}
-                                    aria-disabled={deletingNoteId === note.id}
-                                >
-                                    {note.title}
-                                </Link>
-                                <button
-                                    onClick={() => handleDeleteNote(note.id, note.title)}
-                                    style={{
-                                        ...styles.deleteButton,
-                                        ...(isBusy ? styles.disabledButton : {})
-                                    }}
-                                    disabled={isBusy}
-                                    aria-label={`Delete note ${note.title}`}
-                                >
-                                    {deletingNoteId === note.id ? 'Deleting...' : 'Delete'}
-                                </button>
-                            </li>
-                        ))
-                    )}
-                </ul>
+                <div style={styles.treeContainer}>
+                    <NoteTreeViewer
+                        projectId={projectId}
+                        treeData={noteTree}
+                        handlers={treeHandlers}
+                        isBusy={isProcessing}
+                    />
+                </div>
             )}
         </div>
     );
