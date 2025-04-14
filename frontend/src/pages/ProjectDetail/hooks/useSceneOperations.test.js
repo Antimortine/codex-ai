@@ -172,9 +172,16 @@ describe('useSceneOperations Hook', () => {
     test('should update summary state', async () => {
       const { result } = renderHook(() => useSceneOperations(mockProjectId, mockChapters));
       
-      // Set a summary
-      act(() => {
+      // Wait for initial load to complete first
+      await waitFor(() => {
+        expect(result.current.isLoadingScenes['chapter-1']).toBe(false);
+      });
+      
+      // Set a summary and wait for the state to be updated
+      await act(async () => {
         result.current.handleSummaryChange('chapter-1', 'Test summary');
+        // Add a small delay to ensure the state update is processed
+        await new Promise(resolve => setTimeout(resolve, 0));
       });
       
       // Verify state update
