@@ -224,26 +224,29 @@ Node.propTypes = {
 
 
 /**
- * Filter out system notes (like '.folder') from the tree data
+ * Filter out system notes (like '.folder') from the tree data while preserving empty folders
  */
 function filterSystemNodes(nodes) {
   if (!Array.isArray(nodes)) return [];
   
-  return nodes
-    .filter(node => {
-      // Filter out notes with title '.folder'
-      if (node.type === 'note' && node.name === '.folder') {
-        return false;
-      }
-      return true;
-    })
-    .map(node => {
-      // Apply filtering recursively to children
-      if (node.children && node.children.length > 0) {
-        return { ...node, children: filterSystemNodes(node.children) };
-      }
-      return node;
-    });
+  // First pass: filter out '.folder' notes but keep track of folder paths
+  const visibleNodes = nodes.filter(node => {
+    // Filter out notes with title '.folder'
+    if (node.type === 'note' && node.name === '.folder') {
+      return false;
+    }
+    return true;
+  });
+  
+  // Second pass: process children and preserve folders even if empty
+  return visibleNodes.map(node => {
+    // Apply filtering recursively to children if it's a folder
+    if (node.type === 'folder' && node.children && node.children.length > 0) {
+      const filteredChildren = filterSystemNodes(node.children);
+      return { ...node, children: filteredChildren };
+    }
+    return node;
+  });
 }
 
 /**
@@ -253,7 +256,8 @@ function NoteTreeViewer({
     projectId,
     treeData,
     handlers,
-    isBusy = false
+    isBusy = false,
+    onMove
 }) {
   const treeRef = useRef(null);
 
@@ -278,6 +282,28 @@ function NoteTreeViewer({
       handlers={handlers}
       projectId={projectId}
       isBusy={isBusy}
+      onMove={onMove}
+      // Enable drag and drop functionality
+      draggable={true} // Allow nodes to be dragged
+      onDrop={onMove} // Ensure onDrop is also set to onMove for compatibility
+      canDrop={(args) => {
+        // Basic validation - using correct argument structure
+        if (!args.dragNodes || args.dragNodes.length !== 1) return false;
+        const draggedNode = args.dragNodes[0];
+        const targetNode = args.parentNode;
+        
+        // Cannot drop into a note
+        if (targetNode && targetNode.data.type === 'note') return false;
+        
+        // Cannot drop a folder into itself or its descendants
+        if (draggedNode.data.type === 'folder' && targetNode) {
+          const targetPath = targetNode.data.path;
+          const draggedPath = draggedNode.data.path;
+          if (targetPath.startsWith(draggedPath)) return false;
+        }
+        
+        return true;
+      }}
     >
       {Node}
     </Tree>
@@ -303,6 +329,7 @@ NoteTreeViewer.propTypes = {
       onDeleteNote: PropTypes.func.isRequired,
       onMoveNote: PropTypes.func.isRequired, // Now required
   }).isRequired,
+  onMove: PropTypes.func.isRequired,
   isBusy: PropTypes.bool,
 };
 

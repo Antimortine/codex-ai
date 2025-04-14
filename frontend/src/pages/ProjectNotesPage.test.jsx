@@ -38,10 +38,12 @@ vi.mock('react-router-dom', async () => {
 });
 
 let mockTreeViewerHandlers = {};
+let mockOnMove = null;
 // --- Fix NoteTreeViewer Mock Export ---
 vi.mock('../components/NoteTreeViewer', () => ({
   // Provide the mock function as the default export
-  default: vi.fn(({ projectId, treeData, handlers, isBusy }) => {
+  default: vi.fn(({ projectId, treeData, handlers, isBusy, onMove }) => {
+    mockOnMove = onMove;
     mockTreeViewerHandlers = handlers;
     if (!treeData || treeData.length === 0) {
       return <div data-testid="mock-note-tree-viewer">No notes or folders found.</div>;
@@ -174,6 +176,7 @@ describe('ProjectNotesPage (Modal Flow)', () => {
         api.deleteFolder.mockResolvedValue({ data: { success: true } });
         window.confirm = vi.fn(() => true);
         mockTreeViewerHandlers = {};
+        mockOnMove = null;
     });
 
     afterEach(() => {
@@ -1045,5 +1048,262 @@ describe('ProjectNotesPage (Modal Flow)', () => {
         
         // Verify the tree was refreshed after completion
         expect(api.getNoteTree).toHaveBeenCalledTimes(2);
+    });
+});
+
+// --- Drag and Drop Tests ---
+describe('ProjectNotesPage (Drag and Drop)', () => {
+    const TEST_PROJECT_ID = 'proj-notes-dnd-123';
+    const MOCK_PROJECT = { id: TEST_PROJECT_ID, name: 'Notes DnD Test Project' };
+    const MOCK_TREE_DATA_TEMPLATE = [
+        {
+            id: 'folder-1',
+            type: 'folder',
+            name: 'Documents',
+            path: '/Documents',
+            children: [
+                {
+                    note_id: 'note-1',
+                    type: 'note',
+                    name: 'Meeting Notes',
+                    path: '/Documents/Meeting Notes',
+                    folder_path: '/Documents'
+                },
+                {
+                    id: 'folder-3',
+                    type: 'folder',
+                    name: 'Subdir',
+                    path: '/Documents/Subdir',
+                    children: []
+                }
+            ]
+        },
+        {
+            id: 'folder-2',
+            type: 'folder',
+            name: 'Projects',
+            path: '/Projects',
+            children: []
+        },
+        {
+            note_id: 'note-2',
+            type: 'note',
+            name: 'Root Note',
+            path: '/Root Note',
+            folder_path: '/'
+        }
+    ];
+
+    // --- Test Setup ---
+    const renderComponent = (projectId = TEST_PROJECT_ID) => {
+        return render(
+            <MemoryRouter initialEntries={[`/projects/${projectId}/notes`]}>
+                <Routes>
+                    <Route path="/projects/:projectId/notes" element={<ProjectNotesPage />} />
+                </Routes>
+            </MemoryRouter>
+        );
+    };
+
+    beforeEach(() => {
+        vi.resetAllMocks();
+        ReactRouterDom.useParams.mockReturnValue({ projectId: TEST_PROJECT_ID });
+        const currentMockTreeData = JSON.parse(JSON.stringify(MOCK_TREE_DATA_TEMPLATE));
+        api.getProject.mockResolvedValue({ data: MOCK_PROJECT });
+        api.getNoteTree.mockResolvedValue({ data: { tree: currentMockTreeData } });
+        api.updateNote.mockResolvedValue({ data: { success: true } });
+        api.renameFolder.mockResolvedValue({ data: { success: true } });
+        window.confirm = vi.fn(() => true);
+        mockTreeViewerHandlers = {};
+        mockOnMove = null;
+    });
+
+    // Test Case 1: Move Note to different folder
+    it('moves a note to a different folder through API', async () => {
+        // Render component
+        renderComponent();
+        
+        // Wait for the component to fully load
+        await screen.findByTestId('mock-note-tree-viewer');
+        
+        // Verify onMove handler is captured
+        expect(mockOnMove).toBeDefined();
+        
+        // Create mock drag-and-drop args for note using the correct structure
+        const mockDragArgs = {
+            dragNodes: [
+                {
+                    data: {
+                        type: 'note',
+                        note_id: 'note-1',
+                        name: 'Meeting Notes',
+                        path: '/Documents/Meeting Notes',
+                        folder_path: '/Documents'
+                    }
+                }
+            ],
+            parentNode: {
+                data: {
+                    type: 'folder',
+                    path: '/Projects'
+                }
+            },
+            index: 0 // Dropped at first position
+        };
+        
+        // Call the onMove handler directly
+        await act(async () => {
+            await mockOnMove(mockDragArgs);
+        });
+        
+        // Verify API calls
+        expect(api.updateNote).toHaveBeenCalledWith(
+            TEST_PROJECT_ID,
+            'note-1',
+            { folder_path: '/Projects' }
+        );
+        expect(api.renameFolder).not.toHaveBeenCalled();
+        expect(api.getNoteTree).toHaveBeenCalledTimes(2); // Initial load + after move
+    });
+    
+    // Test Case 2: Move Folder to different parent
+    it('moves a folder to a different parent through API', async () => {
+        // Render component
+        renderComponent();
+        
+        // Wait for the component to fully load
+        await screen.findByTestId('mock-note-tree-viewer');
+        
+        // Create mock drag-and-drop args for folder using the correct structure
+        const mockDragArgs = {
+            dragNodes: [
+                {
+                    data: {
+                        type: 'folder',
+                        id: 'folder-3',
+                        name: 'Subdir',
+                        path: '/Documents/Subdir'
+                    }
+                }
+            ],
+            parentNode: {
+                data: {
+                    type: 'folder',
+                    path: '/Projects'
+                }
+            },
+            index: 0 // Dropped at first position
+        };
+        
+        // Call the onMove handler directly
+        await act(async () => {
+            await mockOnMove(mockDragArgs);
+        });
+        
+        // Verify API calls - the folder should be renamed with new path
+        expect(api.renameFolder).toHaveBeenCalledWith(
+            TEST_PROJECT_ID, 
+            { 
+                old_path: '/Documents/Subdir', 
+                new_path: '/Projects/Subdir' 
+            }
+        );
+        expect(api.updateNote).not.toHaveBeenCalled();
+        expect(api.getNoteTree).toHaveBeenCalledTimes(2); // Initial load + after move
+    });
+    
+    // Test Case 3: Visual-only reordering (same parent)
+    it('handles visual-only reordering without API calls', async () => {
+        // Render component
+        renderComponent();
+        
+        // Wait for the component to fully load
+        await screen.findByTestId('mock-note-tree-viewer');
+        
+        // Mock console.log to verify the message
+        const originalConsoleLog = console.log;
+        const mockConsoleLog = vi.fn();
+        console.log = mockConsoleLog;
+        
+        // Create mock drag-and-drop args for reordering within same folder using the correct structure
+        const mockDragArgs = {
+            dragNodes: [
+                {
+                    data: {
+                        type: 'note',
+                        note_id: 'note-1',
+                        name: 'Meeting Notes',
+                        path: '/Documents/Meeting Notes',
+                        folder_path: '/Documents'
+                    }
+                }
+            ],
+            parentNode: {
+                data: {
+                    type: 'folder',
+                    path: '/Documents' // Same parent as the original
+                }
+            },
+            index: 1 // Different position but same parent
+        };
+        
+        // Call the onMove handler directly
+        await act(async () => {
+            await mockOnMove(mockDragArgs);
+        });
+        
+        // Verify no API calls were made
+        expect(api.updateNote).not.toHaveBeenCalled();
+        expect(api.renameFolder).not.toHaveBeenCalled();
+        expect(api.getNoteTree).toHaveBeenCalledTimes(1); // Only initial load
+        
+        // Verify console log message about visual reordering
+        expect(mockConsoleLog).toHaveBeenCalledWith('Visual reorder only - no API call needed');
+        
+        // Restore original console.log
+        console.log = originalConsoleLog;
+    });
+    
+    // Test Case 4: Invalid Move - Folder into itself or descendant
+    it('prevents moving a folder into itself or its descendant', async () => {
+        // Render component
+        renderComponent();
+        
+        // Wait for the component to fully load
+        await screen.findByTestId('mock-note-tree-viewer');
+        
+        // Create mock drag-and-drop args for invalid folder move using the correct structure
+        const mockDragArgs = {
+            dragNodes: [
+                {
+                    data: {
+                        type: 'folder',
+                        id: 'folder-1',
+                        name: 'Documents',
+                        path: '/Documents' 
+                    }
+                }
+            ],
+            parentNode: {
+                data: {
+                    type: 'folder',
+                    path: '/Documents/Subdir' // This is a descendant of the dragged folder
+                }
+            },
+            index: 0
+        };
+        
+        // Call the onMove handler directly
+        await act(async () => {
+            await mockOnMove(mockDragArgs);
+        });
+        
+        // Verify error is set in the component
+        expect(screen.getByText('Cannot move a folder into itself or its descendant')).toBeInTheDocument();
+        
+        // Verify no API calls were made
+        expect(api.updateNote).not.toHaveBeenCalled();
+        expect(api.renameFolder).not.toHaveBeenCalled();
+        expect(api.getNoteTree).toHaveBeenCalledTimes(1); // Only initial load
     });
 });
