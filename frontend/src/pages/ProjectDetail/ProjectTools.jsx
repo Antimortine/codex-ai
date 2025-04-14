@@ -111,7 +111,7 @@ function ProjectTools({
                     Query Project AI
                 </Link>
 
-                {/* Project Notes Link - ADDED */}
+                {/* Project Notes Link */}
                 <Link
                     to={`/projects/${projectId}/notes`}
                     style={styles.linkButton}
@@ -119,7 +119,33 @@ function ProjectTools({
                 >
                     Project Notes
                 </Link>
-                {/* END ADDED */}
+
+                {/* Project Plan Link */}
+                <Link
+                    to={`/projects/${projectId}/plan`}
+                    style={styles.linkButton}
+                    data-testid="plan-link"
+                >
+                    Project Plan
+                </Link>
+
+                {/* Project Synopsis Link */}
+                <Link
+                    to={`/projects/${projectId}/synopsis`}
+                    style={styles.linkButton}
+                    data-testid="synopsis-link"
+                >
+                    Project Synopsis
+                </Link>
+
+                {/* Project World Link */}
+                <Link
+                    to={`/projects/${projectId}/world`}
+                    style={styles.linkButton}
+                    data-testid="world-link"
+                >
+                    Project World
+                </Link>
 
                 {/* Placeholder for Timeline Link (if implemented later) */}
                 {/*

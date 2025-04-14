@@ -117,7 +117,7 @@ def test_query_project_no_sources():
     
     # Create a mock AIService and configure it
     mock_ai_service = AsyncMock(spec=AIService)
-    mock_ai_service.query_project.return_value = (mock_answer, [], None)
+    mock_ai_service.query_project.return_value = (mock_answer, [], [])
     
     # Configure the dependency override to return our mock
     def get_mock_ai_service():
@@ -133,7 +133,9 @@ def test_query_project_no_sources():
         assert response_data["answer"] == mock_answer
         # Verify no sources returned
         assert len(response_data["source_nodes"]) == 0
-        assert response_data["direct_sources"] is None
+        # Updated to expect empty list instead of None per updated implementation
+        assert isinstance(response_data["direct_sources"], list)
+        assert len(response_data["direct_sources"]) == 0
     finally:
         # Clean up the dependency override after test completes
         app.dependency_overrides.pop(get_ai_service, None)

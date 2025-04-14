@@ -252,8 +252,9 @@ class AIService:
 
         logger.debug(f"AIService (Query): Compiled entity list with {len(entity_list)} items.")
         if entity_list:
-            # Improve Unicode normalization for multilingual support
+            # Improved Unicode normalization for multilingual support, especially for Cyrillic
             import unicodedata
+            import re
             
             def normalize_name(name):
                 if not name: return ""
@@ -261,13 +262,85 @@ class AIService:
                 normalized = unicodedata.normalize('NFC', name.lower().strip())
                 return normalized
                 
+            # Function to split query into words and clean them
+            def extract_query_words(query_text):
+                if not query_text: return []
+                # Normalize and split by common delimiters
+                normalized = normalize_name(query_text)
+                # Use regex to split on word boundaries (works for Latin and Cyrillic)
+                words = re.findall(r'\b\w+\b', normalized, re.UNICODE)
+                # Filter out very short words and common stop words
+                return [w for w in words if len(w) > 2 and w not in ['and', 'the', 'for', 'из', 'для', 'и']]
+                
+            # Extract meaningful words from the query for better matching
+            query_words = extract_query_words(query_text)
             normalized_query = normalize_name(query_text)
             logger.debug(f"AIService (Query): Searching for entity names in normalized query: '{normalized_query}'")
+            logger.debug(f"AIService (Query): Extracted query words: {query_words}")
+            
+            # Special handling for Russian queries with "технической информации" section
+            # Find sections like "ключевые слова (проигнорируй ... техническая информация): keyword1, keyword2, ..."
+            tech_info_match = re.search(r'ключевые слова\s*(?:\(.*?\))?\s*:\s*(.+)', normalized_query, re.IGNORECASE)
+            if not tech_info_match:
+                # Fallback to older pattern if the first one doesn't match
+                tech_info_match = re.search(r'\(?проигнорируй.*?техническ.*?информ[^)]*\)?:(.+)', normalized_query, re.IGNORECASE)
+            
+            # We'll put all comma-separated items from this section into a list for direct matching
+            entity_keywords_to_match = []
+            
+            if tech_info_match:
+                tech_info = tech_info_match.group(1).strip()
+                logger.info(f"AIService (Query): Found technical info section for entity extraction: '{tech_info}'")
+                
+                # Split by commas and clean each item
+                raw_keywords = [k.strip() for k in tech_info.split(',')]
+                logger.info(f"AIService (Query): Raw comma-separated keywords: {raw_keywords}")
+                
+                # Save these keywords for exact matching
+                for keyword in raw_keywords:
+                    # Clean up quotes and extra whitespace
+                    clean_keyword = keyword.strip().strip('"').strip()
+                    if clean_keyword and len(clean_keyword) > 2:  # Avoid empty or very short keywords
+                        entity_keywords_to_match.append(clean_keyword)
+                        logger.info(f"AIService (Query): Added keyword for exact matching: '{clean_keyword}'")
+                
+                # No special cases - we want pure exact matching to work for all notes
+                
+                logger.info(f"AIService (Query): Final entity keywords to match: {entity_keywords_to_match}")
+            
             for entity in entity_list:
                 # Skip project plan/synopsis as they are always loaded explicitly (if available)
                 if entity['type'] in ['Plan', 'Synopsis']: continue
+                
+                # Skip technical/system notes (just in case they weren't filtered earlier)
+                if entity['type'] == 'Note' and (entity['name'].startswith('.') or entity['name'] == '.folder'):
+                    logger.debug(f"AIService (Query): Skipping technical note '{entity['name']}'")
+                    continue
 
                 normalized_entity_name = normalize_name(entity['name'])
+                entity_words = re.findall(r'\b\w+\b', normalized_entity_name, re.UNICODE)
+                
+                # MODIFIED: Instead of skipping entities in technical keywords,
+                # check if this entity matches any of our extracted entity keywords to match
+                entity_match_found = False
+                
+                # Check if entity name is in our list of entities to match from technical section
+                for keyword in entity_keywords_to_match:
+                    normalized_keyword = normalize_name(keyword)
+                    # Check for various matching methods
+                    if (normalized_keyword == normalized_entity_name or
+                        normalized_keyword in normalized_entity_name or
+                        normalized_entity_name in normalized_keyword):
+                        entity_match_found = True
+                        logger.info(f"AIService (Query): Entity '{entity['name']}' MATCHED keyword '{keyword}'")
+                        break
+                
+                if entity_match_found:
+                    # This is an entity we want to include in direct sources
+                    logger.info(f"AIService (Query): Including entity '{entity['name']}' as it matches a keyword to match")
+                    # Continue to matching code below
+                    pass
+                # We've removed the reference to ignored_keywords since it no longer exists
                 
                 # More flexible matching for Notes and other entities
                 is_match = False
@@ -278,86 +351,103 @@ class AIService:
                     is_match = True
                     logger.debug(f"AIService (Query): Found exact word match for '{entity['name']}'")
                 # For Notes specifically
-                elif entity['type'] == 'Note':
+                # Specific handling for different entity types
+                elif entity['type'] == 'Scene' or entity['type'] == 'Character':
+                    # Enhanced Scene and Character matching - handle both "log Zero" and "Zero log"
                     original_name = entity['name']
+                    # Get normalized clean name
+                    clean_name = original_name
+                    normalized_clean_name = normalize_name(clean_name)
+                    
+                    logger.info(f"AIService (Query): Checking {entity['type']} '{original_name}' with normalized name: '{normalized_clean_name}'")
+                    
+                    # For scenes like "Внутренний лог Zero" we need more flexible matching
+                    # Check if all the significant words from the scene title are in the query
+                    # But not just any partial matches that could cause false positives
+                    scene_words = [w for w in re.findall(r'\b\w+\b', normalized_clean_name, re.UNICODE) if len(w) > 2]
+                    if scene_words:
+                        # Count how many significant words from the scene title appear in the query
+                        matching_words = [word for word in scene_words if word in normalized_query]
+                        # For longer titles, require at least 2 words to match
+                        min_matches_needed = 2 if len(scene_words) > 2 else 1
+                        
+                        if len(matching_words) >= min_matches_needed:
+                            is_match = True
+                            logger.info(f"AIService (Query): Found multiple word matches for {entity['type']} '{original_name}': {matching_words}")
+                        # Direct mention with name in quotes
+                        elif re.search(f'"{re.escape(normalized_clean_name)}"', normalized_query):
+                            is_match = True
+                            logger.info(f"AIService (Query): Found quoted name '{original_name}' in query")
+                
+                elif entity['type'] == 'Note':
+                    # IMPORTANT FIX: Use metadata_title for matching when available since it's the actual note title
+                    # The entity['name'] is often just the UUID of the note, not its title
+                    original_name = entity.get('metadata_title') if entity.get('metadata_title') else entity['name']
+                    
                     # Clean name from potential BOM markers for comparison
                     clean_name = original_name
                     if clean_name.startswith('\u00ff\u00fe'): # UTF-16 LE BOM in latin-1
                         clean_name = clean_name[2:]
                         logger.info(f"AIService (Query): Removed BOM characters from note name for matching: '{clean_name}'")
                     
-                    # Import unicodedata if not already done (for safety)
-                    import unicodedata
+                    logger.info(f"AIService (Query): Using '{clean_name}' for note matching (metadata_title={entity.get('metadata_title')}, entity name={entity['name']})")
                     
-                    # Get normalized versions of both the original and clean names
-                    normalized_entity_name = normalize_name(original_name)
-                    normalized_clean_name = normalize_name(clean_name)
+                    # SIMPLIFIED MATCHING STRATEGY
+                    logger.info(f"AIService (Query): ===== START NOTE MATCHING for '{clean_name}' =====")
                     
-                    # Log exact binary representation for debugging
-                    logger.info(f"AIService (Query): Normalized query: {normalized_query!r}, Normalized note name: {normalized_clean_name!r}")
+                    # Log entity being processed for debugging
+                    logger.info(f"AIService (Query): Processing note '{clean_name}' for matching")
                     
-                    logger.info(f"AIService (Query): Checking note '{original_name}' with normalized names: '{normalized_entity_name}' and '{normalized_clean_name}'")
-                    
-                    # Try matching against clean name first (without BOM)
-                    if clean_name.lower() == query_text.lower():
-                        is_match = True
-                        logger.info(f"AIService (Query): DIRECT MATCH - Clean note title '{clean_name}' exactly matches query '{query_text}'")
-                    # Then try original name
-                    elif original_name.lower() == query_text.lower():
-                        is_match = True
-                        logger.info(f"AIService (Query): DIRECT MATCH - Note title '{original_name}' exactly matches query '{query_text}'")
-                    # Check metadata title (which is the user-given title at creation time)
-                    elif entity.get('metadata_title') and entity['metadata_title'].lower() == query_text.lower():
-                        is_match = True
-                        logger.info(f"AIService (Query): METADATA TITLE MATCH - Query '{query_text}' exactly matches metadata title '{entity['metadata_title']}'")
-                    # Log exact matches for Cyrillic text for debugging purposes
-                    # This should help us understand why exact matches might not be working for some Cyrillic characters
-                    elif clean_name.lower() == query_text.lower() or query_text.lower() in clean_name.lower():
-                        is_match = True
-                        logger.info(f"AIService (Query): EXACT MATCH for Cyrillic - Query '{query_text}' matches note title '{clean_name}'")
-                    # Special case for Russian/Cyrillic: check if the query matches any word in the title
-                    # This handles cases like 'Заметка 2' when we have 'Содержимое заметки'
-                    elif any(q_word in clean_name.lower() for q_word in query_text.lower().split()):
-                        is_match = True
-                        logger.info(f"AIService (Query): PARTIAL WORD MATCH - Found word from query '{query_text}' in note title '{clean_name}'")
-                    # Check if any word in the title is present in the query
-                    elif any(title_word in query_text.lower() for title_word in clean_name.lower().split()):
-                        is_match = True
-                        logger.info(f"AIService (Query): PARTIAL WORD MATCH - Found word from note title '{clean_name}' in query '{query_text}'")
-                    # Check normalized versions
-                    elif normalized_query == normalized_clean_name:
-                        is_match = True
-                        logger.info(f"AIService (Query): Found exact match for clean note name '{clean_name}'")
-                    elif normalized_query == normalized_entity_name:
-                        is_match = True
-                        logger.info(f"AIService (Query): Found exact match for note '{original_name}'")
-                    # Check if normalized query text contains the normalized note title
-                    elif normalized_clean_name in normalized_query:
-                        is_match = True
-                        logger.info(f"AIService (Query): Found clean note title '{clean_name}' within query")
-                    elif normalized_entity_name in normalized_query:
-                        is_match = True
-                        logger.info(f"AIService (Query): Found note title '{original_name}' within query")
-                    # Check if the normalized note title contains the normalized query
-                    elif normalized_query in normalized_clean_name:
-                        is_match = True
-                        logger.info(f"AIService (Query): Query '{query_text}' found within clean note title '{clean_name}'")
-                    elif normalized_query in normalized_entity_name:
-                        is_match = True
-                        logger.info(f"AIService (Query): Query '{query_text}' found within note title '{original_name}'")
-                    # Check for matching significant words in either version
-                    elif len(normalized_clean_name) > 3:
-                        for word in normalized_clean_name.split():
-                            if len(word) > 3 and word in normalized_query:
+                    # 1. Direct keyword match from the comma-separated list (MOST IMPORTANT MATCHING METHOD)
+                    # This should be the primary matching method when technical keywords section exists
+                    if not is_match:
+                        for keyword in entity_keywords_to_match:
+                            # Log what we're checking for clarity
+                            logger.info(f"AIService (Query): Checking if note title '{clean_name}' exactly matches keyword '{keyword}'")
+                            
+                            if clean_name == keyword.strip():
                                 is_match = True
-                                logger.info(f"AIService (Query): Found word match for clean note name '{clean_name}' with word '{word}'")
+                                logger.info(f"AIService (Query): EXACT MATCH - Note title '{clean_name}' exactly matches keyword '{keyword}'")
                                 break
-                    elif len(normalized_entity_name) > 3:
-                        for word in normalized_entity_name.split():
-                            if len(word) > 3 and word in normalized_query:
+                                
+                            # Also try with quotes removed (in case query has "\u0414\u0443\u0445 \u0438 \u0434\u0435\u0442\u0430\u043b\u0438\u0437\u0430\u0446\u0438\u044f")
+                            clean_keyword = keyword.strip().strip('"').strip()
+                            logger.info(f"AIService (Query): Also checking cleaned version: '{clean_keyword}'")
+                            
+                            if clean_name == clean_keyword:
                                 is_match = True
-                                logger.info(f"AIService (Query): Found word match for note '{original_name}' with word '{word}'")
+                                logger.info(f"AIService (Query): EXACT MATCH after quote removal - Note '{clean_name}' matches '{clean_keyword}'")
                                 break
+                    
+                    # 2. Case-insensitive match
+                    if not is_match:
+                        clean_name_lower = clean_name.lower()
+                        # Check each keyword in lowercase
+                        for keyword in entity_keywords_to_match:
+                            keyword_lower = keyword.lower()
+                            if clean_name_lower == keyword_lower:
+                                is_match = True
+                                logger.info(f"AIService (Query): CASE-INSENSITIVE MATCH - '{clean_name_lower}' == '{keyword_lower}'")
+                                break
+                            # For multi-word notes, check for fuzzy matches
+                            elif ' ' in clean_name:
+                                # Is there significant overlap in the words?
+                                clean_words = set(clean_name_lower.split())
+                                keyword_words = set(keyword_lower.split())
+                                # Calculate how many words overlap
+                                overlap = clean_words.intersection(keyword_words)
+                                # Calculate percent of overlap
+                                overlap_percent = len(overlap) / max(len(clean_words), len(keyword_words))
+                                logger.info(f"AIService (Query): Overlap between '{clean_name}' and '{keyword}': {len(overlap)}/{max(len(clean_words), len(keyword_words))} words ({overlap_percent:.2%})")
+                                # If significant overlap, consider it a match
+                                if overlap_percent > 0.5:
+                                    is_match = True
+                                    logger.info(f"AIService (Query): WORD OVERLAP MATCH - Note '{clean_name}' words match keyword '{keyword}'")
+                                    break
+                    
+                    # Log final result for this note
+                    logger.info(f"AIService (Query): Is '{clean_name}' matched? {is_match}")
+                    logger.info(f"AIService (Query): ===== END NOTE MATCHING for '{clean_name}' =====\n")
                     
                     if is_match:
                         logger.info(f"AIService (Query): Found match for Note '{entity['name']}' - TYPE: {entity['type']}")
@@ -417,8 +507,21 @@ class AIService:
                             logger.info(f"AIService (Query): Successfully loaded direct content for '{entity['name']}' (Length: {len(content)})")
                     except Exception as e: logger.error(f"AIService (Query): Error loading direct content for '{entity['name']}': {e}", exc_info=True)
 
-        if not direct_sources_data and not direct_chapter_context: logger.info("AIService (Query): No direct entity matches found in query.")
-        else: logger.info(f"AIService (Query): Found and loaded {len(direct_sources_data)} direct sources and chapter context: {bool(direct_chapter_context)}.")
+        # Enhanced logging for direct sources debugging
+        logger.info(f"AIService (Query): Final processing - query_text: '{query_text}'")
+        logger.info(f"AIService (Query): Direct sources data count: {len(direct_sources_data)}")
+        
+        if direct_sources_data:
+            for i, item in enumerate(direct_sources_data):
+                logger.info(f"AIService (Query): Direct source {i+1} type={item.get('type')}, name={item.get('name')}")
+                content_len = len(item.get('content', ''))
+                logger.info(f"AIService (Query): Content length: {content_len}, first 100 chars: {item.get('content', '')[:100]}")
+
+        # Log original summary
+        if not direct_sources_data and not direct_chapter_context: 
+            logger.info("AIService (Query): No direct entity matches found in query.")
+        else: 
+            logger.info(f"AIService (Query): Found and loaded {len(direct_sources_data)} direct sources and chapter context: {bool(direct_chapter_context)}.")
 
         logger.debug(f"AIService (Query): Final paths to filter from RAG: {directly_included_paths}")
         logger.debug("AIService (Query): Delegating query to RagEngine...")
@@ -431,6 +534,28 @@ class AIService:
             direct_chapter_context=direct_chapter_context, # Pass chapter context
             paths_to_filter=directly_included_paths
         )
+        
+        # Log the results returned from RAG engine
+        logger.info(f"AIService (Query): RagEngine returned: answer length={len(answer) if answer else 0}")
+        logger.info(f"AIService (Query): source_nodes count={len(source_nodes) if source_nodes else 0}")
+        
+        # Debug the direct_sources_info_list
+        if direct_sources_info_list:
+            logger.info(f"AIService (Query): direct_sources_info_list returned: {direct_sources_info_list}")
+        else:
+            logger.info("AIService (Query): direct_sources_info_list is None or empty")
+            
+        # Force direct_sources_info_list to contain something if we had direct sources
+        if direct_sources_data and (direct_sources_info_list is None or len(direct_sources_info_list) == 0):
+            logger.info("AIService (Query): Creating direct_sources_info_list from direct_sources_data because RagEngine returned None")
+            direct_sources_info_list = []
+            for source in direct_sources_data:
+                direct_sources_info_list.append({
+                    "type": source.get("type", "Unknown"),
+                    "name": source.get("name", "Unknown")
+                })
+            logger.info(f"AIService (Query): Created direct_sources_info_list: {direct_sources_info_list}")
+            
         return answer, source_nodes, direct_sources_info_list
 
     async def generate_scene_draft(self, project_id: str, chapter_id: str, request_data: AISceneGenerationRequest) -> Dict[str, str]:

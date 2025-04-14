@@ -179,7 +179,28 @@ const HistoryEntry = ({ entry }) => {
     // --- END MODIFIED ---
 
     const directSources = entry.response?.direct_sources; // Use plural
-    const hasDirectSources = directSources && Array.isArray(directSources) && directSources.length > 0;
+    
+    // Add debug console logging to see what we're getting
+    console.log(`[QueryInterface] entry.id: ${entry.id}, direct_sources:`, directSources);
+    if (directSources) {
+        console.log(`[QueryInterface] direct_sources type: ${typeof directSources}`);
+        console.log(`[QueryInterface] direct_sources is array: ${Array.isArray(directSources)}`);
+        console.log(`[QueryInterface] direct_sources length: ${Array.isArray(directSources) ? directSources.length : 'N/A'}`);
+    }
+    
+    // Make more tolerant of different direct sources formats
+    const hasDirectSources = directSources && (
+        (Array.isArray(directSources) && directSources.length > 0) ||
+        (typeof directSources === 'object' && Object.keys(directSources).length > 0)
+    );
+    
+    // Log the result of hasDirectSources check
+    console.log(`[QueryInterface] hasDirectSources: ${hasDirectSources}`);
+    if (hasDirectSources) {
+        console.log('[QueryInterface] Direct sources section SHOULD be displayed');
+    } else {
+        console.log('[QueryInterface] Direct sources section will NOT be displayed');
+    }
     const retrievedSources = entry.response?.source_nodes;
     const hasRetrievedSources = retrievedSources && Array.isArray(retrievedSources) && retrievedSources.length > 0;
 
@@ -201,9 +222,15 @@ const HistoryEntry = ({ entry }) => {
                                     Answer primarily based on directly requested content:
                                 </p>
                                 <ul style={styles.directSourceList}>
-                                    {directSources.map((source, index) => (
-                                        <li key={index}>{source.type}: "{source.name}"</li>
-                                    ))}
+                                    {Array.isArray(directSources) ? (
+                                        directSources.map((source, index) => (
+                                            <li key={index}>{source.type}: "{source.name}"</li>
+                                        ))
+                                    ) : (
+                                        Object.entries(directSources).map(([key, value], index) => (
+                                            <li key={index}>{typeof value === 'object' ? `${value.type}: "${value.name}"` : `Item ${index}: ${value}`}</li>
+                                        ))
+                                    )}
                                 </ul>
                             </div>
                         )}

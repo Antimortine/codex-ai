@@ -39,6 +39,15 @@ async def query_project(
     try:
         logger.info(f"Received query for project {project_id}: '{request.query}'")
         answer, sources, direct_sources = await ai_service.query_project(project_id, request.query)
+        
+        # Enhanced logging for direct sources debugging
+        if direct_sources:
+            logger.info(f"API query_project received direct_sources: {direct_sources}")
+        else:
+            logger.info("API query_project received None or empty direct_sources")
+            # Ensure we at least send an empty array instead of null
+            direct_sources = []
+            
         logger.info(f"Successfully generated query response for project {project_id}")
         
         # Convert NodeWithScore objects to the format expected by SourceNodeModel
@@ -50,6 +59,11 @@ async def query_project(
                 "score": node.score,
                 "metadata": node.node.metadata
             })
+        
+        # Log what we're returning to the client
+        logger.info(f"API returning to client: answer length={len(answer) if answer else 0}, sources={len(formatted_sources)}, direct_sources={len(direct_sources) if direct_sources else 0}")
+        if direct_sources:
+            logger.info(f"API direct_sources being returned: {direct_sources}")
             
         return AIQueryResponse(answer=answer, source_nodes=formatted_sources, direct_sources=direct_sources)
     except FileNotFoundError as e:

@@ -151,6 +151,12 @@ class IndexManager:
         details = {'document_type': 'Unknown', 'document_title': default_title}
         fs = file_service # Use the imported file_service instance
 
+        # ADDED: Skip special ".folder" placeholder notes
+        if file_path.stem == '.folder':
+            logger.debug(f"Skipping '.folder' placeholder note: {file_path}")
+            details = {'document_type': 'SkipIndexing', 'document_title': '.folder'}
+            return details
+
         try:
             relative_path_parts = file_path.relative_to(BASE_PROJECT_DIR / project_id).parts
             # Project-level files
@@ -166,6 +172,12 @@ class IndexManager:
             # --- ADDED: Note files ---
             elif len(relative_path_parts) > 1 and relative_path_parts[0] == 'notes' and file_path.suffix == '.md':
                 note_id = file_path.stem # Note ID is the filename stem (UUID)
+                # ADDED: Skip technical notes
+                if note_id.startswith('.'):
+                    logger.debug(f"Skipping technical note with ID starting with '.': {note_id}")
+                    details = {'document_type': 'SkipIndexing', 'document_title': note_id}
+                    return details
+                
                 project_meta = fs.read_project_metadata(project_id=project_id) # Use keyword
                 note_title = project_meta.get('notes', {}).get(note_id, {}).get('title')
                 details = {'document_type': 'Note', 'document_title': note_title or note_id} # Fallback to ID
@@ -252,6 +264,20 @@ class IndexManager:
         logger.info(f"IndexManager: Received request to index/update file: {file_path}")
         project_id = self._extract_project_id(file_path)
         if not project_id: logger.error(f"Could not determine project_id for file {file_path}. Skipping indexing."); return
+        
+        # ADDED: Check if the file is a special file that should be skipped (like .folder notes)
+        if file_path.stem == '.folder' or file_path.stem.startswith('.'):
+            logger.info(f"Skipping indexing for technical file: {file_path}")
+            self.delete_doc(file_path)  # Remove any existing nodes for this path
+            return
+            
+        # Get document details and check if it should be skipped
+        doc_details = self._get_document_details(file_path, project_id)
+        if doc_details.get('document_type') == 'SkipIndexing':
+            logger.info(f"Skipping indexing for file marked as SkipIndexing: {file_path}")
+            self.delete_doc(file_path)  # Remove any existing nodes for this path
+            return
+            
         logger.info(f"Determined project_id '{project_id}' for file {file_path}")
 
         try:
