@@ -133,6 +133,10 @@ const styles = {
         minWidth: '250px',
         flexGrow: 1, // Allow input to grow
         padding: '4px 6px',
+        resize: 'vertical', // Allow vertical resizing
+        minHeight: '60px', // Taller default height for the textarea
+        width: '100%', // Full width within the container
+        fontFamily: 'inherit', // Use consistent font
     },
     errorText: {
         color: 'red',
@@ -386,14 +390,14 @@ const ChapterSection = memo(function ChapterSection({
                     <label htmlFor={`summary-${chapter.id}`} style={{ fontSize: '0.9em', marginRight: '5px' }}>
                         Optional Prompt/Summary for AI Scene Generation:
                     </label>
-                    <input
-                        type="text"
+                    <textarea
                         id={`summary-${chapter.id}`}
                         value={generationSummaryForInput}
                         onChange={(e) => onSummaryChange(chapter.id, e.target.value)}
-                        placeholder="e.g., Character meets the informant"
+                        placeholder="e.g., Character meets the informant, describing the setting and revealing key information about the plot"
                         disabled={disableSummaryInput} // Use corrected flag
                         style={styles.summaryInput}
+                        rows={3}
                     />
                     <button
                         onClick={() => onGenerateScene(chapter.id, generationSummaryForInput)}
