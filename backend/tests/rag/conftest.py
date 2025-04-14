@@ -23,6 +23,16 @@ from llama_index.core.indices.vector_store import VectorStoreIndex
 from llama_index.core.embeddings import BaseEmbedding
 # --- END ADDED ---
 
+# Register custom pytest markers to avoid warnings
+def pytest_configure(config):
+    """
+    Register custom markers for pytest to avoid 'unknown mark' warnings.
+    """
+    config.addinivalue_line(
+        "markers",
+        "patch_load_index(exception): Mark a test to use a custom exception for the load_index_from_storage mock"
+    )
+
 # --- Shared Fixtures for RAG Processor Tests ---
 
 @pytest.fixture(scope="function") # Use function scope for isolation between tests

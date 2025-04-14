@@ -76,138 +76,144 @@ describe('ProjectDetailPage Edit Error Handling Tests', () => {
     const user = userEvent.setup();
     const errorMsg = "Save failed";
     
-    // Reset all mocks to ensure no previous calls are counted
+    // Reset all mocks to ensure clean state
     getProject.mockReset();
     listChapters.mockReset();
     listCharacters.mockReset();
+    listScenes.mockReset();
     updateProject.mockReset();
     
     // Configure API mocks
     getProject.mockResolvedValue({ data: { id: TEST_PROJECT_ID, name: TEST_PROJECT_NAME } });
     listChapters.mockResolvedValue({ data: { chapters: [] } });
     listCharacters.mockResolvedValue({ data: { characters: [] } });
+    listScenes.mockResolvedValue({ data: { scenes: [] } });
     
     // Setup error response for update
     updateProject.mockRejectedValue(new Error(errorMsg));
     
-    // Create a mock implementation that fires a real rejection for testing
-    updateProject.mockImplementation((id, data) => {
-      return Promise.reject(new Error(errorMsg));
-    });
-    
     // Render with our router helper
-    const { container } = renderWithRouter(<ProjectDetailPage />, `/projects/${TEST_PROJECT_ID}`);
+    const { container, findByText, queryByText } = renderWithRouter(
+      <ProjectDetailPage />, 
+      `/projects/${TEST_PROJECT_ID}`
+    );
     
-    // Wait for initial data load
+    // Wait for initial data load and project name to be displayed
     await waitFor(() => {
       expect(getProject).toHaveBeenCalledWith(TEST_PROJECT_ID);
     });
     
-    // Find the edit button
-    await act(async () => { await flushPromises(); });
-    const buttons = container.querySelectorAll('button');
-    let editButton = null;
-    for (const button of buttons) {
-      const buttonText = button.textContent.toLowerCase();
-      if (buttonText.includes('edit')) {
-        editButton = button;
-        break;
-      }
-    }
+    // Verify the project name is displayed
+    await findByText(TEST_PROJECT_NAME);
     
-    // Click edit button if found
-    if (editButton) {
-      await user.click(editButton);
-      
-      // Find input field for name editing
-      await act(async () => { await flushPromises(); });
-      const inputs = container.querySelectorAll('input');
-      let nameInput = null;
+    // Find the edit button
+    let editButton;
+    await waitFor(() => {
+      const buttons = container.querySelectorAll('button');
+      for (const button of buttons) {
+        if (button.textContent.toLowerCase().includes('edit')) {
+          editButton = button;
+          break;
+        }
+      }
+      expect(editButton).toBeTruthy();
+    });
+    
+    // Click the edit button
+    await user.click(editButton);
+    
+    // Find the input field for editing the project name
+    let nameInput;
+    await waitFor(() => {
+      const inputs = container.querySelectorAll('input[type="text"]');
       for (const input of inputs) {
-        if (input.type === 'text') {
+        if (input.value === TEST_PROJECT_NAME) {
           nameInput = input;
           break;
         }
       }
-      
-      // Type in the input if found
-      if (nameInput) {
-        try {
-          // Focus and then clear/type
-          await act(async () => {
-            nameInput.focus();
-          });
-          await user.clear(nameInput);
-          await user.type(nameInput, UPDATED_PROJECT_NAME);
-          
-          // Find the save button
-          await act(async () => { await flushPromises(); });
-          const updatedButtons = container.querySelectorAll('button');
-          
-          let saveButton = null;
-          for (const button of updatedButtons) {
-            const buttonText = button.textContent.toLowerCase();
-            if (buttonText.includes('save')) {
-              saveButton = button;
-              break;
-            }
-          }
-          
-          // Click save button if found
-          if (saveButton) {
-            await user.click(saveButton);
-          } else {
-            // Directly call the API to test error handling
-            await updateProject(TEST_PROJECT_ID, { name: UPDATED_PROJECT_NAME }).catch(err => {
-              // Expected to catch error
-            });
-          }
-        } catch (e) {
-          // Expected to catch error
+      expect(nameInput).toBeTruthy();
+    });
+    
+    // Clear and type the new project name
+    await user.clear(nameInput);
+    await user.type(nameInput, UPDATED_PROJECT_NAME);
+    
+    // Find the save button
+    let saveButton;
+    await waitFor(() => {
+      const buttons = container.querySelectorAll('button');
+      for (const button of buttons) {
+        if (button.textContent.toLowerCase().includes('save')) {
+          saveButton = button;
+          break;
         }
       }
-    }
+      expect(saveButton).toBeTruthy();
+    });
     
-    // Wait for all promises to resolve
-    await act(async () => { await flushPromises(); });
+    // Click the save button which will trigger the API error
+    await user.click(saveButton);
     
-    // Verify that the API was called
-    expect(updateProject).toHaveBeenCalled();
+    // Verify the updateProject API was called
+    await waitFor(() => {
+      expect(updateProject).toHaveBeenCalledWith(
+        TEST_PROJECT_ID,
+        expect.objectContaining({ name: UPDATED_PROJECT_NAME })
+      );
+    });
     
-    // Make sure the page still shows the input field, indicating the edit wasn't committed due to error
-    await act(async () => { await flushPromises(); });
-    
-    // Look for input fields after the error
-    const inputsAfterError = container.querySelectorAll('input[type="text"]');
-    
-    // If we still have the input visible, that's a good indication the save failed as expected
-    if (inputsAfterError.length > 0) {
-      expect(inputsAfterError.length).toBeGreaterThan(0);
-    } else {
-      // Check if there's error text instead
-      const hasErrorText = container.textContent.toLowerCase().includes('error') || 
-                          container.textContent.toLowerCase().includes('fail');
-      expect(hasErrorText).toBe(true);
-    }
+    // After an error, either:
+    // 1. The form remains in edit mode (input is still visible), or
+    // 2. An error message is displayed
+    await waitFor(() => {
+      // Check if we're still in edit mode (input is still visible)
+      const inputsAfterError = container.querySelectorAll('input[type="text"]');
+      
+      // Or check if there's an error message
+      const hasErrorText = 
+        container.textContent.toLowerCase().includes('error') || 
+        container.textContent.toLowerCase().includes('fail');
+      
+      // Either condition indicates proper error handling
+      expect(inputsAfterError.length > 0 || hasErrorText).toBe(true);
+    });
   });
 
   it('shows error message when API fails during load', async () => {
+    // Reset all mocks to ensure clean state
+    getProject.mockReset();
+    listChapters.mockReset();
+    listCharacters.mockReset();
+    listScenes.mockReset();
+    updateProject.mockReset();
+    
     // Setup API error for initial project load
     const errorMsg = "Failed to load project";
     getProject.mockRejectedValue(new Error(errorMsg));
     
     // Render with our router helper
-    const { container } = renderWithRouter(<ProjectDetailPage />, `/projects/${TEST_PROJECT_ID}`);
+    const { container } = renderWithRouter(
+      <ProjectDetailPage />, 
+      `/projects/${TEST_PROJECT_ID}`
+    );
     
-    // Wait for error to be displayed
-    await act(async () => { await flushPromises(); });
+    // Wait for the error to be displayed
+    await waitFor(() => {
+      const content = container.textContent.toLowerCase();
+      const hasErrorText = 
+        content.includes('error') || 
+        content.includes('fail') || 
+        content.includes('unable to load') ||
+        content.includes('could not load');
+      
+      expect(hasErrorText).toBe(true);
+    });
     
-    // Check if there's error text visible to the user
-    const hasErrorText = container.textContent.toLowerCase().includes('error') || 
-                        container.textContent.toLowerCase().includes('fail') ||
-                        container.textContent.toLowerCase().includes('unable to load');
-    
-    expect(hasErrorText).toBe(true);
+    // Verify that updateProject was not called (since we failed earlier in the flow)
     expect(updateProject).not.toHaveBeenCalled();
+    
+    // Verify getProject was called with the correct ID
+    expect(getProject).toHaveBeenCalledWith(TEST_PROJECT_ID);
   });
 });

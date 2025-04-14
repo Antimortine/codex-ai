@@ -16,14 +16,13 @@
 
 import React from 'react';
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
-import { render, screen, fireEvent, waitFor, act } from '@testing-library/react';
+import { screen, waitFor } from '@testing-library/react';
 import userEvent from '@testing-library/user-event';
 import ProjectDetailPage from './ProjectDetail';
 import * as api from '../api/codexApi'; // Path relative to this file
 // Import shared testing utilities
 import { 
   renderWithRouter, 
-  flushPromises, 
   TEST_PROJECT_ID,
   TEST_CHAPTER_ID,
   TEST_SCENE_ID,
@@ -142,9 +141,6 @@ describe('ProjectDetailPage Chapter Tests', () => {
             expect(api.listChapters).toHaveBeenCalledWith(TEST_PROJECT_ID);
         });
         
-        // Ensure there's time for the component to render
-        await act(async () => { await flushPromises(); });
-        
         // Wait for chapters to load if we have any
         if (currentMockChapters.length > 0) {
             try {
@@ -160,11 +156,6 @@ describe('ProjectDetailPage Chapter Tests', () => {
             // Wait for the characters section to be displayed
             await screen.findByText(/Characters/i);
         }
-        
-        // Allow additional time for all async operations to settle
-        await act(async () => {
-            await flushPromises(50); // Use our imported utility
-        });
     };
 
 
@@ -177,12 +168,15 @@ describe('ProjectDetailPage Chapter Tests', () => {
         renderWithRouter(<ProjectDetailPage />, `/projects/${TEST_PROJECT_ID}`);
         await waitForInitialLoad();
 
-        const input = screen.getByTestId('new-chapter-input');
-        const addButton = screen.getByTestId('add-chapter-button');
+        // Use findByTestId to ensure element is in the DOM
+        const input = await screen.findByTestId('new-chapter-input');
+        const addButton = await screen.findByTestId('add-chapter-button');
 
+        // Properly await user events
         await user.type(input, newChapterTitle);
         await user.click(addButton);
 
+        // Wait for API call to complete
         await waitFor(() => {
             expect(api.createChapter).toHaveBeenCalledTimes(1);
             expect(api.createChapter).toHaveBeenCalledWith(TEST_PROJECT_ID, {
@@ -191,8 +185,14 @@ describe('ProjectDetailPage Chapter Tests', () => {
             });
         });
 
-        expect(await screen.findByText(/Chapter Three/i)).toBeInTheDocument();
-        expect(input).toHaveValue('');
+        // Use findByText to wait for new chapter to appear in DOM
+        const newChapterElement = await screen.findByText(/Chapter Three/i);
+        expect(newChapterElement).toBeInTheDocument();
+        
+        // Check input is cleared after successful creation
+        await waitFor(() => {
+            expect(input).toHaveValue('');
+        });
     });
 
     it('handles error during chapter creation', async () => {
@@ -204,12 +204,15 @@ describe('ProjectDetailPage Chapter Tests', () => {
         renderWithRouter(<ProjectDetailPage />, `/projects/${TEST_PROJECT_ID}`);
         await waitForInitialLoad();
 
-        const input = screen.getByTestId('new-chapter-input');
-        const addButton = screen.getByTestId('add-chapter-button');
+        // Use findByTestId to ensure element is in the DOM
+        const input = await screen.findByTestId('new-chapter-input');
+        const addButton = await screen.findByTestId('add-chapter-button');
 
+        // Properly await user events
         await user.type(input, newChapterTitle);
         await user.click(addButton);
 
+        // Wait for API call to complete
         await waitFor(() => {
             expect(api.createChapter).toHaveBeenCalledTimes(1);
             expect(api.createChapter).toHaveBeenCalledWith(TEST_PROJECT_ID, {
@@ -217,8 +220,13 @@ describe('ProjectDetailPage Chapter Tests', () => {
                 order: nextOrder
             });
         });
-        if (currentMockChapters && currentMockChapters.length > 0) { // Add check
-             expect(screen.getByText(new RegExp(currentMockChapters[0].title, 'i'))).toBeInTheDocument();
+
+        // Verify existing chapters are still displayed
+        if (currentMockChapters && currentMockChapters.length > 0) {
+            // Use waitFor to ensure element is still in the DOM after failed API call
+            await waitFor(() => {
+                expect(screen.getByText(new RegExp(currentMockChapters[0].title, 'i'))).toBeInTheDocument();
+            });
         }
     });
 
@@ -234,19 +242,32 @@ describe('ProjectDetailPage Chapter Tests', () => {
         renderWithRouter(<ProjectDetailPage />, `/projects/${TEST_PROJECT_ID}`);
         await waitForInitialLoad();
 
-        const editButton = screen.getByTestId(`edit-chapter-button-${chapterToEdit.id}`);
+        // Find the edit button using findByTestId
+        const editButton = await screen.findByTestId(`edit-chapter-button-${chapterToEdit.id}`);
         await user.click(editButton);
 
+        // Wait for the edit input to appear
         const editInput = await screen.findByTestId(`edit-chapter-input-${chapterToEdit.id}`);
-        expect(editInput).toHaveValue(chapterToEdit.title);
+        
+        // Use waitFor to check the value of the input
+        await waitFor(() => {
+            expect(editInput).toHaveValue(chapterToEdit.title);
+        });
 
+        // Clear and type into the input
         await user.clear(editInput);
         await user.type(editInput, updatedTitle);
-        expect(editInput).toHaveValue(updatedTitle);
+        
+        // Use waitFor to check the updated value
+        await waitFor(() => {
+            expect(editInput).toHaveValue(updatedTitle);
+        });
 
-        const saveButton = screen.getByTestId(`save-chapter-button-${chapterToEdit.id}`);
+        // Find save button and click it
+        const saveButton = await screen.findByTestId(`save-chapter-button-${chapterToEdit.id}`);
         await user.click(saveButton);
 
+        // Wait for the API call to complete
         await waitFor(() => {
             expect(api.updateChapter).toHaveBeenCalledTimes(1);
             expect(api.updateChapter).toHaveBeenCalledWith(TEST_PROJECT_ID, chapterToEdit.id, {
@@ -255,8 +276,14 @@ describe('ProjectDetailPage Chapter Tests', () => {
             });
         });
 
-        expect(await screen.findByTestId(`chapter-title-${chapterToEdit.id}`)).toHaveTextContent(`${chapterToEdit.order}: ${updatedTitle}`);
-        expect(screen.queryByTestId(`edit-chapter-input-${chapterToEdit.id}`)).not.toBeInTheDocument();
+        // Wait for the updated title to appear
+        const updatedTitleElement = await screen.findByTestId(`chapter-title-${chapterToEdit.id}`);
+        expect(updatedTitleElement).toHaveTextContent(`${chapterToEdit.order}: ${updatedTitle}`);
+        
+        // Use waitFor to check that the edit input is removed
+        await waitFor(() => {
+            expect(screen.queryByTestId(`edit-chapter-input-${chapterToEdit.id}`)).not.toBeInTheDocument();
+        });
     });
 
      it('allows cancelling chapter title edit', async () => {
@@ -266,19 +293,31 @@ describe('ProjectDetailPage Chapter Tests', () => {
         renderWithRouter(<ProjectDetailPage />, `/projects/${TEST_PROJECT_ID}`);
         await waitForInitialLoad();
 
-        const editButton = screen.getByTestId(`edit-chapter-button-${chapterToEdit.id}`);
+        // Find the edit button using findByTestId
+        const editButton = await screen.findByTestId(`edit-chapter-button-${chapterToEdit.id}`);
         await user.click(editButton);
 
+        // Wait for the edit input to appear
         const editInput = await screen.findByTestId(`edit-chapter-input-${chapterToEdit.id}`);
         await user.type(editInput, ' - temporary edit');
 
-        const cancelButton = screen.getByTestId(`cancel-edit-button-${chapterToEdit.id}`);
+        // Find cancel button using findByTestId
+        const cancelButton = await screen.findByTestId(`cancel-edit-button-${chapterToEdit.id}`);
         await user.click(cancelButton);
 
-        expect(api.updateChapter).not.toHaveBeenCalled();
+        // Use waitFor to check that the API was not called
+        await waitFor(() => {
+            expect(api.updateChapter).not.toHaveBeenCalled();
+        });
 
-        expect(await screen.findByTestId(`chapter-title-${chapterToEdit.id}`)).toHaveTextContent(`${chapterToEdit.order}: ${chapterToEdit.title}`);
-        expect(screen.queryByTestId(`edit-chapter-input-${chapterToEdit.id}`)).not.toBeInTheDocument();
+        // Wait for the original title to still be displayed
+        const titleElement = await screen.findByTestId(`chapter-title-${chapterToEdit.id}`);
+        expect(titleElement).toHaveTextContent(`${chapterToEdit.order}: ${chapterToEdit.title}`);
+        
+        // Use waitFor to check that the edit input is removed
+        await waitFor(() => {
+            expect(screen.queryByTestId(`edit-chapter-input-${chapterToEdit.id}`)).not.toBeInTheDocument();
+        });
     });
 
     it('handles error during chapter title update', async () => {
@@ -291,19 +330,32 @@ describe('ProjectDetailPage Chapter Tests', () => {
         renderWithRouter(<ProjectDetailPage />, `/projects/${TEST_PROJECT_ID}`);
         await waitForInitialLoad();
 
-        const editButton = screen.getByTestId(`edit-chapter-button-${chapterToEdit.id}`);
+        // Find the edit button using findByTestId
+        const editButton = await screen.findByTestId(`edit-chapter-button-${chapterToEdit.id}`);
         await user.click(editButton);
 
+        // Wait for the edit input to appear
         const editInput = await screen.findByTestId(`edit-chapter-input-${chapterToEdit.id}`);
-        expect(editInput).toHaveValue(chapterToEdit.title);
+        
+        // Use waitFor to check the value of the input
+        await waitFor(() => {
+            expect(editInput).toHaveValue(chapterToEdit.title);
+        });
 
+        // Clear and type into the input
         await user.clear(editInput);
         await user.type(editInput, updatedTitle);
-        expect(editInput).toHaveValue(updatedTitle);
+        
+        // Use waitFor to check the updated value
+        await waitFor(() => {
+            expect(editInput).toHaveValue(updatedTitle);
+        });
 
-        const saveButton = screen.getByTestId(`save-chapter-button-${chapterToEdit.id}`);
+        // Find save button using findByTestId
+        const saveButton = await screen.findByTestId(`save-chapter-button-${chapterToEdit.id}`);
         await user.click(saveButton);
 
+        // Wait for the API call to complete
         await waitFor(() => {
             expect(api.updateChapter).toHaveBeenCalledTimes(1);
             expect(api.updateChapter).toHaveBeenCalledWith(TEST_PROJECT_ID, chapterToEdit.id, {
@@ -312,8 +364,12 @@ describe('ProjectDetailPage Chapter Tests', () => {
             });
         });
 
-        expect(screen.getByTestId(`edit-chapter-input-${chapterToEdit.id}`)).toBeInTheDocument();
-        expect(screen.getByTestId(`edit-chapter-input-${chapterToEdit.id}`)).toHaveValue(updatedTitle);
+        // Use waitFor to verify the edit input is still present
+        await waitFor(() => {
+            const inputAfterError = screen.getByTestId(`edit-chapter-input-${chapterToEdit.id}`);
+            expect(inputAfterError).toBeInTheDocument();
+            expect(inputAfterError).toHaveValue(updatedTitle);
+        });
     });
 
 
@@ -329,25 +385,36 @@ describe('ProjectDetailPage Chapter Tests', () => {
         renderWithRouter(<ProjectDetailPage />, `/projects/${TEST_PROJECT_ID}`);
         await waitForInitialLoad();
 
-        const deleteButton = screen.getByTestId(`delete-chapter-button-${chapterToDelete.id}`);
+        // Find delete button using findByTestId
+        const deleteButton = await screen.findByTestId(`delete-chapter-button-${chapterToDelete.id}`);
         await user.click(deleteButton);
 
-        expect(confirmSpy).toHaveBeenCalledTimes(1);
-        expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining(chapterToDelete.title));
+        // Use waitFor to verify confirm was called
+        await waitFor(() => {
+            expect(confirmSpy).toHaveBeenCalledTimes(1);
+            expect(confirmSpy).toHaveBeenCalledWith(expect.stringContaining(chapterToDelete.title));
+        });
 
+        // Wait for the API call to complete
         await waitFor(() => {
             expect(api.deleteChapter).toHaveBeenCalledTimes(1);
             expect(api.deleteChapter).toHaveBeenCalledWith(TEST_PROJECT_ID, chapterToDelete.id);
         });
 
+        // Use waitFor to check that the deleted chapter is removed from the DOM
         await waitFor(() => {
             expect(screen.queryByText(new RegExp(chapterToDelete.title, 'i'))).not.toBeInTheDocument();
         });
 
+        // Check that remaining chapters are displayed correctly
         if (remainingChapters.length > 0) {
+            // Use findByText to wait for remaining chapter to be displayed
             const remainingChapterTitle = await screen.findByText(new RegExp(remainingChapters[0].title, 'i'));
             expect(remainingChapterTitle).toBeInTheDocument();
-            expect(screen.getByTestId(`chapter-title-${remainingChapters[0].id}`)).toHaveTextContent(`1: ${remainingChapters[0].title}`);
+            
+            // Use findByTestId to wait for chapter title to be updated with new order
+            const remainingChapterElement = await screen.findByTestId(`chapter-title-${remainingChapters[0].id}`);
+            expect(remainingChapterElement).toHaveTextContent(`1: ${remainingChapters[0].title}`);
         }
     });
 
@@ -359,12 +426,23 @@ describe('ProjectDetailPage Chapter Tests', () => {
         renderWithRouter(<ProjectDetailPage />, `/projects/${TEST_PROJECT_ID}`);
         await waitForInitialLoad();
 
-        const deleteButton = screen.getByTestId(`delete-chapter-button-${chapterToDelete.id}`);
+        // Find delete button using findByTestId
+        const deleteButton = await screen.findByTestId(`delete-chapter-button-${chapterToDelete.id}`);
         await user.click(deleteButton);
 
-        expect(confirmSpy).toHaveBeenCalledTimes(1);
-        expect(api.deleteChapter).not.toHaveBeenCalled();
-        expect(screen.getByText(new RegExp(chapterToDelete.title, 'i'))).toBeInTheDocument();
+        // Use waitFor to verify confirm was called
+        await waitFor(() => {
+            expect(confirmSpy).toHaveBeenCalledTimes(1);
+        });
+        
+        // Verify API was not called
+        await waitFor(() => {
+            expect(api.deleteChapter).not.toHaveBeenCalled();
+        });
+        
+        // Verify chapter is still in the DOM
+        const chapterElement = await screen.findByText(new RegExp(chapterToDelete.title, 'i'));
+        expect(chapterElement).toBeInTheDocument();
 
         confirmSpy.mockRestore();
     });
@@ -380,15 +458,21 @@ describe('ProjectDetailPage Chapter Tests', () => {
         renderWithRouter(<ProjectDetailPage />, `/projects/${TEST_PROJECT_ID}`);
         await waitForInitialLoad();
 
-        const deleteButton = screen.getByTestId(`delete-chapter-button-${chapterToDelete.id}`);
+        // Find delete button using findByTestId
+        const deleteButton = await screen.findByTestId(`delete-chapter-button-${chapterToDelete.id}`);
         await user.click(deleteButton);
 
+        // Wait for the API call to complete
         await waitFor(() => {
             expect(api.deleteChapter).toHaveBeenCalledTimes(1);
             expect(api.deleteChapter).toHaveBeenCalledWith(TEST_PROJECT_ID, chapterToDelete.id);
         });
 
-        expect(screen.getByText(new RegExp(chapterToDelete.title, 'i'))).toBeInTheDocument();
+        // Verify chapter is still in the DOM after error
+        await waitFor(() => {
+            const chapterElement = screen.getByText(new RegExp(chapterToDelete.title, 'i'));
+            expect(chapterElement).toBeInTheDocument();
+        });
     });
 
 

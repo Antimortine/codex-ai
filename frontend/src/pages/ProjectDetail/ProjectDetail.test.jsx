@@ -18,7 +18,7 @@
 
 import React from 'react';
 import { render, screen, waitFor } from '@testing-library/react';
-import userEvent from '@testing-library/user-event'; // <-- IMPORT ADDED
+import userEvent from '@testing-library/user-event';
 import { MemoryRouter, Route, Routes } from 'react-router-dom';
 import { vi, describe, it, expect, beforeEach } from 'vitest';
 
@@ -88,30 +88,29 @@ const MOCK_CHARACTERS = [
 ];
 
 const renderWithRouter = (initialEntries = [`/projects/${TEST_PROJECT_ID}`]) => {
-    // Reset mocks passed to ChapterSection before each render if needed
-     vi.mocked(ChapterSection).mockClear(); // Clear previous calls/instances if using vi.fn() directly
+    // Reset mocks passed to ChapterSection before each render
+    vi.mocked(ChapterSection).mockClear();
 
-     // Re-mock ChapterSection specifically for this render if needed, or rely on the module-level mock
-     // vi.mocked(ChapterSection).mockImplementation((props) => { ... }); // If more specific mock needed per test
-
-    return render(
-        <MemoryRouter initialEntries={initialEntries}>
-            <Routes>
-                <Route path="/projects/:projectId" element={<ProjectDetailPage />} />
-                {/* Add other routes used by links within the page if necessary */}
-                 <Route path="/projects/:projectId/notes" element={<div>Notes Page Mock</div>} />
-                 <Route path="/projects/:projectId/query" element={<div>Query Page Mock</div>} />
-                 <Route path="/projects/:projectId/plan" element={<div>Plan Edit Mock</div>} />
-                 <Route path="/projects/:projectId/synopsis" element={<div>Synopsis Edit Mock</div>} />
-                 <Route path="/projects/:projectId/world" element={<div>World Edit Mock</div>} />
-                 <Route path="/projects/:projectId/characters/:characterId" element={<div>Character Edit Mock</div>} />
-                 <Route path="/projects/:projectId/chapters/:chapterId/plan" element={<div>Chapter Plan Mock</div>} />
-                 <Route path="/projects/:projectId/chapters/:chapterId/synopsis" element={<div>Chapter Synopsis Mock</div>} />
-                 <Route path="/projects/:projectId/chapters/:chapterId/scenes/:sceneId" element={<div>Scene Edit Mock</div>} />
-
-            </Routes>
-        </MemoryRouter>
-    );
+    // Return the render result along with screen methods for better testing
+    return {
+        ...render(
+            <MemoryRouter initialEntries={initialEntries}>
+                <Routes>
+                    <Route path="/projects/:projectId" element={<ProjectDetailPage />} />
+                    {/* Routes for navigation within the app */}
+                    <Route path="/projects/:projectId/notes" element={<div>Notes Page Mock</div>} />
+                    <Route path="/projects/:projectId/query" element={<div>Query Page Mock</div>} />
+                    <Route path="/projects/:projectId/plan" element={<div>Plan Edit Mock</div>} />
+                    <Route path="/projects/:projectId/synopsis" element={<div>Synopsis Edit Mock</div>} />
+                    <Route path="/projects/:projectId/world" element={<div>World Edit Mock</div>} />
+                    <Route path="/projects/:projectId/characters/:characterId" element={<div>Character Edit Mock</div>} />
+                    <Route path="/projects/:projectId/chapters/:chapterId/plan" element={<div>Chapter Plan Mock</div>} />
+                    <Route path="/projects/:projectId/chapters/:chapterId/synopsis" element={<div>Chapter Synopsis Mock</div>} />
+                    <Route path="/projects/:projectId/chapters/:chapterId/scenes/:sceneId" element={<div>Scene Edit Mock</div>} />
+                </Routes>
+            </MemoryRouter>
+        )
+    };
 };
 
 
@@ -188,19 +187,38 @@ describe('Refactored ProjectDetailPage Tests', () => {
     });
 
     it('renders the project name correctly', async () => {
+        // Render the component with router setup
         renderWithRouter();
-        // Wait for the heading containing the project name
-        // The ProjectHeader component should handle displaying this
-        expect(await screen.findByRole('heading', { name: new RegExp(MOCK_PROJECT.name, 'i'), level: 1 })).toBeInTheDocument();
-        expect(api.getProject).toHaveBeenCalledWith(TEST_PROJECT_ID);
+        
+        // Wait for the API call to be made
+        await waitFor(() => {
+            expect(api.getProject).toHaveBeenCalledWith(TEST_PROJECT_ID);
+        });
+        
+        // Verify the project name is displayed in the heading
+        const projectHeading = await screen.findByRole('heading', { 
+            name: new RegExp(MOCK_PROJECT.name, 'i'), 
+            level: 1 
+        });
+        expect(projectHeading).toBeInTheDocument();
     });
 
     it('renders chapter sections with titles', async () => {
+        // Render the component with router setup
         renderWithRouter();
-        // Wait for chapter titles to appear within the mocked ChapterSection
-        expect(await screen.findByTestId('chapter-title-ch1')).toHaveTextContent(`1: ${MOCK_CHAPTERS[0].title}`);
-        expect(screen.getByTestId('chapter-title-ch2')).toHaveTextContent(`2: ${MOCK_CHAPTERS[1].title}`);
-        expect(api.listChapters).toHaveBeenCalledWith(TEST_PROJECT_ID);
+        
+        // Wait for the API calls to be made
+        await waitFor(() => {
+            expect(api.getProject).toHaveBeenCalledWith(TEST_PROJECT_ID);
+            expect(api.listChapters).toHaveBeenCalledWith(TEST_PROJECT_ID);
+        });
+        
+        // Verify the chapter sections are rendered with correct titles
+        const chapter1Title = await screen.findByTestId('chapter-title-ch1');
+        expect(chapter1Title).toHaveTextContent(`1: ${MOCK_CHAPTERS[0].title}`);
+        
+        const chapter2Title = await screen.findByTestId('chapter-title-ch2');
+        expect(chapter2Title).toHaveTextContent(`2: ${MOCK_CHAPTERS[1].title}`);
     });
 
      it('renders character sections', async () => {
@@ -221,17 +239,68 @@ describe('Refactored ProjectDetailPage Tests', () => {
      // Add more tests here for interactions handled by the main page
      // (e.g., triggering rebuild index, add chapter/character modals if managed by ProjectDetailPage directly)
       // Example: Test Rebuild Index Button Click
-      it('calls rebuildProjectIndex when rebuild button is clicked', async () => {
-           const user = userEvent.setup(); // <-- SETUP userEvent
-           renderWithRouter();
-           const rebuildButton = await screen.findByTestId('rebuild-index-button');
-           await user.click(rebuildButton);
-           await waitFor(() => {
-               expect(api.rebuildProjectIndex).toHaveBeenCalledWith(TEST_PROJECT_ID);
-           });
-           // Check for success message display
-           expect(await screen.findByTestId('rebuild-success')).toBeInTheDocument();
-      });
+    it('calls rebuildProjectIndex when rebuild button is clicked', async () => {
+        // Setup user event for interactions
+        const user = userEvent.setup();
+        
+        // Render the component with router setup
+        renderWithRouter();
+        
+        // Wait for initial data to load
+        await waitFor(() => {
+            expect(api.getProject).toHaveBeenCalledWith(TEST_PROJECT_ID);
+        });
+        
+        // Find the rebuild button
+        const rebuildButton = await screen.findByTestId('rebuild-index-button');
+        expect(rebuildButton).toBeInTheDocument();
+        
+        // Click the rebuild button
+        await user.click(rebuildButton);
+        
+        // Verify the API was called with the correct parameters
+        await waitFor(() => {
+            expect(api.rebuildProjectIndex).toHaveBeenCalledWith(TEST_PROJECT_ID);
+        });
+        
+        // Check for success message display
+        const successMessage = await screen.findByTestId('rebuild-success');
+        expect(successMessage).toBeInTheDocument();
+    });
+    
+    it('displays error message when rebuilding index fails', async () => {
+        // Setup user event for interactions
+        const user = userEvent.setup();
+        
+        // Mock the API to return an error
+        const errorMsg = 'Failed to rebuild index';
+        api.rebuildProjectIndex.mockRejectedValueOnce(new Error(errorMsg));
+        
+        // Render the component with router setup
+        renderWithRouter();
+        
+        // Wait for initial data to load
+        await waitFor(() => {
+            expect(api.getProject).toHaveBeenCalledWith(TEST_PROJECT_ID);
+        });
+        
+        // Find the rebuild button
+        const rebuildButton = await screen.findByTestId('rebuild-index-button');
+        
+        // Click the rebuild button
+        await user.click(rebuildButton);
+        
+        // Verify the API was called
+        await waitFor(() => {
+            expect(api.rebuildProjectIndex).toHaveBeenCalledWith(TEST_PROJECT_ID);
+        });
+        
+        // Check for error message
+        await waitFor(() => {
+            const errorElement = screen.queryByText(/failed|error|unable/i);
+            expect(errorElement).toBeInTheDocument();
+        });
+    });
 
 
 });
