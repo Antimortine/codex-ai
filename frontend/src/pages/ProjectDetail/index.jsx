@@ -102,9 +102,10 @@ function ProjectDetailPage() {
                 onDeleteScene={sceneOps.handleDeleteScene} onCreateScene={sceneOps.handleCreateSceneManually}
                  sceneErrors={sceneOps.sceneErrors}
                  // AI Scene Generation (within Chapter)
-                onGenerateScene={sceneOps.handleGenerateSceneDraft} generationSummaryForInput={sceneOps.generationSummaries}
+                onGenerateScene={(chapterId, summary, sources) => sceneOps.handleGenerateSceneDraft(chapterId, summary, sources)} generationSummaryForInput={sceneOps.generationSummaries}
                 onSummaryChange={sceneOps.handleSummaryChange} isGeneratingSceneForThisChapter={sceneOps.isGeneratingScene}
                 generatingChapterId={sceneOps.generatingChapterId}
+                directSourcesForInput={sceneOps.directSources} onDirectSourcesChange={sceneOps.handleDirectSourcesChange}
                  // AI Chapter Splitting (Triggered from Chapter)
                 splitInputContentForThisChapter={chapterOps.splitInputContent}
                 onSplitInputChange={chapterOps.handleSplitInputChange} // *** ENSURE THIS IS PASSED ***
@@ -134,8 +135,9 @@ function ProjectDetailPage() {
                 <GeneratedSceneModal
                     sceneTitle={sceneOps.generatedSceneTitle} sceneContent={sceneOps.generatedSceneContent}
                     onTitleChange={sceneOps.setGeneratedSceneTitle} onContentChange={sceneOps.setGeneratedSceneContent}
-                    onSave={sceneOps.handleCreateSceneFromDraft} onClose={sceneOps.handleCloseGenerateModal}
-                    isCreating={sceneOps.isCreatingSceneFromDraft} error={sceneOps.createSceneError} />
+                    onSave={sceneOps.handleCreateSceneFromDraft} onClose={sceneOps.handleCloseGeneratedSceneModal}
+                    isCreating={sceneOps.isCreatingSceneFromDraft} error={sceneOps.createSceneError}
+                    sources={sceneOps.generatedSceneSources} />
             )}
             {chapterOps.showSplitModal && (
                 <SplitChapterModal

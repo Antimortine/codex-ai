@@ -80,9 +80,22 @@ class RagEngine:
                              explicit_chapter_plan: Optional[str], # Added
                              explicit_chapter_synopsis: Optional[str], # Added
                              explicit_previous_scenes: List[Tuple[int, str]],
+                             direct_sources_data: Optional[List[Dict]] = None, # Added for direct sources
                              paths_to_filter: Optional[Set[str]] = None
                              ) -> Dict[str, str]:
         logger.debug(f"RagEngine Facade: Delegating generate_scene for project '{project_id}', chapter '{chapter_id}' to SceneGenerator.")
+        
+        # Log direct sources if present
+        if direct_sources_data:
+            logger.info(f"RagEngine: Passing {len(direct_sources_data)} direct source items to SceneGenerator")
+            for i, item in enumerate(direct_sources_data):
+                logger.info(f"RagEngine: Scene Gen Direct source {i+1}: Type={item.get('type')}, Name={item.get('name')}, Content length={len(item.get('content', ''))}")
+        else:
+            logger.info("RagEngine: No direct_sources_data to pass to SceneGenerator")
+            
+        # Convert None to empty list to avoid potential issues
+        safe_direct_sources = direct_sources_data if direct_sources_data is not None else []
+        
         return await self.scene_generator.generate_scene(
             project_id=project_id, chapter_id=chapter_id, prompt_summary=prompt_summary,
             previous_scene_order=previous_scene_order,
@@ -91,6 +104,7 @@ class RagEngine:
             explicit_chapter_plan=explicit_chapter_plan, # Pass through
             explicit_chapter_synopsis=explicit_chapter_synopsis, # Pass through
             explicit_previous_scenes=explicit_previous_scenes,
+            direct_sources_data=safe_direct_sources, # Pass direct sources
             paths_to_filter=paths_to_filter
         )
     # --- END MODIFIED ---

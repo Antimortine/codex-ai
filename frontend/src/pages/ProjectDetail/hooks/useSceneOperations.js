@@ -79,12 +79,16 @@ export function useSceneOperations(projectId, chapters) {
     const [scenes, setScenes] = useState({});
     const [isLoadingScenes, setIsLoadingScenes] = useState({});
     const [sceneErrors, setSceneErrors] = useState({});
-
     const [generationSummaries, setGenerationSummaries] = useState({});
+    const [directSources, setDirectSources] = useState({});
     const [generatedSceneTitle, setGeneratedSceneTitle] = useState('');
     const [generatedSceneContent, setGeneratedSceneContent] = useState('');
     const [showGeneratedSceneModal, setShowGeneratedSceneModal] = useState(false);
     const [chapterIdForGeneratedScene, setChapterIdForGeneratedScene] = useState(null);
+    const [generatedSceneSources, setGeneratedSceneSources] = useState({
+        source_nodes: [],
+        direct_sources: []
+    });
     const [isCreatingSceneFromDraft, setIsCreatingSceneFromDraft] = useState(false);
     const [createSceneError, setCreateSceneError] = useState(null);
     const [isGeneratingScene, setIsGeneratingScene] = useState(false);
@@ -122,7 +126,28 @@ export function useSceneOperations(projectId, chapters) {
         return () => { abortController.abort(); };
     }, [projectId, chapters]);
 
-    const handleSummaryChange = useCallback((chapterId, value) => { setGenerationSummaries(prev => ({ ...prev, [chapterId]: value })); }, []);
+    const handleSummaryChange = useCallback((chapterId, summary) => {
+        setGenerationSummaries(prev => ({
+            ...prev,
+            [chapterId]: summary
+        }));
+    }, []);
+
+    const handleDirectSourcesChange = useCallback((chapterId, sources) => {
+        console.log('useSceneOperations: handleDirectSourcesChange called with:', chapterId, sources);
+        // Always ensure we're working with a valid array of sources
+        const validSources = Array.isArray(sources) ? sources : [];
+        
+        // Update the directSources state with the new selection
+        setDirectSources(prev => {
+            const updated = {
+                ...prev,
+                [chapterId]: validSources
+            };
+            console.log('useSceneOperations: Updated directSources state:', updated);
+            return updated;
+        });
+    }, []);
 
     const handleDeleteScene = useCallback(async (chapterId, sceneId, sceneTitle) => {
         const confirmMessage = `Are you sure you want to delete the scene "${sceneTitle || 'this scene'}"? This action cannot be undone.`;
@@ -156,13 +181,39 @@ export function useSceneOperations(projectId, chapters) {
          navigate(`/projects/${projectId}/chapters/${chapterId}/scenes/new?order=${nextOrder}`);
     }, [navigate, projectId, scenes]);
 
-    const handleGenerateSceneDraft = useCallback(async (chapterId) => {
+    const handleGenerateSceneDraft = useCallback(async (chapterId, summaryText, explicitSources) => {
         let isComponentMounted = isMounted.current;
-        const summary = generationSummaries[chapterId] || '';
+        const summary = summaryText || generationSummaries[chapterId] || '';
+        
+        // Get direct sources for this specific chapter - this is critical
+        // Log the full directSources object for debugging
+        console.log('useSceneOperations: Full directSources object:', directSources);
+        console.log('useSceneOperations: explicitSources:', explicitSources);
+        console.log('useSceneOperations: chapterId:', chapterId);
+        
+        // IMPORTANT FIX: Make sure we properly retrieve direct sources
+        let sources = [];
+        
+        // First priority: use explicit sources passed from the calling component
+        if (Array.isArray(explicitSources) && explicitSources.length > 0) {
+            sources = explicitSources;
+            console.log('useSceneOperations: Using explicitSources:', sources);
+        } 
+        // Second priority: check our state object using chapter ID as the key
+        else if (directSources && typeof directSources === 'object' && 
+                 directSources[chapterId] && Array.isArray(directSources[chapterId])) {
+            sources = directSources[chapterId];
+            console.log('useSceneOperations: Using directSources[chapterId]:', sources);
+        }
+        
+        // Log final sources decision
+        console.log('useSceneOperations: FINAL DECISION - using sources:', sources);
+        
         const errorKey = `gen_${chapterId}`;
 
         if (isComponentMounted) {
             console.log('useSceneOperations: handleGenerateSceneDraft called with chapterId:', chapterId, 'and summary:', summary);
+            console.log('useSceneOperations: direct sources:', sources);
             setGeneratingChapterId(chapterId); setIsGeneratingScene(true);
             setSceneErrors(prev => { const n = { ...prev }; delete n[errorKey]; return n; });
         }
@@ -170,6 +221,48 @@ export function useSceneOperations(projectId, chapters) {
         try {
              // Use prompt_summary instead of summary to match the backend model
              const requestData = { prompt_summary: summary };
+             
+             // CRITICAL FIX: Preserve the direct sources in a reference copy
+             // This ensures we have a valid copy for the API response handler
+             const originalSources = [...sources];
+             console.log('useSceneOperations: Processing direct sources for API call:', sources);
+             
+             // URGENT FIX: Set the source names in a special variable we'll check at the end
+             // This guarantees we always have the raw names for display in the modal
+             window.__LATEST_SELECTED_SOURCES = originalSources;
+             
+             // Add direct sources to the request payload
+             if (sources && sources.length > 0) {
+                 // CRITICAL FIX: The backend expects direct_sources to be an array of strings, not objects
+                 // We only use objects with type and name for display in the modal
+                 requestData.direct_sources = sources;
+                 console.log('useSceneOperations: Using direct sources as strings for API request:', requestData.direct_sources);
+             } else {
+                 // Always include direct_sources in the request, even if empty
+                 requestData.direct_sources = [];
+             }
+
+             // Also save the sources directly in state so we have them for later
+             // This is our fallback for displaying in the modal
+             if (originalSources.length > 0) {
+                 console.log('useSceneOperations: Saving non-empty originalSources to state:', originalSources);
+                 // Format sources as objects with type and name properties for display
+                 const formattedSources = originalSources.map(source => ({ 
+                     type: "DirectSource", 
+                     name: source 
+                 }));
+                 
+                 // Save them to state immediately
+                 setGeneratedSceneSources(prev => ({
+                     ...prev,
+                     direct_sources: formattedSources
+                 }));
+                 
+                 console.log('useSceneOperations: Saved direct_sources for modal display:', formattedSources);
+             } else {
+                 console.log('useSceneOperations: No direct sources to save');
+             }
+             
              const previousScenes = scenes[chapterId]
                  ?.slice(-RAG_GENERATION_PREVIOUS_SCENE_COUNT)
                  .sort((a, b) => (Number(a.order) || 0) - (Number(b.order) || 0))
@@ -192,8 +285,62 @@ export function useSceneOperations(projectId, chapters) {
 
             if (isComponentMounted && isMounted.current) {
                 //  console.log('useSceneOperations: Processing successful API response');
-                setGeneratedSceneTitle(response.data.title || 'Generated Scene'); setGeneratedSceneContent(response.data.content || '');
-                setChapterIdForGeneratedScene(chapterId); setShowGeneratedSceneModal(true);
+                setGeneratedSceneTitle(response.data.title || 'Generated Scene'); 
+                setGeneratedSceneContent(response.data.content || '');
+                
+                // Store source information from API response
+                console.log('useSceneOperations: API response sources:', {
+                    source_nodes: response.data.source_nodes || [],
+                    direct_sources: response.data.direct_sources || []
+                });
+                
+                // *** CRITICAL FIX: Force use of our own formatted direct sources for display ***
+                // These are the sources we saved earlier with proper type+name format
+                // This ensures they will actually appear in the modal
+                
+                // EMERGENCY FIX: Retrieve the sources we saved in a global variable
+                const lastSelectedSources = window.__LATEST_SELECTED_SOURCES || [];
+                console.log('useSceneOperations: Retrieved sources from global variable:', lastSelectedSources);
+                
+                // Format them for display
+                const currentFormattedSources = lastSelectedSources.length > 0 ?
+                    lastSelectedSources.map(s => ({ type: "DirectSource", name: s })) : [];
+                
+                console.log('useSceneOperations: Formatted current sources:', currentFormattedSources);
+                console.log('useSceneOperations: API returned sources:', response.data.direct_sources || []);
+                
+                // Now update the state with BOTH the API response sources AND our own
+                setGeneratedSceneSources(prev => {
+                    // Decide which direct sources to use - prioritize non-empty collections
+                    let directSources = [];
+                    
+                    // Option 1: Use API response sources if available
+                    if (response.data.direct_sources && response.data.direct_sources.length > 0) {
+                        directSources = response.data.direct_sources;
+                        console.log('useSceneOperations: Using API returned direct_sources');
+                    }
+                    // Option 2: Use our own saved sources from earlier in this function
+                    else if (currentFormattedSources.length > 0) {
+                        directSources = currentFormattedSources;
+                        console.log('useSceneOperations: Using our own formatted sources');
+                    }
+                    // Option 3: Use previously saved sources in state as last resort
+                    else if (prev.direct_sources && prev.direct_sources.length > 0) {
+                        directSources = prev.direct_sources;
+                        console.log('useSceneOperations: Using previous state direct_sources');
+                    }
+                    
+                    console.log('useSceneOperations: FINAL direct_sources for modal:', directSources);
+                    
+                    return {
+                        ...prev,
+                        source_nodes: response.data.source_nodes || [],
+                        direct_sources: directSources
+                    };
+                });
+                
+                setChapterIdForGeneratedScene(chapterId); 
+                setShowGeneratedSceneModal(true);
             }
         } catch (err) {
             console.error('useSceneOperations: Error generating scene draft:', err);
@@ -217,6 +364,7 @@ export function useSceneOperations(projectId, chapters) {
              if (isComponentMounted && isMounted.current) {
                 setScenes(prev => ({ ...prev, [chapterIdForGeneratedScene]: [ ...(prev[chapterIdForGeneratedScene] || []), response.data ].sort((a, b) => (Number(a.order) || 0) - (Number(b.order) || 0)) }));
                 setShowGeneratedSceneModal(false); setGeneratedSceneTitle(''); setGeneratedSceneContent('');
+                setGeneratedSceneSources({ source_nodes: [], direct_sources: [] });
                 setChapterIdForGeneratedScene(null); setGeneratingChapterId(null);
                  setGenerationSummaries(prev => ({ ...prev, [chapterIdForGeneratedScene]: '' }));
              }
@@ -267,17 +415,20 @@ export function useSceneOperations(projectId, chapters) {
         }
     }, [projectId, isMounted]);
 
-    const handleCloseGenerateModal = useCallback(() => {
-        setShowGeneratedSceneModal(false); setGeneratedSceneTitle(''); setGeneratedSceneContent('');
+    const handleCloseGeneratedSceneModal = useCallback(() => {
+        setShowGeneratedSceneModal(false); 
+        setGeneratedSceneTitle(''); 
+        setGeneratedSceneContent('');
+        setGeneratedSceneSources({ source_nodes: [], direct_sources: [] });
         setChapterIdForGeneratedScene(null); setGeneratingChapterId(null); setCreateSceneError(null);
     }, []);
 
     return {
         scenes, isLoadingScenes, sceneErrors, generationSummaries, generatedSceneTitle,
         generatedSceneContent, showGeneratedSceneModal, chapterIdForGeneratedScene,
-        isCreatingSceneFromDraft, createSceneError, isGeneratingScene, generatingChapterId,
+        generatedSceneSources, isCreatingSceneFromDraft, createSceneError, isGeneratingScene, generatingChapterId,
         setGeneratedSceneTitle, setGeneratedSceneContent, handleDeleteScene, handleGenerateSceneDraft,
-        handleCreateSceneFromDraft, handleCreateScenesFromSplits, handleCloseGenerateModal,
-        handleSummaryChange, handleCreateSceneManually,
+        handleCreateSceneFromDraft, handleCreateScenesFromSplits, handleCloseGeneratedSceneModal,
+        handleSummaryChange, handleDirectSourcesChange, handleCreateSceneManually,
     };
 }

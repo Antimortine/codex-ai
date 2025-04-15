@@ -340,7 +340,8 @@ describe('ChapterSection Component', () => {
             renderChapterSection({ onGenerateScene: onGenerateSceneMock, generationSummaryForInput: summary });
             await user.click(screen.getByRole('button', { name: /\+ add scene using ai/i }));
             expect(onGenerateSceneMock).toHaveBeenCalledTimes(1);
-            expect(onGenerateSceneMock).toHaveBeenCalledWith(mockChapter.id, summary);
+            // We need to expect an empty array for the third parameter since our component converts undefined to []
+            expect(onGenerateSceneMock).toHaveBeenCalledWith(mockChapter.id, summary, []);
         });
 
         // --- Split Chapter Interactions ---

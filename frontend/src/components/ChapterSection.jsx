@@ -14,9 +14,10 @@
  * limitations under the License.
  */
 
-import React, { memo } from 'react';
+import React, { memo, useState } from 'react';
 import PropTypes from 'prop-types';
 import { Link } from 'react-router-dom';
+import EntitySelector from './EntitySelector';
 
 // Basic styling (remains the same)
 const styles = {
@@ -197,38 +198,26 @@ const styles = {
 };
 
 const ChapterSection = memo(function ChapterSection({
-    chapter,
-    scenesForChapter,
-    isLoadingChapterScenes,
-    isEditingThisChapter,
-    editedChapterTitleForInput,
-    isSavingThisChapter,
-    saveChapterError,
-    isGeneratingSceneForThisChapter,
-    generationErrorForThisChapter,
-    generationSummaryForInput,
-    isAnyOperationLoading,
-    projectId,
-    onEditChapter,
-    onSaveChapter,
-    onCancelEditChapter,
-    onDeleteChapter,
-    onCreateScene,
-    onDeleteScene,
-    onGenerateScene,
-    onSummaryChange,
-    onTitleInputChange,
-    splitInputContentForThisChapter,
-    isSplittingThisChapter,
-    splitErrorForThisChapter,
-    onSplitInputChange,
-    onSplitChapter,
-    // --- ADDED: Compile Props ---
-    isCompilingThisChapter,
-    compileErrorForThisChapter,
-    onCompileChapter,
-    // --- END ADDED ---
+    // Basic chapter props
+    chapter, projectId, scenesForChapter, isLoadingChapterScenes,
+    // Edit mode props
+    isEditingThisChapter, editedChapterTitleForInput, onTitleInputChange, isSavingThisChapter,
+    saveChapterError, onEditChapter, onSaveChapter, onCancelEditChapter, onDeleteChapter,
+    // Scene management props
+    onCreateScene, onDeleteScene, 
+    // Scene generation props
+    isGeneratingSceneForThisChapter, generationErrorForThisChapter, generationSummaryForInput,
+    onGenerateScene, onSummaryChange, directSourcesForInput, onDirectSourcesChange,
+    // Split props
+    splitInputContentForThisChapter, isSplittingThisChapter, splitErrorForThisChapter,
+    onSplitInputChange, onSplitChapter,
+    // Compile props
+    isCompilingThisChapter, compileErrorForThisChapter, onCompileChapter,
+    // Global state
+    isAnyOperationLoading
 }) {
+    // Add local state to track entity selections for this specific chapter
+    const [localEntitySelections, setLocalEntitySelections] = useState([]);
 
     const chapterHasScenes = scenesForChapter && scenesForChapter.length > 0;
     const disableChapterActions = isAnyOperationLoading || isLoadingChapterScenes;
@@ -399,8 +388,34 @@ const ChapterSection = memo(function ChapterSection({
                         style={styles.summaryInput}
                         rows={3}
                     />
+                    
+                    {/* Direct Sources Selection */}
+                    <EntitySelector 
+                        projectId={projectId}
+                        chapterId={chapter.id}
+                        onChange={(selectedSources) => {
+                            console.log('ChapterSection: EntitySelector onChange with sources:', selectedSources);
+                            // Update both our local state and parent state
+                            setLocalEntitySelections(selectedSources || []);
+                            // Ensure we always pass a valid array to the parent component
+                            onDirectSourcesChange?.(chapter.id, selectedSources || []);
+                        }}
+                        selectedEntities={localEntitySelections}
+                        disabled={disableSummaryInput}
+                    />
                     <button
-                        onClick={() => onGenerateScene(chapter.id, generationSummaryForInput)}
+                        onClick={() => {
+                            // Log all possible sources for debugging
+                            console.log('ChapterSection: Full directSourcesForInput object:', directSourcesForInput);
+                            console.log('ChapterSection: Local entity selections:', localEntitySelections);
+                            console.log('ChapterSection: Current chapter.id:', chapter.id);
+                            
+                            // CRITICAL FIX: Use our local state which is guaranteed to have the current selections
+                            const sources = localEntitySelections || [];
+                            
+                            console.log('ChapterSection: Generating scene with direct sources:', sources);
+                            onGenerateScene(chapter.id, generationSummaryForInput, sources);
+                        }}
                         disabled={disableGenerateButton} // Correct flag used here
                         title={disableGenerateButton ? "Operation in progress..." : "Generate the next scene using AI"}
                     >
@@ -421,6 +436,8 @@ ChapterSection.propTypes = {
         title: PropTypes.string.isRequired,
         order: PropTypes.number.isRequired,
     }).isRequired,
+    directSourcesForInput: PropTypes.arrayOf(PropTypes.string),
+    onDirectSourcesChange: PropTypes.func,
     scenesForChapter: PropTypes.arrayOf(PropTypes.shape({
         id: PropTypes.string.isRequired,
         title: PropTypes.string.isRequired,

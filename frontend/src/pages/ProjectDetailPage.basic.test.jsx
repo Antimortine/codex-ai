@@ -35,6 +35,7 @@ vi.mock('../api/codexApi', async () => {
     createCharacter: vi.fn(),
     rebuildProjectIndex: vi.fn(),
     compileChapterContent: vi.fn(),
+    getNoteTree: vi.fn().mockResolvedValue({ data: { tree: [] } }),
   };
 });
 

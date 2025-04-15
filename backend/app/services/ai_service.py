@@ -561,6 +561,67 @@ class AIService:
     async def generate_scene_draft(self, project_id: str, chapter_id: str, request_data: AISceneGenerationRequest) -> Dict[str, str]:
         logger.info(f"AIService: Processing scene generation request for project {project_id}, chapter {chapter_id}, previous order: {request_data.previous_scene_order}")
         if self.rag_engine is None: raise HTTPException(status_code=503, detail="AI Engine not ready.")
+        
+        # Extract direct sources if provided
+        direct_sources_data = []  # List to hold direct entity content
+        if request_data.direct_sources and len(request_data.direct_sources) > 0:
+            logger.info(f"AIService (Gen): Processing {len(request_data.direct_sources)} direct source references")
+            
+            # Compile entity list similar to query method
+            entity_list = []
+            try:
+                # Add standard entity types
+                entity_list = self._compile_entity_list(project_id)
+                logger.debug(f"AIService (Gen): Compiled entity list with {len(entity_list)} items.")
+            except Exception as e:
+                logger.error(f"AIService (Gen): Error compiling entity list: {e}", exc_info=True)
+                # Continue with empty entity list rather than failing
+            
+            # Process each direct source reference
+            for direct_source_name in request_data.direct_sources:
+                source_found = False
+                for entity in entity_list:
+                    entity_name = entity.get('name')
+                    entity_title = entity.get('metadata_title')
+                    
+                    # Check if this entity matches the direct source name
+                    if (entity_name == direct_source_name or 
+                        entity_title == direct_source_name):
+                        try:
+                            source_found = True
+                            file_path_to_load = entity.get('file_path')
+                            if not file_path_to_load or not isinstance(file_path_to_load, Path):
+                                logger.error(f"AIService (Gen): Invalid or missing file_path for entity '{entity_name}'")
+                                continue
+                                
+                            # Read the entity content based on type
+                            content = ""
+                            if entity['type'] == 'World':
+                                content = self.file_service.read_content_block_file(project_id, file_path_to_load.name)
+                            elif entity['type'] in ['Character', 'Scene', 'Note']:
+                                content = self.file_service.read_text_file(file_path_to_load)
+                            else:
+                                logger.warning(f"AIService (Gen): Unknown entity type '{entity['type']}' for direct source")
+                                continue
+                                
+                            # Add to direct sources data
+                            display_name = entity.get('metadata_title') if entity.get('metadata_title') else entity['name']
+                            source_item = {
+                                'type': entity['type'], 
+                                'name': display_name, 
+                                'content': content, 
+                                'file_path': str(file_path_to_load)
+                            }
+                            direct_sources_data.append(source_item)
+                            logger.info(f"AIService (Gen): Added direct source: {entity['type']} '{display_name}' with path {file_path_to_load}")
+                            break
+                        except Exception as e:
+                            logger.error(f"AIService (Gen): Error processing direct source '{direct_source_name}': {e}", exc_info=True)
+                
+                if not source_found:
+                    logger.warning(f"AIService (Gen): Direct source '{direct_source_name}' not found in entity list")
+            
+            logger.info(f"AIService (Gen): Processed {len(direct_sources_data)} direct sources for scene generation")
 
         # --- REFACTORED: Use helper for project AND chapter context ---
         loaded_context = self._load_context(project_id, chapter_id)
@@ -604,6 +665,7 @@ class AIService:
                 explicit_chapter_plan=explicit_chapter_plan,
                 explicit_chapter_synopsis=explicit_chapter_synopsis,
                 explicit_previous_scenes=explicit_previous_scenes,
+                direct_sources_data=direct_sources_data,  # Pass direct sources data
                 paths_to_filter=paths_to_filter
             )
             if not isinstance(generated_draft_dict, dict) or "title" not in generated_draft_dict or "content" not in generated_draft_dict: raise HTTPException(status_code=status.HTTP_500_INTERNAL_SERVER_ERROR, detail=f"AI scene generation returned an unexpected format: {generated_draft_dict}")

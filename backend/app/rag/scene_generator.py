@@ -82,6 +82,7 @@ class SceneGenerator:
         explicit_chapter_plan: Optional[str],
         explicit_chapter_synopsis: Optional[str],
         explicit_previous_scenes: List[Tuple[int, str]],
+        direct_sources_data: Optional[List[Dict]] = None,  # New parameter for direct sources
         paths_to_filter: Optional[Set[str]] = None
         ) -> Dict[str, str]:
         """
@@ -240,8 +241,80 @@ class SceneGenerator:
             if explicit_chapter_synopsis:
                 user_message_content += f"**Chapter Synopsis (for Chapter '{chapter_title}'):**\n```markdown\n{explicit_chapter_synopsis}\n```\n\n"
 
+            # Track which scenes are already included via the previous_scenes section
+            # This will help us avoid duplication between previous scenes and direct sources
+            included_scene_names = set()
+            if explicit_previous_scenes:
+                for order, _ in explicit_previous_scenes:
+                    try:
+                        prev_chapter_meta = file_service.read_chapter_metadata(project_id, chapter_id)
+                        scene_id = next((sid for sid, data in prev_chapter_meta.get('scenes', {}).items() if data.get('order') == order), None)
+                        if scene_id and prev_chapter_meta['scenes'].get(scene_id):
+                            scene_title = prev_chapter_meta['scenes'][scene_id].get('title', f"Scene Order {order}")
+                            included_scene_names.add(scene_title)
+                            # Also add "Scene: {title}" format which might be used in direct sources
+                            included_scene_names.add(f"Scene: {scene_title}")
+                    except Exception as e:
+                        logger.warning(f"Error checking previous scene names: {e}")
+            
+            logger.debug(f"SceneGenerator: Already included scene names: {included_scene_names}")
+            
+            # Process direct sources if they exist, avoiding duplication with previous scenes
+            direct_sources_context = ""
+            if direct_sources_data and len(direct_sources_data) > 0:
+                original_count = len(direct_sources_data)
+                logger.info(f"SceneGenerator: Processing {original_count} direct sources")
+                
+                # Filter out direct sources that are already included in previous scenes
+                filtered_sources = []
+                for source in direct_sources_data:
+                    source_type = source.get('type', 'Unknown')
+                    source_name = source.get('name', 'Unnamed Source')
+                    
+                    # Check if this is a scene that's already included
+                    if source_type.lower() == 'scene' and source_name in included_scene_names:
+                        logger.info(f"SceneGenerator: Skipping duplicate scene in direct sources: {source_name}")
+                        continue
+                    
+                    # Also check the raw source string (for formats like "Scene: Title")
+                    if isinstance(source, str) and source in included_scene_names:
+                        logger.info(f"SceneGenerator: Skipping duplicate scene reference: {source}")
+                        continue
+                        
+                    filtered_sources.append(source)
+                
+                if len(filtered_sources) < original_count:
+                    logger.info(f"SceneGenerator: Filtered out {original_count - len(filtered_sources)} duplicate sources")
+                
+                # Process the filtered sources
+                direct_sources_list = []
+                for source in filtered_sources:
+                    # Handle both object and string formats
+                    if isinstance(source, dict):
+                        source_type = source.get('type', 'Unknown')
+                        source_name = source.get('name', 'Unnamed Source')
+                        source_content = source.get('content', '')
+                    else:  # string format
+                        source_type = "DirectSource"
+                        source_name = source
+                        source_content = ''
+                    
+                    if source_content:
+                        # Truncate if necessary
+                        max_content_len = settings.MAX_CONTEXT_LENGTH
+                        truncated_source = source_content[:max_content_len] + ('...' if len(source_content) > max_content_len else '')
+                        direct_sources_list.append(f"**Directly Referenced {source_type}: {source_name}**\n```markdown\n{truncated_source}\n```\n\n")
+                    else:
+                        # Just include the reference without content
+                        direct_sources_list.append(f"**Directly Referenced {source_type}: {source_name}**\n\n")
+                
+                if direct_sources_list:
+                    direct_sources_context = "\n".join(direct_sources_list)
+                    logger.info(f"SceneGenerator: Added {len(direct_sources_list)} direct sources to the generation context")
+            
             user_message_content += (
                 f"{previous_scenes_prompt_part}"
+                f"**Direct References:**\n{direct_sources_context if direct_sources_context else 'None provided.'}\n\n"
                 f"**Additional Retrieved Context:**\n```markdown\n{rag_context_str}\n```\n\n"
                 f"**New Scene Details:**\n"
                 f"- Belongs to: Chapter '{chapter_title}' (ID: {chapter_id})\n"
@@ -268,8 +341,35 @@ class SceneGenerator:
                 if parsed_content: title = parsed_title; content = parsed_content; logger.info(f"Successfully parsed title and content via regex: '{title}'")
                 else: logger.warning(f"LLM response had H2 heading '## {parsed_title}' but no substantial content followed."); title = "Untitled Scene"; content = generated_text
             else: logger.warning(f"LLM response did not contain an H2 heading '## Title'. Using default title.")
-            generated_draft = {"title": title, "content": content}
-            logger.info(f"Scene generation processed. Title: '{generated_draft['title']}'")
+            
+            # Convert NodeWithScore objects to serializable format for the response
+            serialized_nodes = []
+            for node in nodes_for_prompt:
+                serialized_nodes.append({
+                    "id": node.node_id,
+                    "text": node.text,
+                    "score": node.score,
+                    "metadata": node.metadata
+                })
+            
+            # Format direct sources for the response
+            formatted_direct_sources = []
+            if direct_sources_data:
+                for source in direct_sources_data:
+                    formatted_direct_sources.append({
+                        "type": source.get("type", "Unknown"),
+                        "name": source.get("name", "Unknown")
+                    })
+            
+            # Include sources in the response
+            generated_draft = {
+                "title": title, 
+                "content": content,
+                "source_nodes": serialized_nodes,
+                "direct_sources": formatted_direct_sources
+            }
+            
+            logger.info(f"Scene generation processed. Title: '{generated_draft['title']}', with {len(serialized_nodes)} source nodes and {len(formatted_direct_sources)} direct sources")
             return generated_draft
 
         # Exception handling (Unchanged)

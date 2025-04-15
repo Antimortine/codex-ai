@@ -38,12 +38,18 @@ from llama_index.core.indices.vector_store import VectorStoreIndex
 async def test_generate_scene_draft_success_with_previous(mock_file_service: MagicMock, mock_rag_engine: MagicMock, monkeypatch): # Args match patch order
     """Test successful scene generation with plan, synopsis, and previous scene."""
     project_id = "gen-proj-1"; chapter_id = "ch-1"
-    request_data = AISceneGenerationRequest(prompt_summary="Character enters the room.", previous_scene_order=2)
+    request_data = AISceneGenerationRequest(prompt_summary="Character enters the room.", previous_scene_order=2, direct_sources=None)
     mock_plan = "Project plan content."; mock_synopsis = "Project synopsis content."
     mock_chapter_plan = "Chapter plan content."; mock_chapter_synopsis = None # Simulate missing
     mock_prev_scene_id = "scene-id-2"; mock_prev_scene_content = "## Previous Scene\nContent of the scene before."
     mock_generated_title = "New Scene"; mock_generated_content = "The character walked into the dimly lit room."
-    mock_generated_dict = {"title": mock_generated_title, "content": mock_generated_content}
+    # Updated mock with source_nodes and direct_sources fields
+    mock_generated_dict = {
+        "title": mock_generated_title, 
+        "content": mock_generated_content,
+        "source_nodes": [],
+        "direct_sources": []
+    }
     mock_chapter_metadata = { "scenes": { "scene-id-1": {"title": "Scene 1", "order": 1}, mock_prev_scene_id: {"title": "Scene 2", "order": 2}, "scene-id-3": {"title": "Scene 3", "order": 3} } }
     mock_scene_path_2 = Path(f"user_projects/{project_id}/chapters/{chapter_id}/{mock_prev_scene_id}.md").resolve()
     mock_plan_path = Path(f"user_projects/{project_id}/plan.md").resolve()
@@ -102,6 +108,7 @@ async def test_generate_scene_draft_success_with_previous(mock_file_service: Mag
             explicit_chapter_plan=mock_chapter_plan,
             explicit_chapter_synopsis=None, # Was None in mock_loaded_context
             explicit_previous_scenes=[(2, mock_prev_scene_content)],
+            direct_sources_data=[],  # New parameter should be empty list
             paths_to_filter=expected_filter_set
         )
 
@@ -112,10 +119,16 @@ async def test_generate_scene_draft_success_with_previous(mock_file_service: Mag
 async def test_generate_scene_draft_success_first_scene(mock_file_service: MagicMock, mock_rag_engine: MagicMock):
     """Test successful scene generation for the first scene (no previous)."""
     project_id = "gen-proj-2"; chapter_id = "ch-1"
-    request_data = AISceneGenerationRequest(prompt_summary="The story begins.", previous_scene_order=0)
+    request_data = AISceneGenerationRequest(prompt_summary="The story begins.", previous_scene_order=0, direct_sources=None)
     mock_plan = "Plan for first scene."; mock_synopsis = "Synopsis for first scene."
-    mock_generated_title = "Chapter 1, Scene 1"; mock_generated_content = "It was a dark and stormy night."
-    mock_generated_dict = {"title": mock_generated_title, "content": mock_generated_content}
+    mock_generated_title = "Generated Scene"; mock_generated_content = "The unfiltered content with mention of entities."
+    # Updated mock with source_nodes and direct_sources fields
+    mock_generated_dict = {
+        "title": mock_generated_title, 
+        "content": mock_generated_content,
+        "source_nodes": [],
+        "direct_sources": []
+    }
     mock_plan_path = Path(f"user_projects/{project_id}/plan.md").resolve()
     mock_synopsis_path = Path(f"user_projects/{project_id}/synopsis.md").resolve()
 
@@ -153,6 +166,7 @@ async def test_generate_scene_draft_success_first_scene(mock_file_service: Magic
             explicit_chapter_plan=None, # Was None in mock_loaded_context
             explicit_chapter_synopsis=None, # Was None in mock_loaded_context
             explicit_previous_scenes=[],
+            direct_sources_data=[],  # New parameter should be empty list
             paths_to_filter=mock_loaded_context['filter_paths']
         )
 
@@ -162,9 +176,15 @@ async def test_generate_scene_draft_success_first_scene(mock_file_service: Magic
 async def test_generate_scene_draft_context_not_found(mock_file_service: MagicMock, mock_rag_engine: MagicMock):
     """Test scene generation when context files are missing (404)."""
     project_id = "gen-proj-3"; chapter_id = "ch-2"
-    request_data = AISceneGenerationRequest(prompt_summary="Something happens.", previous_scene_order=1)
+    request_data = AISceneGenerationRequest(prompt_summary=None, previous_scene_order=1, direct_sources=None)
     mock_generated_title = "Scene 2"; mock_generated_content = "Despite missing context, something happened."
-    mock_generated_dict = {"title": mock_generated_title, "content": mock_generated_content}
+    # Updated mock with source_nodes and direct_sources fields
+    mock_generated_dict = {
+        "title": mock_generated_title, 
+        "content": mock_generated_content,
+        "source_nodes": [],
+        "direct_sources": []
+    }
 
     # Mock _load_context return value (all None, empty filter set)
     mock_loaded_context: LoadedContext = {
@@ -201,6 +221,7 @@ async def test_generate_scene_draft_context_not_found(mock_file_service: MagicMo
             explicit_chapter_plan=None, # Was None in mock_loaded_context
             explicit_chapter_synopsis=None, # Was None in mock_loaded_context
             explicit_previous_scenes=[],
+            direct_sources_data=[],  # New parameter should be empty list
             paths_to_filter=set() # Empty set
         )
 
@@ -211,7 +232,7 @@ async def test_generate_scene_draft_context_not_found(mock_file_service: MagicMo
 async def test_generate_scene_draft_rag_engine_error(mock_file_service: MagicMock, mock_rag_engine: MagicMock):
     """Test scene generation when the rag_engine itself raises an error."""
     project_id = "gen-proj-5"; chapter_id = "ch-4"
-    request_data = AISceneGenerationRequest(prompt_summary="Engine failure test.", previous_scene_order=1)
+    request_data = AISceneGenerationRequest(prompt_summary="Engine failure test.", previous_scene_order=1, direct_sources=None)
     mock_plan = "Plan."; mock_synopsis = "Synopsis."; mock_chapter_metadata = {"scenes": {}}
     mock_plan_path = Path(f"user_projects/{project_id}/plan.md").resolve()
     mock_synopsis_path = Path(f"user_projects/{project_id}/synopsis.md").resolve()
@@ -249,7 +270,7 @@ async def test_generate_scene_draft_rag_engine_error(mock_file_service: MagicMoc
 async def test_generate_scene_draft_rag_engine_returns_error_string(mock_file_service: MagicMock, mock_rag_engine: MagicMock):
     """Test scene generation when rag_engine returns an error string."""
     project_id = "gen-proj-6"; chapter_id = "ch-5"
-    request_data = AISceneGenerationRequest(prompt_summary="Engine error string test.", previous_scene_order=0)
+    request_data = AISceneGenerationRequest(prompt_summary="Engine error string test.", previous_scene_order=0, direct_sources=None)
     mock_plan = "Plan."; mock_synopsis = "Synopsis."
     error_string = "Error: Generation failed due to content policy."
     mock_generated_dict = {"title": "Error Title", "content": error_string}

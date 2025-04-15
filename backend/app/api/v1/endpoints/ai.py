@@ -82,9 +82,17 @@ async def generate_scene(
 ):
     """
     Generate a new scene draft for a chapter using AI, considering context.
+    
+    - **prompt_summary**: Optional text to guide the scene generation
+    - **previous_scene_order**: Optional order number of the previous scene
+    - **direct_sources**: Optional list of entity names (notes, characters, scenes) to explicitly include in the generation process
+    
+    The direct_sources parameter works similar to the query functionality, where specific entities
+    like notes with titles such as "Дух и детализация" can be explicitly included in the generation context.
     """
     try:
-        logger.info(f"Received scene generation request for project {project_id}, chapter {chapter_id}. Summary: '{request_data.prompt_summary}', Prev Scenes: {request_data.previous_scene_order}")
+        direct_sources_info = f", Direct sources: {request_data.direct_sources}" if request_data.direct_sources else ""
+        logger.info(f"Received scene generation request for project {project_id}, chapter {chapter_id}. Summary: '{request_data.prompt_summary}', Prev Scenes: {request_data.previous_scene_order}{direct_sources_info}")
         # Pass the validated request data object to the service
         result = await ai_service.generate_scene_draft(project_id, chapter_id, request_data)
         logger.info(f"Successfully generated scene draft for project {project_id}, chapter {chapter_id}")

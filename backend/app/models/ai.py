@@ -35,6 +35,7 @@ class AIQueryResponse(BaseModel):
 class AISceneGenerationRequest(BaseModel):
     prompt_summary: Optional[str] = Field(None, description="Optional brief summary or prompt to guide the scene generation.")
     previous_scene_order: Optional[int] = Field(None, ge=0, description="The order number of the scene immediately preceding the one to be generated (0 if it's the first scene).")
+    direct_sources: Optional[List[str]] = Field(None, description="Optional list of entity names (notes, characters, scenes) to explicitly include as direct sources in the generation context.")
 
 class SaveGeneratedSceneToolSchema(BaseModel):
     title: str = Field(..., description="The concise title generated for the scene draft.")
@@ -43,6 +44,8 @@ class SaveGeneratedSceneToolSchema(BaseModel):
 class AISceneGenerationResponse(BaseModel):
     title: str = Field(..., description="The AI-generated title for the scene draft.")
     content: str = Field(..., description="The AI-generated Markdown content for the scene draft.")
+    source_nodes: Optional[List[SourceNodeModel]] = Field(None, description="List of source nodes retrieved via vector search.")
+    direct_sources: Optional[List[Dict[str, str]]] = Field(None, description="List of primary sources directly included in the generation context.")
 
 
 # --- Text Editing Models ---

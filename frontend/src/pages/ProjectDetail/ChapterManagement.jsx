@@ -50,7 +50,7 @@ function ChapterManagement({
     onDeleteScene, onCreateScene, sceneErrors,
     // AI Scene Generation
     onGenerateScene, generationSummaryForInput, onSummaryChange, isGeneratingSceneForThisChapter,
-    generatingChapterId,
+    generatingChapterId, directSourcesForInput, onDirectSourcesChange,
     // AI Chapter Splitting
     splitInputContentForThisChapter,
     onSplitInputChange, // Received
@@ -114,8 +114,10 @@ function ChapterManagement({
                                     onCreateScene={onCreateScene} onDeleteScene={onDeleteScene}
                                     isGeneratingSceneForThisChapter={isGeneratingForThis}
                                     generationErrorForThisChapter={generationErrorForThis}
-                                    generationSummaryForInput={generationSummaryValue} onGenerateScene={onGenerateScene}
+                                    generationSummaryForInput={generationSummaryValue} onGenerateScene={(chapterId, summary, sources) => onGenerateScene(chapterId, summary, sources)}
                                     onSummaryChange={onSummaryChange}
+                                    directSourcesForInput={directSourcesForInput && directSourcesForInput[chapter.id] || []}
+                                    onDirectSourcesChange={onDirectSourcesChange}
                                     splitInputContentForThisChapter={splitInputValue}
                                     isSplittingThisChapter={isSplittingThis} splitErrorForThisChapter={splitErrorForThis}
                                     onSplitInputChange={onSplitInputChange} // Pass down
@@ -154,9 +156,13 @@ ChapterManagement.propTypes = {
     // Scene CRUD
     onDeleteScene: PropTypes.func.isRequired, onCreateScene: PropTypes.func.isRequired, sceneErrors: PropTypes.object,
     // AI Scene Generation
-    onGenerateScene: PropTypes.func.isRequired, generationSummaryForInput: PropTypes.object.isRequired,
-    onSummaryChange: PropTypes.func.isRequired, isGeneratingSceneForThisChapter: PropTypes.bool.isRequired,
+    onGenerateScene: PropTypes.func.isRequired,
+    generationSummaryForInput: PropTypes.object.isRequired,
+    onSummaryChange: PropTypes.func.isRequired,
+    isGeneratingSceneForThisChapter: PropTypes.bool.isRequired,
     generatingChapterId: PropTypes.string,
+    directSourcesForInput: PropTypes.object,
+    onDirectSourcesChange: PropTypes.func,
     // AI Chapter Splitting
     splitInputContentForThisChapter: PropTypes.object.isRequired,
     onSplitInputChange: PropTypes.func.isRequired, // *** ADDED PROP TYPE ***

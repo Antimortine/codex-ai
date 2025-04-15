@@ -176,7 +176,13 @@ def test_generate_scene_success():
     gen_data = {"prompt_summary": "A tense meeting", "previous_scene_order": 1}
     mock_generated_title = "The Meeting"
     mock_generated_content = "## The Meeting\nThe characters met under the pale moonlight."
-    mock_service_return = {"title": mock_generated_title, "content": mock_generated_content}
+    # Updated mock response to include source_nodes and direct_sources
+    mock_service_return = {
+        "title": mock_generated_title, 
+        "content": mock_generated_content,
+        "source_nodes": [],
+        "direct_sources": []
+    }
     
     # Create a mock AIService and configure it
     mock_ai_service = AsyncMock(spec=AIService)

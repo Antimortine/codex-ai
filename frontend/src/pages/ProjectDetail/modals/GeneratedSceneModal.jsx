@@ -20,6 +20,46 @@ import Modal from '../../../components/Modal';
 
 // Styles for the modal components
 const styles = {
+    sourcesSection: {
+        marginTop: '15px',
+        marginBottom: '15px',
+        backgroundColor: '#f5f5f5',
+        padding: '10px',
+        borderRadius: '4px',
+        border: '1px solid #e0e0e0',
+    },
+    sourceItem: {
+        marginBottom: '5px',
+        borderLeft: '3px solid #ddd',
+        paddingLeft: '10px',
+    },
+    sourceList: {
+        margin: '10px 0',
+        paddingLeft: '20px',
+    },
+    sourceNodeText: {
+        whiteSpace: 'pre-wrap',
+        wordWrap: 'break-word',
+        maxHeight: '100px',
+        overflowY: 'auto',
+        display: 'block',
+        marginTop: '5px',
+        padding: '5px',
+        backgroundColor: '#e9e9e9',
+        border: '1px solid #ccc',
+        borderRadius: '3px',
+        fontFamily: 'monospace',
+        fontSize: '0.85em',
+    },
+    detailsSummary: {
+        cursor: 'pointer',
+        fontWeight: 'bold',
+        marginBottom: '10px',
+        userSelect: 'none',
+    },
+    detailsContent: {
+        marginLeft: '15px',
+    },
     input: {
         width: '100%',
         padding: '10px',
@@ -82,7 +122,8 @@ function GeneratedSceneModal({
     onSave,
     onClose,
     isCreating,
-    error
+    error,
+    sources = { source_nodes: [], direct_sources: [] }
 }) {
     return (
         <Modal title="Create Scene from Generated Draft" onClose={onClose}>
@@ -113,6 +154,76 @@ function GeneratedSceneModal({
                     style={styles.textarea}
                     data-testid="generated-scene-content-input"
                 />
+                
+                {/* Sources Section - always display the section */}
+                <div style={styles.sourcesSection}>
+                    <h4 style={{ marginTop: 0 }}>Scene Generation Sources</h4>
+                    
+                    {/* Log all source information for debugging */}
+                    {console.log('GeneratedSceneModal - ALL sources:', sources)}
+                    {console.log('GeneratedSceneModal - Direct sources object type:', typeof sources.direct_sources)}
+                    {console.log('GeneratedSceneModal - Is direct_sources array?', Array.isArray(sources.direct_sources))}
+                    
+                    {/* EMERGENCY FIX: Check for direct sources in our global variable */}
+                    {console.log('GeneratedSceneModal - Checking global sources:', window.__LATEST_SELECTED_SOURCES || [])}
+                    
+                    {/* Direct Sources - ALWAYS SHOW THIS SECTION */}
+                    <div>
+                        <p style={{ fontWeight: 'bold', marginBottom: '5px' }}>
+                            Direct Sources Used:
+                        </p>
+                        {(() => {
+                            // EMERGENCY FIX: Try several approaches to find direct sources
+                            // Option 1: Check if we have direct_sources in the sources prop
+                            if (Array.isArray(sources.direct_sources) && sources.direct_sources.length > 0) {
+                                return (
+                                    <ul style={styles.sourceList}>
+                                        {sources.direct_sources.map((source, index) => (
+                                            <li key={index}>
+                                                {typeof source === 'string' 
+                                                    ? source 
+                                                    : `${source.type || 'Item'}: "${source.name || source.title || 'Unknown'}"`}
+                                            </li>
+                                        ))}
+                                    </ul>
+                                );
+                            }
+                            
+                            // Option 2: Check our global variable as a last resort
+                            const globalSources = window.__LATEST_SELECTED_SOURCES || [];
+                            if (globalSources.length > 0) {
+                                return (
+                                    <ul style={styles.sourceList}>
+                                        {globalSources.map((source, index) => (
+                                            <li key={index}>{source}</li>
+                                        ))}
+                                    </ul>
+                                );
+                            }
+                            
+                            // If all else fails, show the empty message
+                            return <p style={{ fontStyle: 'italic' }}>No direct sources were used for this generation.</p>;
+                        })()} {/* Execute the function immediately */}
+                    </div>
+                        
+                        {/* Retrieved Sources */}
+                        {Array.isArray(sources.source_nodes) && sources.source_nodes.length > 0 && (
+                            <details>
+                                <summary style={styles.detailsSummary}>
+                                    Retrieved Context Snippets ({sources.source_nodes.length})
+                                </summary>
+                                <div style={styles.detailsContent}>
+                                    {sources.source_nodes.map((node, index) => (
+                                        <div key={index} style={styles.sourceItem}>
+                                            <strong>Source:</strong> {node.metadata?.document_title || node.metadata?.document_type || node.metadata?.file_path?.split('/').pop() || 'Unknown'}
+                                            {node.score !== undefined && ` (Score: ${node.score.toFixed(3)})`}
+                                            <pre style={styles.sourceNodeText}><code>{node.text}</code></pre>
+                                        </div>
+                                    ))}
+                                </div>
+                            </details>
+                        )}
+                </div>
                 
                 <div style={styles.buttonContainer}>
                     <button
@@ -152,7 +263,11 @@ GeneratedSceneModal.propTypes = {
     onSave: PropTypes.func.isRequired,
     onClose: PropTypes.func.isRequired,
     isCreating: PropTypes.bool.isRequired,
-    error: PropTypes.string
+    error: PropTypes.string,
+    sources: PropTypes.shape({
+        source_nodes: PropTypes.array,
+        direct_sources: PropTypes.array
+    })
 };
 
 export default GeneratedSceneModal;

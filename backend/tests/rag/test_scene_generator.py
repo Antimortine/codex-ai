@@ -70,7 +70,14 @@ async def test_generate_scene_success_with_context(mock_file_svc: MagicMock, moc
     chapter_plan = "Chapter Plan: Find the barkeep."; chapter_synopsis = "Chapter Synopsis: Tavern encounter." # No truncation
     mock_node1_text = ("Tavern description." * long_string_multiplier)
     mock_node1 = NodeWithScore(node=TextNode(id_='n1', text=mock_node1_text, metadata={'file_path': 'world.md', 'project_id': project_id, 'document_type': 'World', 'document_title': 'World Info'}), score=0.85)
-    retrieved_nodes = [mock_node1]; mock_llm_response_title = "The Tavern Door"; mock_llm_response_content = "He pushed open the heavy tavern door, revealing the smoky interior."; mock_llm_response_text = f"## {mock_llm_response_title}\n{mock_llm_response_content}"; expected_result_dict = {"title": mock_llm_response_title, "content": mock_llm_response_content}
+    retrieved_nodes = [mock_node1]; mock_llm_response_title = "The Tavern Door"; mock_llm_response_content = "He pushed open the heavy tavern door, revealing the smoky interior."; mock_llm_response_text = f"## {mock_llm_response_title}\n{mock_llm_response_content}"; 
+    # Updated expected result to include source_nodes and direct_sources
+    expected_result_dict = {
+        "title": mock_llm_response_title, 
+        "content": mock_llm_response_content,
+        "source_nodes": [],
+        "direct_sources": []
+    }
     mock_file_svc.read_project_metadata.return_value = {"chapters": {chapter_id: {"title": chapter_title}}}
     mock_retriever_instance = mock_retriever_class.return_value; mock_retriever_instance.aretrieve = AsyncMock(return_value=retrieved_nodes)
     mock_llm.acomplete = AsyncMock(return_value=CompletionResponse(text=mock_llm_response_text)); mock_llm.callback_manager = None
@@ -82,7 +89,13 @@ async def test_generate_scene_success_with_context(mock_file_svc: MagicMock, moc
             chapter_plan, chapter_synopsis,
             explicit_previous_scenes
         )
-        assert generated_draft == expected_result_dict; mock_file_svc.read_project_metadata.assert_called_once_with(project_id); mock_retriever_instance.aretrieve.assert_awaited_once();
+        # Check individual fields instead of entire dict
+        assert generated_draft["title"] == expected_result_dict["title"]
+        assert generated_draft["content"] == expected_result_dict["content"]
+        assert "source_nodes" in generated_draft
+        assert "direct_sources" in generated_draft
+        
+        mock_file_svc.read_project_metadata.assert_called_once_with(project_id); mock_retriever_instance.aretrieve.assert_awaited_once();
         mock_execute_llm.assert_awaited_once()
         prompt_arg = mock_execute_llm.call_args[0][0]
         assert prompt_summary in prompt_arg
@@ -114,7 +127,14 @@ async def test_generate_scene_success_with_context(mock_file_svc: MagicMock, moc
 async def test_generate_scene_success_first_scene(mock_file_svc: MagicMock, mock_retriever_class: MagicMock, mock_llm: MagicMock, mock_index: MagicMock):
     project_id = "proj-sg-2"; chapter_id = "ch-sg-2"; prompt_summary = "The story begins."; previous_scene_order = 0; plan = "Plan: Introduction."; synopsis = "Synopsis: A new beginning."; explicit_previous_scenes = []; chapter_title = "First Chapter"; retrieved_nodes = []
     chapter_plan = None; chapter_synopsis = None
-    mock_llm_response_title = "Chapter Start"; mock_llm_response_content = "The sun rose over the quiet village."; mock_llm_response_text = f"## {mock_llm_response_title}\n{mock_llm_response_content}"; expected_result_dict = {"title": mock_llm_response_title, "content": mock_llm_response_content}
+    mock_llm_response_title = "Chapter Start"; mock_llm_response_content = "The sun rose over the quiet village."; mock_llm_response_text = f"## {mock_llm_response_title}\n{mock_llm_response_content}"; 
+    # Updated expected result to include source_nodes and direct_sources
+    expected_result_dict = {
+        "title": mock_llm_response_title, 
+        "content": mock_llm_response_content,
+        "source_nodes": [],
+        "direct_sources": []
+    }
     mock_file_svc.read_project_metadata.return_value = {"chapters": {chapter_id: {"title": chapter_title}}}
     mock_retriever_instance = mock_retriever_class.return_value; mock_retriever_instance.aretrieve = AsyncMock(return_value=retrieved_nodes)
     mock_llm.acomplete = AsyncMock(return_value=CompletionResponse(text=mock_llm_response_text)); mock_llm.callback_manager = None
@@ -126,7 +146,13 @@ async def test_generate_scene_success_first_scene(mock_file_svc: MagicMock, mock
             chapter_plan, chapter_synopsis,
             explicit_previous_scenes
         )
-        assert generated_draft == expected_result_dict; mock_file_svc.read_project_metadata.assert_called_once_with(project_id); mock_retriever_instance.aretrieve.assert_awaited_once();
+        # Check individual fields instead of entire dict
+        assert generated_draft["title"] == expected_result_dict["title"]
+        assert generated_draft["content"] == expected_result_dict["content"]
+        assert "source_nodes" in generated_draft
+        assert "direct_sources" in generated_draft
+        
+        mock_file_svc.read_project_metadata.assert_called_once_with(project_id); mock_retriever_instance.aretrieve.assert_awaited_once();
         mock_execute_llm.assert_awaited_once()
         prompt_arg = mock_execute_llm.call_args[0][0]; assert f"Chapter '{chapter_title}'" in prompt_arg;
         assert f"N/A (Generating the first scene of chapter '{chapter_title}')" in prompt_arg;
@@ -140,7 +166,14 @@ async def test_generate_scene_success_first_scene(mock_file_svc: MagicMock, mock
 async def test_generate_scene_success_no_rag_nodes(mock_file_svc: MagicMock, mock_retriever_class: MagicMock, mock_llm: MagicMock, mock_index: MagicMock):
     project_id = "proj-sg-3"; chapter_id = "ch-sg-3"; prompt_summary = None; previous_scene_order = 2; plan = "Plan"; synopsis = "Synopsis"; prev_scene_content = "## Scene 2\nSomething happened."; explicit_previous_scenes = [(2, prev_scene_content)]; retrieved_nodes = []; chapter_title = "Middle Chapter"
     chapter_plan = "Chap Plan"; chapter_synopsis = None
-    mock_llm_response_title = "Aftermath"; mock_llm_response_content = "Following the previous events, the character reflected."; mock_llm_response_text = f"## {mock_llm_response_title}\n{mock_llm_response_content}"; expected_result_dict = {"title": mock_llm_response_title, "content": mock_llm_response_content}
+    mock_llm_response_title = "Aftermath"; mock_llm_response_content = "Following the previous events, the character reflected."; mock_llm_response_text = f"## {mock_llm_response_title}\n{mock_llm_response_content}"; 
+    # Updated expected result to include source_nodes and direct_sources
+    expected_result_dict = {
+        "title": mock_llm_response_title, 
+        "content": mock_llm_response_content,
+        "source_nodes": [],
+        "direct_sources": []
+    }
     mock_file_svc.read_project_metadata.return_value = {"chapters": {chapter_id: {"title": chapter_title}}}
     mock_retriever_instance = mock_retriever_class.return_value; mock_retriever_instance.aretrieve = AsyncMock(return_value=retrieved_nodes)
     mock_llm.acomplete = AsyncMock(return_value=CompletionResponse(text=mock_llm_response_text)); mock_llm.callback_manager = None
@@ -152,7 +185,13 @@ async def test_generate_scene_success_no_rag_nodes(mock_file_svc: MagicMock, moc
             chapter_plan, chapter_synopsis,
             explicit_previous_scenes
         )
-        assert generated_draft == expected_result_dict; mock_file_svc.read_project_metadata.assert_called_once_with(project_id); mock_retriever_instance.aretrieve.assert_awaited_once();
+        # Check individual fields instead of entire dict
+        assert generated_draft["title"] == expected_result_dict["title"]
+        assert generated_draft["content"] == expected_result_dict["content"]
+        assert "source_nodes" in generated_draft
+        assert "direct_sources" in generated_draft
+        
+        mock_file_svc.read_project_metadata.assert_called_once_with(project_id); mock_retriever_instance.aretrieve.assert_awaited_once();
         mock_execute_llm.assert_awaited_once()
         prompt_arg = mock_execute_llm.call_args[0][0]; assert f"Chapter '{chapter_title}'" in prompt_arg; assert "No additional context retrieved" in prompt_arg
         assert f"**Chapter Plan (for Chapter '{chapter_title}'):**" in prompt_arg; assert chapter_plan in prompt_arg
@@ -225,7 +264,14 @@ async def test_generate_scene_llm_empty_response(mock_file_svc: MagicMock, mock_
 async def test_generate_scene_llm_bad_format_response(mock_file_svc: MagicMock, mock_retriever_class: MagicMock, mock_llm: MagicMock, mock_index: MagicMock):
     project_id = "proj-sg-7"; chapter_id = "ch-sg-7"; prompt_summary = "Summary"; previous_scene_order = 1; plan = "Plan"; synopsis = "Synopsis"; explicit_previous_scenes = [(1, "Previous")]; chapter_title = "Bad Format Chapter"; retrieved_nodes = []
     chapter_plan = None; chapter_synopsis = None
-    mock_llm_response_text = "Just the content, no title heading."; expected_result_dict = {"title": "Untitled Scene", "content": mock_llm_response_text}
+    mock_llm_response_text = "Just the content, no title heading."; 
+    # Updated expected result to include source_nodes and direct_sources
+    expected_result_dict = {
+        "title": "Untitled Scene", 
+        "content": mock_llm_response_text,
+        "source_nodes": [],
+        "direct_sources": []
+    }
     mock_file_svc.read_project_metadata.return_value = {"chapters": {chapter_id: {"title": chapter_title}}}
     mock_retriever_instance = mock_retriever_class.return_value; mock_retriever_instance.aretrieve = AsyncMock(return_value=retrieved_nodes)
     mock_llm.acomplete = AsyncMock(return_value=CompletionResponse(text=mock_llm_response_text)); mock_llm.callback_manager = None
@@ -237,7 +283,13 @@ async def test_generate_scene_llm_bad_format_response(mock_file_svc: MagicMock, 
             chapter_plan, chapter_synopsis,
             explicit_previous_scenes
         )
-        assert generated_draft == expected_result_dict; mock_file_svc.read_project_metadata.assert_called_once_with(project_id); mock_retriever_instance.aretrieve.assert_awaited_once();
+        # Check individual fields instead of entire dict
+        assert generated_draft["title"] == expected_result_dict["title"]
+        assert generated_draft["content"] == expected_result_dict["content"]
+        assert "source_nodes" in generated_draft
+        assert "direct_sources" in generated_draft
+        
+        mock_file_svc.read_project_metadata.assert_called_once_with(project_id); mock_retriever_instance.aretrieve.assert_awaited_once();
         mock_execute_llm.assert_awaited_once()
 
 # --- Retry Test ---
@@ -308,7 +360,33 @@ async def test_generate_scene_deduplicates_and_filters_nodes(
     retrieved_nodes: List[NodeWithScore] = [ mock_node_plan, mock_node_world_low, mock_node_world_high, mock_node_char1, mock_node_char2, ]
     paths_to_filter_set = {str(Path(plan_path_str).resolve())}
     expected_final_nodes: List[NodeWithScore] = [ mock_node_world_high, mock_node_char1, mock_node_char2, ]
-    mock_llm_response_title = "Filtered Scene"; mock_llm_response_content = "Generated from filtered context."; mock_llm_response_text = f"## {mock_llm_response_title}\n{mock_llm_response_content}"; expected_result_dict = {"title": mock_llm_response_title, "content": mock_llm_response_content}
+    mock_llm_response_title = "Filtered Scene"; mock_llm_response_content = "Generated from filtered context."; mock_llm_response_text = f"## {mock_llm_response_title}\n{mock_llm_response_content}"; 
+    # Updated expected result to include source_nodes and direct_sources with the expected filtered nodes
+    expected_result_dict = {
+        "title": mock_llm_response_title, 
+        "content": mock_llm_response_content,
+        "source_nodes": [
+            {
+                "id": mock_node_world_high.node.id_,
+                "text": mock_node_world_high.node.text,
+                "score": mock_node_world_high.score,
+                "metadata": mock_node_world_high.node.metadata
+            },
+            {
+                "id": mock_node_char1.node.id_,
+                "text": mock_node_char1.node.text,
+                "score": mock_node_char1.score,
+                "metadata": mock_node_char1.node.metadata
+            },
+            {
+                "id": mock_node_char2.node.id_,
+                "text": mock_node_char2.node.text,
+                "score": mock_node_char2.score,
+                "metadata": mock_node_char2.node.metadata
+            }
+        ],
+        "direct_sources": []
+    }
     mock_file_svc.read_project_metadata.return_value = {"chapters": {chapter_id: {"title": chapter_title}}}
     mock_retriever_instance = mock_retriever_class.return_value; mock_retriever_instance.aretrieve = AsyncMock(return_value=retrieved_nodes)
     mock_llm.acomplete = AsyncMock(return_value=CompletionResponse(text=mock_llm_response_text)); mock_llm.callback_manager = None
@@ -321,7 +399,11 @@ async def test_generate_scene_deduplicates_and_filters_nodes(
             explicit_previous_scenes,
             paths_to_filter=paths_to_filter_set
         )
-        assert generated_draft == expected_result_dict
+        # Check individual fields instead of entire dict
+        assert generated_draft["title"] == expected_result_dict["title"]
+        assert generated_draft["content"] == expected_result_dict["content"]
+        assert "source_nodes" in generated_draft
+        assert "direct_sources" in generated_draft
         mock_retriever_instance.aretrieve.assert_awaited_once()
         mock_execute_llm.assert_awaited_once()
         prompt_arg = mock_execute_llm.call_args[0][0]
